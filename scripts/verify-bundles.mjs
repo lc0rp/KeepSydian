@@ -3,9 +3,7 @@
 
 import { readFileSync, existsSync } from "fs";
 
-const REQUIRED_FILES = [
-	"main.js",
-];
+const REQUIRED_FILES = ["main.js"];
 
 const fail = (message) => {
 	console.error(message);
@@ -22,6 +20,28 @@ const readText = (path) => {
 };
 
 const requireElectronPattern = /(?<!["'`])\brequire\(\s*["']electron["']\s*\)/g;
+const reviewSafetyPatterns = [
+	{
+		label: "dynamic <script> element creation",
+		pattern: /document\.createElement\(\s*["']script["']\s*\)/g,
+	},
+	{
+		label: "dynamic <style> element creation",
+		pattern: /document\.createElement\(\s*["']style["']\s*\)/g,
+	},
+	{
+		label: "string argument passed to setTimeout/setInterval",
+		pattern: /\bset(?:Timeout|Interval)\s*\(\s*["'`]/g,
+	},
+	{
+		label: "Function constructor",
+		pattern: /\b(?:new\s+)?Function\s*\(/g,
+	},
+	{
+		label: "bundled Playwright/Puppeteer runtime",
+		pattern: /\b(?:playwright|puppeteer)\b/i,
+	},
+];
 
 for (const file of REQUIRED_FILES) {
 	if (!existsSync(file)) {
@@ -40,8 +60,12 @@ if (requireElectronPattern.test(mainJs)) {
 	);
 }
 
+for (const { label, pattern } of reviewSafetyPatterns) {
+	if (pattern.test(mainJs)) {
+		fail(`\`main.js\` contains ${label}. This is blocked by Obsidian community plugin review.`);
+	}
+}
+
 if (!process.exitCode) {
-	console.log(
-		"Bundle verification passed: main.js has no require('electron')."
-	);
+	console.log("Bundle verification passed: main.js has no prohibited review patterns.");
 }

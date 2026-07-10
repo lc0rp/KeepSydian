@@ -1,8 +1,5 @@
-import {
-	DEFAULT_PREMIUM_FEATURES,
-	PremiumFeatureSettings,
-	SubscriptionCache,
-} from "./subscription";
+import { DEFAULT_PREMIUM_FEATURES, PremiumFeatureSettings, SubscriptionCache } from "./subscription";
+import type { TokenHelperManifest } from "./token-helper";
 
 export type SyncMode = "import" | "push" | "two-way";
 export type SaveLocationMode = "custom" | "daily-notes";
@@ -32,6 +29,14 @@ export interface KeepSidianPluginSettings {
 	oauthFlow: "desktop" | "webviewer";
 	oauthDebugMode: boolean;
 	oauthPlaywrightUseSystemBrowser: boolean;
+	tokenHelperPath?: string;
+	tokenHelperVersion?: string;
+	tokenHelperLastCheckedAt?: number;
+	tokenHelperConsentAcceptedAt?: number;
+	tokenHelperLastSeenReleaseId?: number;
+	tokenHelperCheckedForPluginVersion?: string;
+	tokenHelperCompatibleManifest?: TokenHelperManifest;
+	tokenHelperInstalledManifest?: TokenHelperManifest;
 	subscriptionCache?: SubscriptionCache;
 	premiumFeatures: PremiumFeatureSettings;
 	gdriveToken?: string;
@@ -60,6 +65,14 @@ export const DEFAULT_SETTINGS: KeepSidianPluginSettings = {
 	oauthFlow: "desktop",
 	oauthDebugMode: false,
 	oauthPlaywrightUseSystemBrowser: true,
+	tokenHelperPath: undefined,
+	tokenHelperVersion: undefined,
+	tokenHelperLastCheckedAt: undefined,
+	tokenHelperConsentAcceptedAt: undefined,
+	tokenHelperLastSeenReleaseId: undefined,
+	tokenHelperCheckedForPluginVersion: undefined,
+	tokenHelperCompatibleManifest: undefined,
+	tokenHelperInstalledManifest: undefined,
 	subscriptionCache: undefined,
 	premiumFeatures: DEFAULT_PREMIUM_FEATURES,
 	gdriveToken: undefined,

@@ -6,7 +6,7 @@ import KeepSidianPlugin from "../../../main";
 import { KeepSidianSettingsTab } from "../KeepSidianSettingsTab";
 import { DEFAULT_SETTINGS } from "../../../types/keepsidian-plugin-settings";
 import { exchangeOauthToken } from "../../../integrations/google/keepToken";
-import { runOauthBrowserAutomation } from "../../../integrations/google/keepTokenBrowserAutomation";
+import { getTokenHelperState, runTokenHelper } from "../../../integrations/google/tokenHelper";
 
 type CreateElOptions = {
 	text?: string | DocumentFragment;
@@ -45,6 +45,7 @@ interface MockToggleComponent {
 }
 
 interface MockButtonComponent {
+	buttonEl: HTMLButtonElement;
 	setButtonText: jest.Mock<MockButtonComponent, [string]>;
 	setCta: jest.Mock<MockButtonComponent, []>;
 	onClick: jest.Mock<MockButtonComponent, [() => void]>;
@@ -135,6 +136,7 @@ const createMockToggleComponent = (inputEl: HTMLInputElement): MockToggleCompone
 
 const createMockButtonComponent = (buttonEl: HTMLButtonElement): MockButtonComponent => {
 	const component: MockButtonComponent = {
+		buttonEl,
 		setButtonText: jest.fn(),
 		setCta: jest.fn(),
 		onClick: jest.fn(),
@@ -433,8 +435,9 @@ jest.mock("../../../integrations/google/keepToken", () => ({
 	exchangeOauthToken: jest.fn(),
 }));
 
-jest.mock("../../../integrations/google/keepTokenBrowserAutomation", () => ({
-	runOauthBrowserAutomation: jest.fn(),
+jest.mock("../../../integrations/google/tokenHelper", () => ({
+	getTokenHelperState: jest.fn(),
+	runTokenHelper: jest.fn(),
 }));
 
 describe("KeepSidianSettingsTab UI interactions", () => {
@@ -473,6 +476,14 @@ describe("KeepSidianSettingsTab UI interactions", () => {
 		plugin.subscriptionService = subscriptionServiceMock as unknown as KeepSidianPlugin["subscriptionService"];
 		tab = new KeepSidianSettingsTab(app, plugin);
 		tabInternals = getSettingsTabInternals(tab);
+		(getTokenHelperState as jest.Mock).mockResolvedValue({
+			status: "ready",
+			helperPath: "/tmp/keepsidian-token-helper",
+			installedVersion: "0.1.0",
+		});
+		(runTokenHelper as jest.Mock).mockImplementation(async (_plugin, onEvent) => {
+			await onEvent({ type: "token", oauthToken: "oauth_token_value" });
+		});
 	});
 
 	const waitForAsync = async () => {
@@ -553,46 +564,24 @@ describe("KeepSidianSettingsTab UI interactions", () => {
 		expect(tokenStatus?.textContent).toContain("Retrieved successfully");
 	});
 
-	test("retrieval wizard buttons launch Playwright and Puppeteer flows", async () => {
+	test("helper retrieval button launches installed helper", async () => {
 		plugin.settings.email = "test@example.com";
-		(runOauthBrowserAutomation as jest.Mock).mockResolvedValue({
-			oauth_token: "oauth_token_value",
-		});
 		(exchangeOauthToken as jest.Mock).mockResolvedValue(undefined);
 
 		const container = tab.containerEl;
 		await tabInternals.addSyncTokenSetting(container);
 
-		const playwrightBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Launch wizard option 1"
-		) as HTMLButtonElement;
-		const puppeteerBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Launch wizard option 2"
+		const helperBtn = Array.from(container.querySelectorAll("button")).find(
+			(b) => b.textContent === "Retrieve token with helper"
 		) as HTMLButtonElement;
 
-		expect(playwrightBtn).toBeTruthy();
-		expect(puppeteerBtn).toBeTruthy();
+		expect(helperBtn).toBeTruthy();
 
-		playwrightBtn.click();
+		helperBtn.click();
 		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(runOauthBrowserAutomation).toHaveBeenCalledWith(plugin, "playwright", {
-			debug: false,
-			useSystemBrowser: true,
-		});
+		expect(getTokenHelperState).toHaveBeenCalledWith(plugin);
+		expect(runTokenHelper).toHaveBeenCalledWith(plugin, expect.any(Function));
 		expect(exchangeOauthToken).toHaveBeenCalledWith(tab, plugin, "oauth_token_value");
-
-		(runOauthBrowserAutomation as jest.Mock).mockResolvedValue({
-			oauth_token: "oauth_token_value_two",
-		});
-		(exchangeOauthToken as jest.Mock).mockResolvedValue(undefined);
-
-		puppeteerBtn.click();
-		await new Promise((resolve) => setTimeout(resolve, 0));
-		expect(runOauthBrowserAutomation).toHaveBeenCalledWith(plugin, "puppeteer", {
-			debug: false,
-			useSystemBrowser: false,
-		});
-		expect(exchangeOauthToken).toHaveBeenCalledWith(tab, plugin, "oauth_token_value_two");
 
 		const githubLink = container.querySelector('a[data-keepsidian-link="github-instructions"]');
 		expect(githubLink).not.toBeNull();

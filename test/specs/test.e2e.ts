@@ -1,8 +1,5 @@
 import { browser, expect } from "@wdio/globals";
-import {
-	createPreparedSyncPlanFixture,
-	createSyncPlanEntryFixture,
-} from "../../src/test-utils/fixtures/sync-plan";
+import { createPreparedSyncPlanFixture, createSyncPlanEntryFixture } from "../../src/test-utils/fixtures/sync-plan";
 import type { SyncMode } from "../../src/types";
 
 describe("KeepSidian", function () {
@@ -67,19 +64,19 @@ describe("KeepSidian", function () {
 			}
 		});
 
-		const emailSetting = browser.$(
-			'//*[contains(@class,"setting-item-name") and normalize-space(.)="Email"]'
-		);
+		const emailSetting = browser.$('//*[contains(@class,"setting-item-name") and normalize-space(.)="Email"]');
 		await emailSetting.waitForExist({ timeout: 20000 });
 	};
 
 	const stubTokenExchange = async (keepToken: string): Promise<void> => {
 		await browser.executeObsidian((_, token) => {
-			(window as Window & {
-				__keepsidianTestExchange?: (payload: { email?: string; oauth_token: string }) => {
-					keep_token: string;
-				};
-			}).__keepsidianTestExchange = () => ({ keep_token: token });
+			(
+				window as Window & {
+					__keepsidianTestExchange?: (payload: { email?: string; oauth_token: string }) => {
+						keep_token: string;
+					};
+				}
+			).__keepsidianTestExchange = () => ({ keep_token: token });
 		}, keepToken);
 	};
 
@@ -127,9 +124,7 @@ describe("KeepSidian", function () {
 	};
 
 	const openSeededSyncCenter = async (
-		plansByMode: Partial<
-			Record<SyncMode, ReturnType<typeof createPreparedSyncPlanFixture>>
-		>,
+		plansByMode: Partial<Record<SyncMode, ReturnType<typeof createPreparedSyncPlanFixture>>>,
 		options?: {
 			runDelayMs?: number;
 			initialMode?: SyncMode;
@@ -182,9 +177,7 @@ describe("KeepSidian", function () {
 					};
 				};
 
-				const plugin = (window as KeepSidianPluginWindow).app?.plugins?.getPlugin?.(
-					"keepsidian"
-				);
+				const plugin = (window as KeepSidianPluginWindow).app?.plugins?.getPlugin?.("keepsidian");
 				if (!plugin?.openSyncCenter) {
 					throw new Error("KeepSidian plugin or sync center hook not available");
 				}
@@ -237,11 +230,8 @@ describe("KeepSidian", function () {
 					return selectedPlan;
 				};
 				modal.options.runSyncPlan = async (_currentPlan, callbacks) => {
-					const activePlan =
-						_currentPlan as ReturnType<typeof createPreparedSyncPlanFixture>;
-					const selectableEntries = activePlan.plan.entries.filter(
-						(entry) => entry.selectable && entry.selected
-					);
+					const activePlan = _currentPlan as ReturnType<typeof createPreparedSyncPlanFixture>;
+					const selectableEntries = activePlan.plan.entries.filter((entry) => entry.selectable && entry.selected);
 					const totalNotes = selectableEntries.length;
 					const startedAt = Date.now();
 					while (Date.now() - startedAt < delayMs) {
@@ -328,7 +318,7 @@ describe("KeepSidian", function () {
 		await openKeepSidianSettingsTab();
 	});
 
-	it("shows retrieval wizard buttons on desktop", async function () {
+	it("shows token helper retrieval button on desktop", async function () {
 		if (isAndroid()) {
 			this.skip();
 			return;
@@ -342,10 +332,8 @@ describe("KeepSidian", function () {
 		await emailInput.waitForExist({ timeout: 20000 });
 		await emailInput.setValue("test@example.com");
 
-		const playwrightButton = browser.$('//button[normalize-space(.)="Launch wizard option 1"]');
-		const puppeteerButton = browser.$('//button[normalize-space(.)="Launch wizard option 2"]');
-		await playwrightButton.waitForExist({ timeout: 20000 });
-		await puppeteerButton.waitForExist({ timeout: 20000 });
+		const helperButton = browser.$('//button[normalize-space(.)="Retrieve token with helper"]');
+		await helperButton.waitForExist({ timeout: 20000 });
 	});
 
 	it("exchanges oauth2_4 token on change (desktop)", async function () {
@@ -364,9 +352,7 @@ describe("KeepSidian", function () {
 		await browser.waitUntil(
 			async () => {
 				const token = await browser.executeObsidian(({ app }) => {
-					const plugin = app.plugins.getPlugin("keepsidian") as
-						| { settings?: { token?: string } }
-						| undefined;
+					const plugin = app.plugins.getPlugin("keepsidian") as { settings?: { token?: string } } | undefined;
 					return plugin?.settings?.token ?? "";
 				});
 				return token === "e2e-keep-token";
@@ -385,10 +371,8 @@ describe("KeepSidian", function () {
 
 		await openKeepSidianSettingsTab();
 
-		const playwrightButton = browser.$('//button[normalize-space(.)="Launch wizard option 1"]');
-		const puppeteerButton = browser.$('//button[normalize-space(.)="Launch wizard option 2"]');
-		expect(await playwrightButton.isExisting()).toBe(false);
-		expect(await puppeteerButton.isExisting()).toBe(false);
+		const helperButton = browser.$('//button[normalize-space(.)="Retrieve token with helper"]');
+		expect(await helperButton.isExisting()).toBe(false);
 
 		const mobileDescription = browser.$(
 			'//*[contains(@class,"setting-item-name") and normalize-space(.)="Retrieve your sync token"]/ancestor::*[contains(@class,"setting-item")]//*[contains(@class,"setting-item-description")]'
@@ -413,9 +397,7 @@ describe("KeepSidian", function () {
 		await browser.waitUntil(
 			async () => {
 				const token = await browser.executeObsidian(({ app }) => {
-					const plugin = app.plugins.getPlugin("keepsidian") as
-						| { settings?: { token?: string } }
-						| undefined;
+					const plugin = app.plugins.getPlugin("keepsidian") as { settings?: { token?: string } } | undefined;
 					return plugin?.settings?.token ?? "";
 				});
 				return token === "e2e-keep-token-mobile";
@@ -480,23 +462,17 @@ describe("KeepSidian", function () {
 		expect(await browser.$(buttonByText("Back")).isExisting()).toBe(true);
 		expect(await browser.$(buttonByText("Refresh")).isExisting()).toBe(true);
 		expect(await browser.$(buttonByText("Execute")).isExisting()).toBe(true);
-		expect(await browser.$('//*[contains(normalize-space(.),"Create 1")]').isExisting()).toBe(
-			true
-		);
+		expect(await browser.$('//*[contains(normalize-space(.),"Create 1")]').isExisting()).toBe(true);
 
 		await browser.$(buttonByText("Execute")).click();
 
 		const runningTitle = browser.$('//*[normalize-space(.)="Running download plan"]');
 		await runningTitle.waitForExist({ timeout: 20000 });
-		expect(
-			await browser.$('//*[contains(normalize-space(.),"Created 0/1")]').isExisting()
-		).toBe(true);
+		expect(await browser.$('//*[contains(normalize-space(.),"Created 0/1")]').isExisting()).toBe(true);
 
 		const completeTitle = browser.$('//*[normalize-space(.)="Download complete"]');
 		await completeTitle.waitForExist({ timeout: 20000 });
-		expect(
-			await browser.$('//*[contains(normalize-space(.),"Created 1/1")]').isExisting()
-		).toBe(true);
+		expect(await browser.$('//*[contains(normalize-space(.),"Created 1/1")]').isExisting()).toBe(true);
 		expect(await browser.$(buttonByText("Open sync log")).isExisting()).toBe(true);
 		expect(await browser.$(buttonByText("Close")).isExisting()).toBe(true);
 	});
@@ -617,9 +593,7 @@ describe("KeepSidian", function () {
 		await canceledSummary.waitForExist({ timeout: 20000 });
 		expect(await browser.$('//*[normalize-space(.)="Sync center"]').isExisting()).toBe(true);
 		expect(await browser.$(buttonByText("Start sync")).isExisting()).toBe(true);
-		expect(await browser.$('//*[contains(normalize-space(.),"failed after")]').isExisting()).toBe(
-			false
-		);
+		expect(await browser.$('//*[contains(normalize-space(.),"failed after")]').isExisting()).toBe(false);
 	});
 
 	it("walks setup to review to run to done for upload mode with seeded data (desktop)", async function () {
@@ -647,10 +621,7 @@ describe("KeepSidian", function () {
 			}),
 		]);
 
-		await openSeededSyncCenter(
-			{ push: uploadPlan },
-			{ runDelayMs: 700, initialMode: "push", gateAllowed: true }
-		);
+		await openSeededSyncCenter({ push: uploadPlan }, { runDelayMs: 700, initialMode: "push", gateAllowed: true });
 
 		const startSyncButton = browser.$(buttonByText("Start sync"));
 		await startSyncButton.waitForExist({ timeout: 20000 });
@@ -665,17 +636,11 @@ describe("KeepSidian", function () {
 
 		const runningTitle = browser.$('//*[normalize-space(.)="Running upload plan"]');
 		await runningTitle.waitForExist({ timeout: 20000 });
-		expect(
-			await browser.$('//*[contains(normalize-space(.),"Uploaded 0/1")]').isExisting()
-		).toBe(true);
+		expect(await browser.$('//*[contains(normalize-space(.),"Uploaded 0/1")]').isExisting()).toBe(true);
 
 		const completeTitle = browser.$('//*[normalize-space(.)="Upload complete"]');
 		await completeTitle.waitForExist({ timeout: 20000 });
-		expect(
-			await browser.$('//*[contains(normalize-space(.),"Uploaded 1/1")]').isExisting()
-		).toBe(true);
-		expect(
-			await browser.$('//*[contains(normalize-space(.),"Already up to date 1/1")]').isExisting()
-		).toBe(true);
+		expect(await browser.$('//*[contains(normalize-space(.),"Uploaded 1/1")]').isExisting()).toBe(true);
+		expect(await browser.$('//*[contains(normalize-space(.),"Already up to date 1/1")]').isExisting()).toBe(true);
 	});
 });

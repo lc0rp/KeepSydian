@@ -1,14 +1,13 @@
-import type { WebviewTag } from "electron";
 import KeepSidianPlugin from "main";
 import { PluginSettingTab, App, Notice, Platform, Setting } from "obsidian";
 import { exchangeOauthToken } from "../../integrations/google/keepToken";
-import { loadKeepTokenDesktop } from "../../integrations/google/keepTokenDesktopLoader";
-import { runOauthBrowserAutomation } from "@integrations/google/keepTokenBrowserAutomation";
+import { getTokenHelperState, runTokenHelper } from "@integrations/google/tokenHelper";
 import {
 	endRetrievalWizardSession,
 	logRetrievalWizardEvent,
 	startRetrievalWizardSession,
 } from "@integrations/google/retrievalSessionLogger";
+import { TokenHelperInstallModal } from "@ui/modals/TokenHelperInstallModal";
 import { addAutoSyncSettings as addAutoSyncSettingsSection } from "./KeepSidianSettingsTab/autoSyncSettings";
 import {
 	addEmailSetting as addEmailSettingSection,
@@ -23,19 +22,7 @@ import {
 } from "./KeepSidianSettingsTab/tokenSettings";
 
 export class KeepSidianSettingsTab extends PluginSettingTab {
-	private retrieveTokenWebView?: WebviewTag;
 	private plugin: KeepSidianPlugin;
-	private retrieveTokenGuide?: {
-		container: HTMLElement;
-		titleEl: HTMLElement;
-		messageEl: HTMLElement;
-		listEl: HTMLOListElement;
-		actionButton: HTMLButtonElement;
-		actionHandler?: (event: MouseEvent) => void;
-		statusEl: HTMLElement;
-		webviewContainer: HTMLElement;
-		webview: WebviewTag;
-	};
 
 	constructor(app: App, plugin: KeepSidianPlugin) {
 		super(app, plugin);
@@ -74,9 +61,6 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 		this.addSaveLocationSetting(containerEl);
 		containerEl.createEl("hr", { cls: "keepsidian-settings-hr" });
 		this.addSyncTokenSetting(containerEl);
-		if (Platform.isDesktopApp) {
-			this.createRetrieveTokenWebView(containerEl);
-		}
 		containerEl.createEl("hr", { cls: "keepsidian-settings-hr" });
 		await this.addAutoSyncSettings(containerEl);
 		containerEl.createEl("hr", { cls: "keepsidian-settings-hr" });
@@ -104,8 +88,8 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 			onTokenPaste: async (event) => {
 				await this.handleTokenPaste(event);
 			},
-			onAutomationLaunch: async (engine) => {
-				await this.handleAutomationLaunch(engine);
+			onHelperLaunch: async () => {
+				await this.handleTokenHelperLaunch();
 			},
 			onExchangeOauthToken: async (token) => {
 				await exchangeOauthToken(this, this.plugin, token);
@@ -133,210 +117,85 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 		}
 	}
 
-	private async handleRetrieveToken(): Promise<void> {
+	private async handleTokenHelperLaunch(): Promise<void> {
 		if (!this.plugin.settings.email || !this.isValidEmail(this.plugin.settings.email)) {
 			new Notice("Please enter a valid email address before retrieving the token.");
 			return;
 		}
 		if (!Platform.isDesktopApp) {
-			new Notice("Token retrieval wizard is only available on desktop. Paste a token instead.");
+			new Notice("Token retrieval helper is only available on desktop. Paste a token instead.");
 			return;
 		}
 		const sessionMetadata = {
 			email: this.plugin.settings.email,
 			pluginVersion: this.plugin.manifest.version,
+			flow: "token-helper",
 		};
 		await startRetrievalWizardSession(this.plugin, sessionMetadata);
-		await logRetrievalWizardEvent("info", "Retrieval wizard button clicked", sessionMetadata);
+		await logRetrievalWizardEvent("info", "Token helper button clicked", sessionMetadata);
+		const notice = new Notice("Checking helper version...", 0);
 		try {
-			if (!this.retrieveTokenWebView) {
-				this.createRetrieveTokenWebView(this.containerEl);
-				await logRetrievalWizardEvent("debug", "Created retrieval webview for session");
-			} else {
-				await logRetrievalWizardEvent("debug", "Reusing existing retrieval webview instance");
+			const state = await getTokenHelperState(this.plugin);
+			if (state.status === "ready") {
+				notice.setMessage("Launching helper...");
+				await this.runInstalledTokenHelper(notice);
+				return;
 			}
-			await logRetrievalWizardEvent("info", "Initializing retrieval wizard workflow");
-			if (
-				this.retrieveTokenGuide?.container &&
-				typeof (this.retrieveTokenGuide.container as HTMLElement & { show?: () => void }).show ===
-					"function"
-			) {
-				(this.retrieveTokenGuide.container as HTMLElement & { show: () => void }).show();
+			notice.hide();
+			if (state.status === "missing" || state.status === "outdated" || state.status === "incompatible") {
+				new TokenHelperInstallModal(this.app, {
+					plugin: this.plugin,
+					manifest: state.latest,
+					mode: state.status === "outdated" ? "update" : state.status === "incompatible" ? "replace" : "install",
+					onManual: () => {
+						new Notice("Use the manual retrieval option below, then paste the token into the sync token field.");
+					},
+					onToken: async (oauthToken) => {
+						await exchangeOauthToken(this, this.plugin, oauthToken);
+						await endRetrievalWizardSession("success", { flow: "token-helper" });
+						this.display();
+					},
+					onError: async (message) => {
+						new Notice(message);
+						await logRetrievalWizardEvent("error", "Token helper failed", { errorMessage: message });
+					},
+					onComplete: () => {
+						this.display();
+					},
+				}).open();
+				return;
 			}
-			if (
-				this.retrieveTokenGuide?.webviewContainer &&
-				typeof (this.retrieveTokenGuide.webviewContainer as HTMLElement & { show?: () => void })
-					.show === "function"
-			) {
-				(this.retrieveTokenGuide.webviewContainer as HTMLElement & { show: () => void }).show();
-			}
-
-			const { initRetrieveToken } = await loadKeepTokenDesktop(this.plugin);
-			await initRetrieveToken(this, this.plugin, this.retrieveTokenWebView!, async (oauthToken) => {
-				await exchangeOauthToken(this, this.plugin, oauthToken);
-			});
-			await logRetrievalWizardEvent("info", "Retrieval wizard workflow completed");
-			this.display();
-			await logRetrievalWizardEvent("debug", "Settings tab refreshed after retrieval wizard");
+			new Notice(`Token helper is unavailable. Use the manual method below. ${state.reason}`);
+			await logRetrievalWizardEvent("error", "Token helper unavailable", { reason: state.reason });
+			await endRetrievalWizardSession("error", { flow: "token-helper", reason: state.reason });
 		} catch (error) {
-			const message =
-				error instanceof Error ? error.message : "Unable to initialize retrieval wizard.";
+			notice.hide();
+			const message = error instanceof Error ? error.message : "Token helper failed to retrieve a token.";
 			new Notice(message);
-			await logRetrievalWizardEvent("error", "Retrieval wizard initialization failed", {
-				errorMessage: message,
-			});
-		}
-	}
-
-	private async handleAutomationLaunch(engine: "puppeteer" | "playwright"): Promise<void> {
-		if (!this.plugin.settings.email || !this.isValidEmail(this.plugin.settings.email)) {
-			new Notice("Please enter a valid email address before launching browser automation.");
-			return;
-		}
-		if (!Platform.isDesktopApp) {
-			new Notice("Browser automation is only available on desktop.");
-			return;
-		}
-		const sessionMetadata = {
-			email: this.plugin.settings.email,
-			pluginVersion: this.plugin.manifest.version,
-			engine,
-			flow: "browser-automation",
-		};
-		await startRetrievalWizardSession(this.plugin, sessionMetadata);
-		await logRetrievalWizardEvent("info", "Browser automation button clicked", sessionMetadata);
-		new Notice(`Launching ${engine} login window...`);
-		try {
-			const useSystemBrowser = engine === "playwright" ? true : false;
-			if (
-				engine === "playwright" &&
-				this.plugin.settings.oauthPlaywrightUseSystemBrowser !== true
-			) {
-				this.plugin.settings.oauthPlaywrightUseSystemBrowser = true;
-				await this.plugin.saveSettings();
-			}
-			const result = await runOauthBrowserAutomation(this.plugin, engine, {
-				debug: this.plugin.settings.oauthDebugMode,
-				useSystemBrowser,
-			});
-			await logRetrievalWizardEvent("info", "Browser automation returned oauth token", {
-				engine,
-				tokenReceived: Boolean(result.oauth_token),
-			});
-			await exchangeOauthToken(this, this.plugin, result.oauth_token);
-			await endRetrievalWizardSession("success", {
-				engine,
-				flow: "browser-automation",
-			});
-		} catch (error) {
-			const rawMessage =
-				error instanceof Error ? error.message : "Browser automation failed to capture a token.";
-			const message = rawMessage.includes("ENOENT")
-				? "Unable to launch browser automation. Please install Node.js or run the script manually."
-				: rawMessage;
-			new Notice(message);
-			await logRetrievalWizardEvent("error", "Browser automation failed", {
-				engine,
-				errorMessage: rawMessage,
-			});
+			await logRetrievalWizardEvent("error", "Token helper failed", { errorMessage: message });
 			await endRetrievalWizardSession("error", {
-				engine,
-				flow: "browser-automation",
+				flow: "token-helper",
 				reason: message,
 			});
 		}
 	}
 
-	public updateRetrieveTokenInstructions(
-		step: number,
-		title: string,
-		message: string,
-		listItems: string[] = []
-	): void {
-		if (!this.retrieveTokenGuide) {
-			return;
-		}
-		void logRetrievalWizardEvent("debug", "Updating retrieval instructions", {
-			step,
-			title,
-			items: listItems.length,
-		});
-		const headingPrefix = Number.isFinite(step) ? `Step ${step} of 3: ` : "";
-		this.retrieveTokenGuide.titleEl.textContent = `${headingPrefix}${title}`;
-		this.retrieveTokenGuide.messageEl.textContent = message;
-		const { listEl } = this.retrieveTokenGuide;
-		while (listEl.firstChild) {
-			listEl.removeChild(listEl.firstChild);
-		}
-		if (listItems.length > 0) {
-			listEl.removeClass("keepsidian-hidden");
-			for (const item of listItems) {
-				listEl.createEl("li", { text: item });
+	private async runInstalledTokenHelper(notice: Notice): Promise<void> {
+		await runTokenHelper(this.plugin, async (event) => {
+			if (event.type === "progress") {
+				notice.setMessage(event.message);
+				return;
 			}
-		} else {
-			listEl.addClass("keepsidian-hidden");
-		}
-	}
-
-	public updateRetrieveTokenStatus(
-		message: string,
-		type: "info" | "success" | "warning" | "error" = "info"
-	): void {
-		if (!this.retrieveTokenGuide) {
-			return;
-		}
-		void logRetrievalWizardEvent("debug", "Updating retrieval status", {
-			message,
-			type,
+			if (event.type === "token") {
+				await exchangeOauthToken(this, this.plugin, event.oauthToken);
+				notice.hide();
+				await endRetrievalWizardSession("success", { flow: "token-helper" });
+				this.display();
+			}
+			if (event.type === "error") {
+				throw new Error(event.message);
+			}
 		});
-		const { statusEl } = this.retrieveTokenGuide;
-		statusEl.empty();
-		if (!message) {
-			return;
-		}
-		statusEl.setText(message);
-		statusEl.removeClass(
-			"keepsidian-status-info",
-			"keepsidian-status-success",
-			"keepsidian-status-warning",
-			"keepsidian-status-error"
-		);
-		switch (type) {
-			case "success":
-				statusEl.addClass("keepsidian-status-success");
-				break;
-			case "warning":
-				statusEl.addClass("keepsidian-status-warning");
-				break;
-			case "error":
-				statusEl.addClass("keepsidian-status-error");
-				break;
-			default:
-				statusEl.addClass("keepsidian-status-info");
-		}
-	}
-
-	public updateRetrieveTokenAction(action?: { label: string; onClick: () => void } | null): void {
-		if (!this.retrieveTokenGuide) {
-			return;
-		}
-		const { actionButton } = this.retrieveTokenGuide;
-		if (this.retrieveTokenGuide.actionHandler) {
-			actionButton.removeEventListener("click", this.retrieveTokenGuide.actionHandler);
-			this.retrieveTokenGuide.actionHandler = undefined;
-		}
-		if (!action) {
-			actionButton.addClass("keepsidian-hidden");
-			return;
-		}
-		actionButton.removeClass("keepsidian-hidden");
-		actionButton.setText(action.label);
-		const handler = (event: MouseEvent) => {
-			event.preventDefault();
-			action.onClick();
-		};
-		actionButton.addEventListener("click", handler);
-		this.retrieveTokenGuide.actionHandler = handler;
 	}
 
 	private addSaveLocationSetting(containerEl: HTMLElement): void {
@@ -345,55 +204,5 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 
 	private async addAutoSyncSettings(containerEl: HTMLElement): Promise<void> {
 		await addAutoSyncSettingsSection(this.plugin, containerEl);
-	}
-
-	private createRetrieveTokenWebView(containerEl: HTMLElement): void {
-		if (!Platform.isDesktopApp) {
-			return;
-		}
-		const wrapper = containerEl.createDiv("keepsidian-retrieve-token-wrapper");
-		const guideContainer = wrapper.createDiv("keepsidian-retrieve-token-guide");
-		const titleEl = guideContainer.createDiv({
-			cls: "keepsidian-retrieve-token-guide__title",
-			text: "Token retrieval",
-		});
-		const messageEl = guideContainer.createEl("p", {
-			cls: "keepsidian-retrieve-token-guide__message",
-		});
-		const listEl = guideContainer.createEl("ol", {
-			cls: "keepsidian-retrieve-token-guide__list keepsidian-hidden",
-		});
-		const actionButton = guideContainer.createEl("button", {
-			cls: "keepsidian-retrieve-token-guide__action keepsidian-link-button keepsidian-hidden",
-			text: "Reopen DevTools",
-		});
-		actionButton.setAttribute("type", "button");
-		const statusEl = guideContainer.createDiv("keepsidian-retrieve-token-guide__status");
-
-		const webviewContainer = wrapper.createDiv("keepsidian-retrieve-token-webview");
-		this.retrieveTokenWebView = webviewContainer.createEl(
-			"webview" as keyof HTMLElementTagNameMap,
-			{
-				attr: { style: "width: 100%; height: 600px;" },
-			}
-		) as WebviewTag;
-		this.retrieveTokenWebView.setAttribute("disablewebsecurity", "true");
-		this.retrieveTokenWebView.setAttribute("crossorigin", "anonymous");
-		this.retrieveTokenWebView.setAttribute("disableblinkfeatures", "AutomationControlled");
-		this.retrieveTokenWebView.setAttribute("allowpopups", "");
-		this.retrieveTokenWebView.setAttribute("partition", "persist:keepsidian");
-		webviewContainer.hide();
-		guideContainer.hide();
-
-		this.retrieveTokenGuide = {
-			container: guideContainer,
-			titleEl,
-			messageEl,
-			listEl,
-			actionButton,
-			statusEl,
-			webviewContainer,
-			webview: this.retrieveTokenWebView,
-		};
 	}
 }

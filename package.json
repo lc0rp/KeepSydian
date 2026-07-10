@@ -54,6 +54,7 @@
 		"@types/jest": "^29.5.14",
 		"@types/mocha": "^10.0.10",
 		"@types/node": "^16.18.126",
+		"@types/semver": "7.7.1",
 		"@typescript-eslint/eslint-plugin": "^8.33.1",
 		"@typescript-eslint/parser": "^8.33.1",
 		"@wdio/appium-service": "^9.21.0",
@@ -87,9 +88,7 @@
 	},
 	"dependencies": {
 		"@jest/globals": "^29.7.0",
-		"automatonic": "^0.1.1",
-		"playwright": "^1.57.0",
-		"puppeteer-chromium-resolver": "^22.0.0",
+		"semver": "7.8.5",
 		"zod": "^4.1.8"
 	}
 }

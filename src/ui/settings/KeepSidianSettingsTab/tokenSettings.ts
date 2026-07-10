@@ -1,13 +1,11 @@
 import type KeepSidianPlugin from "main";
 import { Platform, Setting, setIcon } from "obsidian";
 
-type AutomationEngine = "puppeteer" | "playwright";
-
 interface TokenSettingOptions {
 	plugin: KeepSidianPlugin;
 	isLikelyLongLivedToken: (token?: string | null) => boolean;
 	onTokenPaste: (event: ClipboardEvent) => Promise<void>;
-	onAutomationLaunch: (engine: AutomationEngine) => Promise<void>;
+	onHelperLaunch: () => Promise<void>;
 	onExchangeOauthToken: (token: string) => Promise<void>;
 	addGithubInstructionsLink: (setting: Setting) => void;
 }
@@ -85,30 +83,13 @@ export function addSyncTokenSetting(containerEl: HTMLElement, options: TokenSett
 
 	if (Platform.isDesktopApp) {
 		const retrievalSetting = new Setting(containerEl)
-			.setName("Retrieval wizard (option 1)")
+			.setName("Guided token retrieval")
 			.setDesc(
-				'KeepSidian provides two wizards to help retrieve your token. ' +
-					'Each one walks you through the retrieval process using a different browser automation tool.' +
-					'This first option uses playwright from Microsoft. You can also retrieve your token manually ' +
-					'using the "GitHub KIM instructions" further down below.'
+				"Use the open-source KeepSidian token helper to open a real browser, guide sign-in, and return the token directly to KeepSidian. If the helper is not installed, KeepSidian will ask before downloading it."
 			);
 
 		retrievalSetting.addButton((button) =>
-			button
-				.setButtonText("Launch wizard option 1")
-				.onClick(() => void options.onAutomationLaunch("playwright"))
-		);
-
-		const puppeteerSetting = new Setting(containerEl)
-			.setName("Retrieval wizard (option 2)")
-			.setDesc(
-				'This second option uses puppeteer, a browser automation tool from Google. ' +
-					'You can also retrieve your token manually using the "GitHub KIM instructions" below.'
-			);
-		puppeteerSetting.addButton((button) =>
-			button
-				.setButtonText("Launch wizard option 2")
-				.onClick(() => void options.onAutomationLaunch("puppeteer"))
+			button.setButtonText("Retrieve token with helper").onClick(() => void options.onHelperLaunch())
 		);
 
 		const githubSetting = new Setting(containerEl)
@@ -129,9 +110,7 @@ export function addSyncTokenSetting(containerEl: HTMLElement, options: TokenSett
 			});
 	} else {
 		const retrievalSetting = new Setting(containerEl).setName("Retrieve your sync token");
-		retrievalSetting.setDesc(
-			"Mobile: use a desktop-synced token or the GitHub KIM instructions below."
-		);
+		retrievalSetting.setDesc("Mobile: use a desktop-synced token or the GitHub KIM instructions below.");
 		options.addGithubInstructionsLink(retrievalSetting);
 	}
 }
@@ -141,13 +120,9 @@ export function addAdvancedSettings(plugin: KeepSidianPlugin, containerEl: HTMLE
 
 	const oauthFlowSetting = new Setting(containerEl)
 		.setName("OAuth flow")
-		.setDesc(
-			"Choose how KeepSidian opens the Google login flow on desktop. The web viewer opens a separate tab."
-		)
+		.setDesc("Choose how KeepSidian opens the Google login flow on desktop. The web viewer opens a separate tab.")
 		.addDropdown((dropdown) => {
-			dropdown
-				.addOption("desktop", "Embedded panel (default)")
-				.addOption("webviewer", "Web viewer tab");
+			dropdown.addOption("desktop", "Embedded panel (default)").addOption("webviewer", "Web viewer tab");
 			dropdown.setValue(plugin.settings.oauthFlow ?? "desktop");
 			dropdown.onChange(async (value) => {
 				plugin.settings.oauthFlow = value as "desktop" | "webviewer";

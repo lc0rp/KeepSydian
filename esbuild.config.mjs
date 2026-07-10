@@ -71,11 +71,7 @@ function tsconfigPathsPlugin({ tsconfigPath }) {
 						// Try to resolve to an existing file by testing common extensions and index files
 						const tryCandidates = (p) => {
 							const exts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
-							const candidates = [
-								p,
-								...exts.map((e) => p + e),
-								...exts.map((e) => path.join(p, "index" + e)),
-							];
+							const candidates = [p, ...exts.map((e) => p + e), ...exts.map((e) => path.join(p, "index" + e))];
 							for (const candidate of candidates) {
 								try {
 									if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
@@ -104,23 +100,6 @@ function tsconfigPathsPlugin({ tsconfigPath }) {
 	};
 }
 
-function playwrightCoreDirPatchPlugin() {
-	const filter = /playwright-core[\\/]+lib[\\/]+server[\\/]+utils[\\/]+nodePlatform\.js$/;
-	return {
-		name: "playwright-core-dir-patch",
-		setup(build) {
-			build.onLoad({ filter }, async (args) => {
-				const contents = await fs.promises.readFile(args.path, "utf8");
-				const patched = contents.replace(
-					/const coreDir = .*require\.resolve\([^)]+\)\);/,
-					"const coreDir = import_path.default.dirname(__filename);"
-				);
-				return { contents: patched, loader: "js" };
-			});
-		},
-	};
-}
-
 const ___filename = fileURLToPath(import.meta.url);
 const ___dirname = path.dirname(___filename);
 const rootDir = path.resolve(___dirname, ".");
@@ -134,18 +113,13 @@ const externalBuiltins = Array.from(
 	)
 );
 
-const envFiles = [
-	path.resolve(rootDir, ".env"),
-	path.resolve(rootDir, prod ? ".env.production" : ".env.development"),
-];
+const envFiles = [path.resolve(rootDir, ".env"), path.resolve(rootDir, prod ? ".env.production" : ".env.development")];
 
 for (const candidate of envFiles) {
 	loadEnvFile(candidate);
 }
 
-const defaultServerUrl = prod
-	? "https://keepsidianserver-i55qr5tvea-uc.a.run.app"
-	: "http://localhost:8080";
+const defaultServerUrl = prod ? "https://keepsidianserver-i55qr5tvea-uc.a.run.app" : "http://localhost:8080";
 
 const resolvedServerUrl = String(process.env.KEEPSIDIAN_SERVER_URL ?? defaultServerUrl).replace(/\/$/, "");
 
@@ -154,9 +128,7 @@ const context = await esbuild.context({
 		js: banner,
 	},
 	outfile: "main.js",
-	entryPoints: [
-		"src/main.ts",
-	],
+	entryPoints: ["src/main.ts"],
 	bundle: true,
 	external: [
 		"obsidian",
@@ -182,10 +154,7 @@ const context = await esbuild.context({
 	},
 	sourcemap: prod ? false : "inline",
 	treeShaking: true,
-	plugins: [
-		tsconfigPathsPlugin({ tsconfigPath: path.resolve(rootDir, "tsconfig.json") }),
-		playwrightCoreDirPatchPlugin(),
-	],
+	plugins: [tsconfigPathsPlugin({ tsconfigPath: path.resolve(rootDir, "tsconfig.json") })],
 	define: {
 		"process.env.KEEPSIDIAN_SERVER_URL": JSON.stringify(resolvedServerUrl),
 	},

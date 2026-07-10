@@ -1,13 +1,17 @@
 # KeepSydian: 2-way Obsidian-Google Keep sync
 
-[![License](https://img.shields.io/github/license/lc0rp/KeepSydian?style=flat-square)](LICENSE) [![Issues](https://img.shields.io/github/issues/lc0rp/KeepSydian?style=flat-square)](https://github.com/lc0rp/KeepSydian/issues) [![Release](https://img.shields.io/github/v/release/lc0rp/KeepSydian?style=flat-square)](https://github.com/lc0rp/KeepSydian/releases)
+[![License](https://img.shields.io/github/license/lc0rp/KeepSydian?style=flat-square)](LICENSE)
+[![Issues](https://img.shields.io/github/issues/lc0rp/KeepSydian?style=flat-square)](https://github.com/lc0rp/KeepSydian/issues)
+[![Release](https://img.shields.io/github/v/release/lc0rp/KeepSydian?style=flat-square)](https://github.com/lc0rp/KeepSydian/releases)
 [![Downloads](https://img.shields.io/github/downloads/lc0rp/KeepSydian/total?style=flat-square)](https://github.com/lc0rp/KeepSydian/releases)
 
-## Why the name change? What happened to 'KeepSidian'? 
+## Why the name change? What happened to 'KeepSidian'?
 
 **Different name, same value.**
 
-The new Obsidian plugin guidelines prohibit use of '-sidian' in plugin names. So we've updated the name to allow the plugin is listed in the official Obsidian plugin directory. We chose the closest name to the original to minimize confusion.
+The new Obsidian plugin guidelines prohibit use of '-sidian' in plugin names. So we've updated the name to allow the
+plugin is listed in the official Obsidian plugin directory. We chose the closest name to the original to minimize
+confusion.
 
 ## What is KeepSydian?
 
@@ -140,10 +144,11 @@ In the plugin settings, you will need to provide:
 
 ### Retrieve a Google Keep token
 
-- Desktop: use one of the built-in browser automation wizards, or follow the manual KIM instructions and paste the
-  token yourself.
-- Mobile: the retrieval wizard is hidden. Paste a token captured on desktop, or paste a short-lived `oauth2_4...`
-  token and let KeepSydian exchange it through the server.
+- Desktop: use **Retrieve token with helper** for the guided flow. The first launch asks before downloading the
+  open-source KeepSidian token helper from GitHub releases; later launches reuse the installed helper unless an update
+  is required. You can still follow the manual KIM instructions and paste the token yourself.
+- Mobile: the retrieval wizard is hidden. Paste a token captured on desktop, or paste a short-lived `oauth2_4...` token
+  and let KeepSydian exchange it through the server.
 
 **PRIVACY NOTE**: THIS TOKEN IS ONLY STORED ON YOUR COMPUTER. When supported by your Obsidian version, KeepSydian stores
 the token in Obsidian secret storage.
