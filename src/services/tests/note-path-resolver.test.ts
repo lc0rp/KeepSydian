@@ -38,7 +38,7 @@ describe("note-path-resolver", () => {
 	});
 
 	it("resolves custom save-location variables and filename variables like granola-sync", () => {
-		jest.useFakeTimers().setSystemTime(new Date("2026-03-13T15:20:25.000Z"));
+		jest.useFakeTimers().setSystemTime(new Date(2026, 2, 13, 11, 20, 25));
 		try {
 			const result = resolveNotePath(
 				{},
@@ -49,7 +49,7 @@ describe("note-path-resolver", () => {
 				},
 				{
 					title: "Planning: Q1/2024",
-					created: "2024-03-20T16:30:45.000Z",
+					created: new Date(2024, 2, 20, 12, 30, 45),
 				}
 			);
 
