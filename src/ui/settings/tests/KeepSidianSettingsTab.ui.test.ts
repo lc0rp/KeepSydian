@@ -6,7 +6,7 @@ import KeepSidianPlugin from "../../../main";
 import { KeepSidianSettingsTab } from "../KeepSidianSettingsTab";
 import { DEFAULT_SETTINGS } from "../../../types/keepsidian-plugin-settings";
 import { exchangeOauthToken } from "../../../integrations/google/keepToken";
-import { getTokenHelperState, runTokenHelper } from "../../../integrations/google/tokenHelper";
+import { getTokenHelperState, isTokenHelperInstalled, runTokenHelper } from "../../../integrations/google/tokenHelper";
 
 type CreateElOptions = {
 	text?: string | DocumentFragment;
@@ -436,7 +436,9 @@ jest.mock("../../../integrations/google/keepToken", () => ({
 }));
 
 jest.mock("../../../integrations/google/tokenHelper", () => ({
+	TOKEN_HELPER_SOURCE_URL: "https://github.com/lc0rp/keepsidian-token-helper",
 	getTokenHelperState: jest.fn(),
+	isTokenHelperInstalled: jest.fn(() => true),
 	runTokenHelper: jest.fn(),
 }));
 
@@ -572,7 +574,7 @@ describe("KeepSidianSettingsTab UI interactions", () => {
 		await tabInternals.addSyncTokenSetting(container);
 
 		const helperBtn = Array.from(container.querySelectorAll("button")).find(
-			(b) => b.textContent === "Retrieve token with helper"
+			(b) => b.textContent === "Launch wizard"
 		) as HTMLButtonElement;
 
 		expect(helperBtn).toBeTruthy();
@@ -582,10 +584,26 @@ describe("KeepSidianSettingsTab UI interactions", () => {
 		expect(getTokenHelperState).toHaveBeenCalledWith(plugin);
 		expect(runTokenHelper).toHaveBeenCalledWith(plugin, expect.any(Function));
 		expect(exchangeOauthToken).toHaveBeenCalledWith(tab, plugin, "oauth_token_value");
+		expect(container.textContent).toContain("Wizard downloaded.");
+		expect(container.querySelector(".keepsidian-token-helper-availability")?.classList).toContain("is-installed");
+
+		const sourceLink = container.querySelector('a[data-keepsidian-link="token-helper-source"]');
+		expect(sourceLink?.textContent).toContain("View wizard source code");
+		expect(sourceLink?.getAttribute("href")).toBe("https://github.com/lc0rp/keepsidian-token-helper");
 
 		const githubLink = container.querySelector('a[data-keepsidian-link="github-instructions"]');
 		expect(githubLink).not.toBeNull();
 		expect(githubLink?.getAttribute("href")).toBe("https://github.com/djsudduth/keep-it-markdown");
+	});
+
+	test("shows when the Token Wizard needs to be downloaded", async () => {
+		(isTokenHelperInstalled as jest.Mock).mockReturnValueOnce(false);
+
+		await tabInternals.addSyncTokenSetting(tab.containerEl);
+
+		const status = tab.containerEl.querySelector(".keepsidian-token-helper-availability");
+		expect(status?.textContent).toBe("Wizard download needed.");
+		expect(status?.classList).toContain("is-missing");
 	});
 
 	test("save location onChange persists value", async () => {

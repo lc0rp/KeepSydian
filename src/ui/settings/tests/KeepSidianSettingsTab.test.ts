@@ -55,7 +55,9 @@ jest.mock("../../../integrations/google/keepToken", () => ({
 }));
 
 jest.mock("../../../integrations/google/tokenHelper", () => ({
+	TOKEN_HELPER_SOURCE_URL: "https://github.com/lc0rp/keepsidian-token-helper",
 	getTokenHelperState: jest.fn(),
+	isTokenHelperInstalled: jest.fn(() => true),
 	runTokenHelper: jest.fn(),
 }));
 
@@ -237,6 +239,18 @@ describe("KeepSidianSettingsTab", () => {
 		expect(spyAddSaveLocationSetting).toHaveBeenCalled();
 		expect(spyAddSubscriptionSettings).toHaveBeenCalled();
 		expect(spyAddSupportSection).toHaveBeenCalledTimes(2);
+		const settingNames = Array.from(settingsTab.containerEl.querySelectorAll(".setting-item-name")).map(
+			(element) => element.firstChild?.textContent ?? element.textContent
+		);
+		expect(settingNames.slice(0, 7)).toEqual([
+			"Retrieve sync token",
+			"Email",
+			"Sync token",
+			"Option 1: Guided token retrieval (desktop only)",
+			"Option 2: Manual retrieval instructions",
+			"Enable debug logging",
+			"Note settings",
+		]);
 	});
 
 	test("should hide helper retrieval on mobile", async () => {
@@ -246,7 +260,10 @@ describe("KeepSidianSettingsTab", () => {
 		await settingsTabInternals.renderSettings();
 
 		expect(settingsTab.containerEl.textContent).toContain("Mobile: use a desktop-synced token");
-		expect(settingsTab.containerEl.textContent).not.toContain("Retrieve token with helper");
+		expect(settingsTab.containerEl.textContent).toContain("Token retrieval instructions");
+		expect(settingsTab.containerEl.textContent).not.toContain("Option 1:");
+		expect(settingsTab.containerEl.textContent).not.toContain("Option 2:");
+		expect(settingsTab.containerEl.textContent).not.toContain("Launch wizard");
 	});
 
 	test("should validate email properly", () => {

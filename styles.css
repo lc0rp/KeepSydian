@@ -1302,6 +1302,33 @@ If your plugin does not need CSS, delete this file.
 	font-size: var(--font-ui-small);
 }
 
+.keepsidian-token-helper-availability {
+	font-weight: 600;
+}
+
+.keepsidian-token-helper-availability.is-installed {
+	color: var(--text-success, #4caf50);
+}
+
+.keepsidian-token-helper-availability.is-missing {
+	color: var(--text-error, #e53935);
+}
+
+.keepsidian-token-helper-source-button {
+	gap: 6px;
+}
+
+.keepsidian-token-helper-source-button__icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.keepsidian-token-helper-source-button__icon svg {
+	width: 1em;
+	height: 1em;
+}
+
 .keepsidian-settings-hr {
 	margin: 16px 0;
 	border: none;

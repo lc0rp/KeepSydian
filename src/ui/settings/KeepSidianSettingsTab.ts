@@ -1,7 +1,7 @@
 import KeepSidianPlugin from "main";
 import { PluginSettingTab, App, Notice, Platform, Setting } from "obsidian";
 import { exchangeOauthToken } from "../../integrations/google/keepToken";
-import { getTokenHelperState, runTokenHelper } from "@integrations/google/tokenHelper";
+import { getTokenHelperState, isTokenHelperInstalled, runTokenHelper } from "@integrations/google/tokenHelper";
 import {
 	endRetrievalWizardSession,
 	logRetrievalWizardEvent,
@@ -57,10 +57,13 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 		containerEl.empty();
 
 		this.addSupportSection(containerEl);
+		new Setting(containerEl).setName("Retrieve sync token").setHeading();
 		this.addEmailSetting(containerEl);
-		this.addSaveLocationSetting(containerEl);
-		containerEl.createEl("hr", { cls: "keepsidian-settings-hr" });
 		this.addSyncTokenSetting(containerEl);
+		containerEl.createEl("hr", { cls: "keepsidian-settings-hr" });
+		// eslint-disable-next-line obsidianmd/settings-tab/no-problematic-settings-headings -- Requested product section title.
+		new Setting(containerEl).setName("Note settings").setHeading();
+		this.addSaveLocationSetting(containerEl);
 		containerEl.createEl("hr", { cls: "keepsidian-settings-hr" });
 		await this.addAutoSyncSettings(containerEl);
 		containerEl.createEl("hr", { cls: "keepsidian-settings-hr" });
@@ -84,6 +87,7 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 	private addSyncTokenSetting(containerEl: HTMLElement): void {
 		addSyncTokenSettingSection(containerEl, {
 			plugin: this.plugin,
+			helperInstalled: isTokenHelperInstalled(this.plugin),
 			isLikelyLongLivedToken: (token) => this.isLikelyLongLivedToken(token),
 			onTokenPaste: async (event) => {
 				await this.handleTokenPaste(event);

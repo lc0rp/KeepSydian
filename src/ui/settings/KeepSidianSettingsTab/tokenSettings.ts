@@ -1,8 +1,10 @@
 import type KeepSidianPlugin from "main";
 import { Platform, Setting, setIcon } from "obsidian";
+import { TOKEN_HELPER_SOURCE_URL } from "@integrations/google/tokenHelper";
 
 interface TokenSettingOptions {
 	plugin: KeepSidianPlugin;
+	helperInstalled: boolean;
 	isLikelyLongLivedToken: (token?: string | null) => boolean;
 	onTokenPaste: (event: ClipboardEvent) => Promise<void>;
 	onHelperLaunch: () => Promise<void>;
@@ -12,7 +14,6 @@ interface TokenSettingOptions {
 
 export function addSyncTokenSetting(containerEl: HTMLElement, options: TokenSettingOptions): void {
 	const { plugin } = options;
-	new Setting(containerEl).setName("Retrieve sync token").setHeading();
 	const tokenSetting = new Setting(containerEl)
 		.setName("Sync token")
 		.setDesc(
@@ -82,18 +83,45 @@ export function addSyncTokenSetting(containerEl: HTMLElement, options: TokenSett
 	});
 
 	if (Platform.isDesktopApp) {
-		const retrievalSetting = new Setting(containerEl)
-			.setName("Guided token retrieval")
-			.setDesc(
-				"Use the open-source KeepSidian token helper to open a real browser, guide sign-in, and return the token directly to KeepSidian. If the helper is not installed, KeepSidian will ask before downloading it."
-			);
-
-		retrievalSetting.addButton((button) =>
-			button.setButtonText("Retrieve token with helper").onClick(() => void options.onHelperLaunch())
+		const helperDescription = document.createDocumentFragment();
+		const helperStatus = document.createElement("span");
+		helperStatus.className = options.helperInstalled
+			? "keepsidian-token-helper-availability is-installed"
+			: "keepsidian-token-helper-availability is-missing";
+		helperStatus.textContent = options.helperInstalled ? "Wizard downloaded." : "Wizard download needed.";
+		helperDescription.appendChild(helperStatus);
+		helperDescription.appendChild(
+			document.createTextNode(
+				" This option uses a Wizard to open a web browser, guide sign-in, and retrieve the token. It requires a small open-source download."
+			)
 		);
 
+		const retrievalSetting = new Setting(containerEl)
+			// eslint-disable-next-line obsidianmd/ui/sentence-case -- Requested option title.
+			.setName("Option 1: Guided token retrieval (desktop only)")
+			.setDesc(helperDescription);
+
+		retrievalSetting.addButton((button) =>
+			button.setButtonText("Launch wizard").onClick(() => void options.onHelperLaunch())
+		);
+		const sourceLink = retrievalSetting.controlEl.createEl("a", {
+			cls: ["keepsidian-link-button", "keepsidian-token-helper-source-button"],
+			attr: {
+				href: TOKEN_HELPER_SOURCE_URL,
+				target: "_blank",
+				rel: "noopener noreferrer",
+				role: "button",
+				"data-keepsidian-link": "token-helper-source",
+				"aria-label": "View wizard source code",
+			},
+		});
+		const sourceIcon = sourceLink.createEl("span", { cls: "keepsidian-token-helper-source-button__icon" });
+		setIcon(sourceIcon, "github");
+		sourceLink.createEl("span", { text: "View wizard source code" });
+
 		const githubSetting = new Setting(containerEl)
-			.setName("Manual retrieval")
+			// eslint-disable-next-line obsidianmd/ui/sentence-case -- Requested option title.
+			.setName("Option 2: Manual retrieval instructions")
 			.setDesc(
 				'Prefer manual steps? Click the button to follow the GitHub KIM instructions, and paste the token into the "sync token" field above.'
 			);
@@ -109,7 +137,7 @@ export function addSyncTokenSetting(containerEl: HTMLElement, options: TokenSett
 				});
 			});
 	} else {
-		const retrievalSetting = new Setting(containerEl).setName("Retrieve your sync token");
+		const retrievalSetting = new Setting(containerEl).setName("Token retrieval instructions");
 		retrievalSetting.setDesc("Mobile: use a desktop-synced token or the GitHub KIM instructions below.");
 		options.addGithubInstructionsLink(retrievalSetting);
 	}

@@ -4,7 +4,13 @@
 import { EventEmitter } from "events";
 import { requestUrl } from "obsidian";
 import type KeepSidianPlugin from "main";
-import { getTokenHelperState, installTokenHelper, runTokenHelper, type TokenHelperManifest } from "../tokenHelper";
+import {
+	getTokenHelperState,
+	installTokenHelper,
+	isTokenHelperInstalled,
+	runTokenHelper,
+	type TokenHelperManifest,
+} from "../tokenHelper";
 import { DEFAULT_SETTINGS } from "../../../types/keepsidian-plugin-settings";
 
 jest.mock("obsidian", () => ({
@@ -141,6 +147,24 @@ describe("token helper manager", () => {
 		jest.clearAllMocks();
 		requestUrlMock.mockReset();
 		fsMock.existsSync.mockReturnValue(false);
+	});
+
+	test("detects an installed helper at the configured path without a network request", () => {
+		const plugin = createPlugin({ tokenHelperPath: "/tmp/helper" });
+		fsMock.existsSync.mockReturnValue(true);
+
+		expect(isTokenHelperInstalled(plugin)).toBe(true);
+		expect(fsMock.existsSync).toHaveBeenCalledWith("/tmp/helper");
+		expect(requestUrlMock).not.toHaveBeenCalled();
+	});
+
+	test("reports that the helper download is needed when no executable exists", () => {
+		const plugin = createPlugin();
+
+		expect(isTokenHelperInstalled(plugin)).toBe(false);
+		expect(fsMock.existsSync).toHaveBeenCalledWith(
+			"/tmp/keepsidian-home/.keepsidian/token-helper/keepsidian-token-helper"
+		);
 	});
 
 	test("reports missing helper with the newest compatible release", async () => {
