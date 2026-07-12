@@ -1,7 +1,7 @@
 {
 	"id": "keepsidian",
 	"name": "KeepSydian",
-	"version": "2.0.15",
+	"version": "2.0.16",
 	"minAppVersion": "1.6.5",
 	"description": "Two-way sync between Obsidian and Google Keep.",
 	"author": "lc0rp",
