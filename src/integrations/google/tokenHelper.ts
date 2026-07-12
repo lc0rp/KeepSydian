@@ -112,6 +112,16 @@ function getDefaultHelperPath(deps: RuntimeDeps): string {
 	return deps.path.join(getHelperBaseDir(deps), executableName);
 }
 
+export function isTokenHelperInstalled(plugin: KeepSidianPlugin): boolean {
+	try {
+		const deps = loadRuntimeDeps();
+		const helperPath = plugin.settings.tokenHelperPath || getDefaultHelperPath(deps);
+		return deps.fs.existsSync(helperPath);
+	} catch {
+		return false;
+	}
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return Boolean(value) && typeof value === "object";
 }
