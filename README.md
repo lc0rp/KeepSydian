@@ -9,17 +9,20 @@
 
 **Different name, same value.**
 
-The new Obsidian plugin guidelines prohibit use of '-sidian' in plugin names. So we've updated the name to allow the
-plugin is listed in the official Obsidian plugin directory. We chose the closest name to the original to minimize
+The new Obsidian plugin guidelines prohibit use of '-sidian' in plugin names. 
+So we've updated the name to allow the
+plugin is listed in the official Obsidian plugin directory. 
+We chose the closest name to the original to minimize
 confusion.
 
 ## What is KeepSydian?
 
-As a regular user of both Google Keep and Obsidian, I set out to make it easier to exchange data between both apps.
+As a regular user of both Google Keep and Obsidian, I set out to make it easier 
+to exchange data between both apps.
 
-KeepSydian syncs notes between Google Keep and Obsidian, on demand or automatically on a schedule. The current plugin
-experience centers manual sync around the Sync Center, where you can review a download, upload, or two-way plan before
-anything changes in your vault or in Google Keep.
+KeepSydian syncs notes between Google Keep and Obsidian, on demand or automatically 
+on a schedule. The KeepSydian Sync Center lets you  select options, and 
+then review a download, upload, or two-way plan before any changes are made to your vault or in Google Keep.
 
 - Versions 1.1.2+: Introducing two-way sync!
 - Versions 1.1.1 and below: Only downloading supported
@@ -38,10 +41,10 @@ Obsidian secret storage when available, and does not log or store your credentia
 
 ## Manual sync and the Sync Center
 
-KeepSydian now centers manual sync around one primary action: **Sync now**.
+KeepSydian now triggers manual sync using one primary command: **Sync now**.
 
 - `Sync now` opens the Sync Center and immediately starts building a reviewable download plan.
-- `Open sync center` opens the same surface without starting a sync, so you can choose the mode first.
+- `Open sync center` opens the Sync Center but doesn't start a sync, so you can choose the mode first.
 - The ribbon icon and status-bar item also open the Sync Center.
 - The Sync Center can build plans for **Download**, **Upload**, or **Two-way sync**.
 - Download plans support three start-date scopes:
@@ -53,9 +56,7 @@ KeepSydian now centers manual sync around one primary action: **Sync now**.
 - Legacy commands for **Perform two-way sync**, **Download notes from Google Keep**, and **Upload notes to Google Keep**
   still exist, but they now route into the same Sync Center flow.
 
-Every manual sync is review-first. The setup view builds a plan, then the larger review modal shows grouped counts and
-the exact notes/actions before execution. While a sync is running, the status bar, notices, and review modal stay in
-sync so you can track progress from either place.
+Every manual sync starts with a review. KeepSydian builds a plan, then a review page shows counts grouped by note status/action, and and the exact notes/actions before execution. While a sync is running, the status bar, notices, and review page stay in sync so you can track progress from either place.
 
 ## Activity log (v1.1.0+)
 
