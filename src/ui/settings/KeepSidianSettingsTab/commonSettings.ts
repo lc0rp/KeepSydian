@@ -142,6 +142,18 @@ export function addSaveLocationSetting(plugin: KeepSidianPlugin, containerEl: HT
 					})
 			);
 
+		new Setting(sectionEl)
+			.setName("Display imported images in notes")
+			.setDesc(
+				"Embed Google Keep images in imported notes. Image files remain stored in the note folder's media directory."
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(plugin.settings.embedImportedImages).onChange(async (value) => {
+					plugin.settings.embedImportedImages = value;
+					await plugin.saveSettings();
+				})
+			);
+
 		previewSectionEl = sectionEl.createDiv({
 			cls: "keepsidian-note-path-preview",
 		});

@@ -182,6 +182,8 @@ separate `-conflict-<timestamp>.md` file.
 ## Attachments
 
 - Downloaded attachments are stored under the sync folder's `media/` directory.
+- **Display imported images in notes** is disabled by default. Enable it in KeepSydian settings to append Obsidian image
+  embeds to imported notes while keeping the image files in `media/`.
 - Upload scans Markdown notes under the save location and includes referenced attachments that resolve into `media/`.
 - Missing attachments are skipped and recorded in the sync log.
 - Media uploads are still considered experimental and server support may vary by attachment type.

@@ -630,6 +630,25 @@ describe("KeepSidianSettingsTab UI interactions", () => {
 		expect(plugin.settings.noteFileNamePattern).toBe("{date}-{title}");
 	});
 
+	test("imported image embeds are opt-in and persist changes", async () => {
+		const container = tab.containerEl;
+		const saveSettingsSpy = jest.spyOn(plugin, "saveSettings");
+
+		await tabInternals.addSaveLocationSetting(container);
+
+		const imageSetting = findSettingByLabel(container, "Display imported images in notes");
+		const toggle = imageSetting?.querySelector('input[type="checkbox"]') as HTMLInputElement;
+		expect(toggle).toBeTruthy();
+		expect(toggle.checked).toBe(false);
+
+		toggle.checked = true;
+		toggle.dispatchEvent(new Event("change"));
+		await waitForMicrotasks();
+
+		expect(plugin.settings.embedImportedImages).toBe(true);
+		expect(saveSettingsSpy).toHaveBeenCalled();
+	});
+
 	test("shows a live preview of the resolved note path", async () => {
 		jest.useFakeTimers().setSystemTime(new Date("2024-03-20T14:30:45.000Z"));
 

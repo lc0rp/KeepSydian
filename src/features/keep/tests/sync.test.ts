@@ -54,6 +54,7 @@ describe("Google Keep Import Functions", () => {
 				noteFileNamePattern: "{title}",
 				keepSidianLastSuccessfulSyncDate: null,
 				frontmatterPascalCaseFixApplied: false,
+				embedImportedImages: false,
 			},
 			app: {
 				vault: {
@@ -522,6 +523,7 @@ describe("Google Keep Import Functions", () => {
 				fetchDurationMs: 0,
 				compareDurationMs: 0,
 				writeDurationMs: 0,
+				fileNames: ["blob-1.png"],
 			});
 			const ensureFolderSpy = jest.spyOn(pathsModule, "ensureFolder");
 
@@ -739,16 +741,17 @@ describe("Google Keep Import Functions", () => {
 				blob_urls: ["http://example.com/blob1", "http://example.com/blob2"],
 			};
 
-				jest.spyOn(noteModule, "normalizeNote").mockReturnValue(normalizedNoteWithAttachments);
-				jest.spyOn(compareModule, "handleDuplicateNotes").mockResolvedValue("overwrite");
-				const processAttachmentsSpy = jest.spyOn(attachmentsModule, "processAttachments").mockResolvedValue({
-					downloaded: 2,
-					skippedIdentical: 0,
-					totalDurationMs: 24,
-					fetchDurationMs: 12,
-					compareDurationMs: 6,
-					writeDurationMs: 6,
-				});
+			jest.spyOn(noteModule, "normalizeNote").mockReturnValue(normalizedNoteWithAttachments);
+			jest.spyOn(compareModule, "handleDuplicateNotes").mockResolvedValue("overwrite");
+			const processAttachmentsSpy = jest.spyOn(attachmentsModule, "processAttachments").mockResolvedValue({
+				downloaded: 2,
+				skippedIdentical: 0,
+				totalDurationMs: 24,
+				fetchDurationMs: 12,
+				compareDurationMs: 6,
+				writeDurationMs: 6,
+				fileNames: ["blob1.png", "blob2.jpg"],
+			});
 			const logSpy = jest.spyOn(loggingModule, "logSync").mockResolvedValue(undefined);
 
 			await syncModule.processAndSaveNote(mockPlugin, preNormalizedNote, mockPlugin.settings.saveLocation);
@@ -775,6 +778,42 @@ describe("Google Keep Import Functions", () => {
 			logSpy.mockRestore();
 		});
 
+		it("adds downloaded images to the note when inline display is enabled", async () => {
+			mockPlugin.settings.embedImportedImages = true;
+			const incomingNote: noteModule.PreNormalizedNote = {
+				title: "Note 1",
+				text: "Content 1",
+				frontmatterDict: {},
+				blob_urls: ["http://example.com/blob1", "http://example.com/blob2"],
+			};
+			const normalizedWithAttachments = {
+				...normalizedNote,
+				blob_urls: incomingNote.blob_urls as string[],
+			};
+			jest.spyOn(noteModule, "normalizeNote").mockReturnValue(normalizedWithAttachments);
+			jest.spyOn(compareModule, "handleDuplicateNotes").mockResolvedValue("create");
+			jest.spyOn(attachmentsModule, "processAttachments").mockResolvedValue({
+				downloaded: 2,
+				skippedIdentical: 0,
+				totalDurationMs: 0,
+				fetchDurationMs: 0,
+				compareDurationMs: 0,
+				writeDurationMs: 0,
+				fileNames: ["photo one.png", "audio.mp3"],
+			});
+			(mockPlugin.app.vault.adapter.read as jest.Mock).mockResolvedValue(
+				"---\nKeepSidianLastSyncedDate: 2026-07-12T19:10:55.015Z\n---\nContent 1"
+			);
+
+			await syncModule.processAndSaveNote(mockPlugin, incomingNote, mockPlugin.settings.saveLocation);
+
+			const noteWrites = (mockPlugin.app.vault.adapter.write as jest.Mock).mock.calls.filter(
+				([path]) => path === "Test Folder/Note 1.md"
+			);
+			expect(noteWrites.at(-1)?.[1]).toContain("![[media/photo one.png]]");
+			expect(noteWrites.at(-1)?.[1]).not.toContain("audio.mp3");
+		});
+
 		it("should download attachments even when note is skipped", async () => {
 			const preNormalizedNote: noteModule.PreNormalizedNote = {
 				title: "Note 1",
@@ -787,16 +826,17 @@ describe("Google Keep Import Functions", () => {
 				blob_urls: ["http://example.com/blob1"],
 			};
 
-				jest.spyOn(noteModule, "normalizeNote").mockReturnValue(normalizedNoteWithAttachments);
-				jest.spyOn(compareModule, "handleDuplicateNotes").mockResolvedValue("skip");
-				const processAttachmentsSpy = jest.spyOn(attachmentsModule, "processAttachments").mockResolvedValue({
-					downloaded: 0,
-					skippedIdentical: 1,
-					totalDurationMs: 18,
-					fetchDurationMs: 8,
-					compareDurationMs: 6,
-					writeDurationMs: 4,
-				});
+			jest.spyOn(noteModule, "normalizeNote").mockReturnValue(normalizedNoteWithAttachments);
+			jest.spyOn(compareModule, "handleDuplicateNotes").mockResolvedValue("skip");
+			const processAttachmentsSpy = jest.spyOn(attachmentsModule, "processAttachments").mockResolvedValue({
+				downloaded: 0,
+				skippedIdentical: 1,
+				totalDurationMs: 18,
+				fetchDurationMs: 8,
+				compareDurationMs: 6,
+				writeDurationMs: 4,
+				fileNames: ["blob1.png"],
+			});
 			const logSpy = jest.spyOn(loggingModule, "logSync").mockResolvedValue(undefined);
 
 			await syncModule.processAndSaveNote(mockPlugin, preNormalizedNote, mockPlugin.settings.saveLocation);

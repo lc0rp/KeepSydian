@@ -33,6 +33,7 @@ import {
 	type ExistingKeepNoteIndex,
 } from "./domain/noteLookup";
 import { appendPerfTrace } from "@app/perf-trace";
+import { stripManagedImageEmbeds, withManagedImageEmbeds } from "./domain/attachmentEmbeds";
 
 const LAST_SUCCESSFUL_SYNC_DATE_KEY = "KeepSidianLastSuccessfulSyncDate";
 const NOTE_LOG_BATCH_KEY = "sync:notes";
@@ -101,10 +102,7 @@ async function measureAsyncDuration(work: () => Promise<void>): Promise<number> 
 	return getNowMs() - startedAt;
 }
 
-function logPerformanceSummary(
-	label: string,
-	metrics: SaveBatchMetrics
-): void {
+function logPerformanceSummary(label: string, metrics: SaveBatchMetrics): void {
 	if (metrics.processed === 0) {
 		return;
 	}
@@ -120,11 +118,7 @@ function logPerformanceSummary(
 	);
 }
 
-async function withKeyedLock<T>(
-	locks: Map<string, Promise<void>>,
-	key: string,
-	work: () => Promise<T>
-): Promise<T> {
+async function withKeyedLock<T>(locks: Map<string, Promise<void>>, key: string, work: () => Promise<T>): Promise<T> {
 	const previous = locks.get(key) ?? Promise.resolve();
 	let release!: () => void;
 	const current = new Promise<void>((resolve) => {
@@ -334,13 +328,7 @@ async function fetchImportNotesBase(
 
 		while (!hasError) {
 			try {
-				const response = await fetchImportPageWithRetry(
-					fetchFunction,
-					offset,
-					limit,
-					syncFilters,
-					cursor
-				);
+				const response = await fetchImportPageWithRetry(fetchFunction, offset, limit, syncFilters, cursor);
 				completionDate = new Date().toISOString();
 				if (typeof response.total_notes === "number" && callbacks?.setTotalNotes && !hasReportedTotal) {
 					try {
@@ -759,8 +747,7 @@ export async function processAndSaveNotes(
 						logDurationMs: metrics.logDurationMs,
 						unaccountedDurationMs:
 							metrics.totalDurationMs -
-							(
-								folderEnsureDurationMs +
+							(folderEnsureDurationMs +
 								metrics.resolveExistingPathDurationMs +
 								metrics.existsCheckDurationMs +
 								metrics.duplicateDecisionDurationMs +
@@ -768,8 +755,7 @@ export async function processAndSaveNotes(
 								metrics.ensureParentFolderDurationMs +
 								metrics.writeNoteDurationMs +
 								metrics.attachmentDurationMs +
-								metrics.logDurationMs
-							),
+								metrics.logDurationMs),
 					});
 					if (batchMetrics.processed % NOTE_PERF_LOG_INTERVAL === 0) {
 						logPerformanceSummary("import-progress", batchMetrics);
@@ -800,8 +786,7 @@ export async function processAndSaveNotes(
 		await appendPerfTrace(plugin, "save-batch-workers-complete", {
 			processed: batchMetrics.processed,
 			totalDurationMs: getNowMs() - batchStartedAt,
-			averageTotalDurationMs:
-				batchMetrics.processed > 0 ? batchMetrics.totalDurationMs / batchMetrics.processed : 0,
+			averageTotalDurationMs: batchMetrics.processed > 0 ? batchMetrics.totalDurationMs / batchMetrics.processed : 0,
 		});
 		if (fatalError) {
 			throw fatalError instanceof Error ? fatalError : new Error("KeepSidian sync failed");
@@ -890,13 +875,7 @@ export async function processAndSaveNote(
 			noteFilePath === resolvedNotePath &&
 			!existingKeepNoteIndex.existingPaths.has(noteFilePath)
 				? "create"
-				: await handleDuplicateNotes(
-						saveLocation,
-						normalizedNote,
-						plugin.app,
-						noteFilePath,
-						existingKeepNoteIndex
-					);
+				: await handleDuplicateNotes(saveLocation, normalizedNote, plugin.app, noteFilePath, existingKeepNoteIndex);
 		metrics.duplicateDecisionDurationMs = getNowMs() - duplicateDecisionStartedAt;
 		const newFrontmatter = normalizedNote.frontmatter;
 		const newTextWithoutFrontmatter = normalizedNote.textWithoutFrontmatter;
@@ -922,7 +901,8 @@ export async function processAndSaveNote(
 			metrics.readExistingDurationMs += getNowMs() - readStartedAt;
 			const existingMarkdownFileContent =
 				typeof existingMarkdownFileContentRaw === "string" ? existingMarkdownFileContentRaw : "";
-			const [existingFrontmatter, existingTextWithoutFrontmatter] = extractFrontmatter(existingMarkdownFileContent);
+			const [existingFrontmatter, existingTextWithoutFrontmatterRaw] = extractFrontmatter(existingMarkdownFileContent);
+			const existingTextWithoutFrontmatter = stripManagedImageEmbeds(existingTextWithoutFrontmatterRaw);
 
 			const mdFrontmatter = buildFrontmatterWithSyncDate(existingFrontmatter, lastSyncedDate, newFrontmatter);
 
@@ -988,6 +968,7 @@ export async function processAndSaveNote(
 				fetchDurationMs = 0,
 				compareDurationMs = 0,
 				writeDurationMs = 0,
+				fileNames = [],
 			} = await processAttachments(
 				plugin.app,
 				normalizedNote.blob_urls,
@@ -1002,6 +983,17 @@ export async function processAndSaveNote(
 			metrics.attachmentFetchDurationMs += fetchDurationMs;
 			metrics.attachmentCompareDurationMs += compareDurationMs;
 			metrics.attachmentWriteDurationMs += writeDurationMs;
+			if (plugin.settings.embedImportedImages && fileNames.length > 0) {
+				const existingNoteContent = await plugin.app.vault.adapter.read(noteFilePath);
+				const [existingFrontmatter, existingBody] = extractFrontmatter(existingNoteContent);
+				const bodyWithEmbeds = withManagedImageEmbeds(existingBody, fileNames);
+				const noteContentWithEmbeds = wrapMarkdown(existingFrontmatter, bodyWithEmbeds);
+				if (noteContentWithEmbeds !== existingNoteContent) {
+					const writeStartedAt = getNowMs();
+					await plugin.app.vault.adapter.write(noteFilePath, noteContentWithEmbeds);
+					metrics.writeNoteDurationMs += getNowMs() - writeStartedAt;
+				}
+			}
 			if (downloaded > 0) {
 				const attachmentWord = downloaded === 1 ? "attachment" : "attachments";
 				const skippedSuffix = skippedIdentical > 0 ? ` (${skippedIdentical} identical skipped)` : "";

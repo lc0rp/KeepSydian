@@ -23,6 +23,7 @@ export interface ProcessAttachmentsResult {
 	fetchDurationMs: number;
 	compareDurationMs: number;
 	writeDurationMs: number;
+	fileNames: string[];
 }
 
 interface AttachmentRequestHeaders {
@@ -81,14 +82,51 @@ function resolveBlobUrl(blobUrl: string): URL | null {
 }
 
 function sanitizeFileName(fileName: string): string {
-	return fileName.replace(/[\\/]/g, "_");
+	const unsafeCharacters = new Set(["\\", "/", "#", "[", "]", "|", "^"]);
+	return Array.from(fileName, (character) => (unsafeCharacters.has(character) ? "_" : character)).join("");
 }
 
-function deriveFileName(
-	url: URL,
-	index: number,
-	blobNames?: string[]
-): string | null {
+function hasImageFileExtension(fileName: string): boolean {
+	return /\.(?:avif|bmp|gif|heic|heif|jpe?g|png|svg|webp)$/i.test(fileName);
+}
+
+function inferImageExtension(data: ArrayBuffer): string | null {
+	const bytes = new Uint8Array(data);
+	if (
+		bytes.length >= 8 &&
+		bytes.slice(0, 8).every((value, index) => value === [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a][index])
+	) {
+		return ".png";
+	}
+	if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+		return ".jpg";
+	}
+	const signature = String.fromCharCode(...bytes.slice(0, 12));
+	if (signature.startsWith("GIF87a") || signature.startsWith("GIF89a")) {
+		return ".gif";
+	}
+	if (signature.startsWith("RIFF") && signature.slice(8, 12) === "WEBP") {
+		return ".webp";
+	}
+	if (signature.startsWith("BM")) {
+		return ".bmp";
+	}
+	const textPrefix = String.fromCharCode(...bytes.slice(0, 512)).trimStart();
+	if (textPrefix.startsWith("<svg") || (textPrefix.startsWith("<?xml") && textPrefix.includes("<svg"))) {
+		return ".svg";
+	}
+	return null;
+}
+
+function ensureImageExtension(fileName: string, data: ArrayBuffer): string {
+	const inferredExtension = inferImageExtension(data);
+	if (!inferredExtension || hasImageFileExtension(fileName)) {
+		return fileName;
+	}
+	return `${fileName}${inferredExtension}`;
+}
+
+function deriveFileName(url: URL, index: number, blobNames?: string[]): string | null {
 	const nameFromBlobNames = blobNames?.[index]?.trim();
 	if (nameFromBlobNames) {
 		return sanitizeFileName(nameFromBlobNames);
@@ -127,18 +165,13 @@ function isRetryableAttachmentFetchError(error: unknown): boolean {
 	);
 }
 
-async function fetchAttachmentBlob(
-	url: string,
-	headers?: Record<string, string>
-): Promise<ArrayBuffer> {
+async function fetchAttachmentBlob(url: string, headers?: Record<string, string>): Promise<ArrayBuffer> {
 	let retryDelayMs = ATTACHMENT_FETCH_INITIAL_RETRY_DELAY_MS;
 	for (let attempt = 1; attempt <= ATTACHMENT_FETCH_MAX_ATTEMPTS; attempt += 1) {
 		try {
 			return await httpGetArrayBuffer(url, headers);
 		} catch (error) {
-			const shouldRetry =
-				attempt < ATTACHMENT_FETCH_MAX_ATTEMPTS &&
-				isRetryableAttachmentFetchError(error);
+			const shouldRetry = attempt < ATTACHMENT_FETCH_MAX_ATTEMPTS && isRetryableAttachmentFetchError(error);
 			if (!shouldRetry) {
 				throw error;
 			}
@@ -167,6 +200,7 @@ export async function processAttachments(
 		fetchDurationMs: 0,
 		compareDurationMs: 0,
 		writeDurationMs: 0,
+		fileNames: [],
 	};
 
 	if (!blobUrls || blobUrls.length === 0) {
@@ -189,9 +223,7 @@ export async function processAttachments(
 
 			const fileName = deriveFileName(resolvedUrl, index, blobNames);
 			if (!fileName) {
-				console.error(
-					`Could not determine filename for attachment at ${resolvedUrl.href}`
-				);
+				console.error(`Could not determine filename for attachment at ${resolvedUrl.href}`);
 				continue;
 			}
 
@@ -205,24 +237,17 @@ export async function processAttachments(
 					: undefined;
 			const blobData = await fetchAttachmentBlob(resolvedUrl.href, requestUrlHeaders);
 			result.fetchDurationMs += getNowMs() - fetchStartedAt;
-			const blobFilePath = buildMediaPath(saveLocation, fileName);
+			const resolvedFileName = ensureImageExtension(fileName, blobData);
+			const blobFilePath = buildMediaPath(saveLocation, resolvedFileName);
 
 			let shouldWrite = true;
 			if (typeof adapter.exists === "function") {
 				try {
 					const compareStartedAt = getNowMs();
 					const alreadyExists = await adapter.exists(blobFilePath);
-					if (
-						alreadyExists &&
-						typeof adapter.readBinary === "function"
-					) {
-						const existingData = await adapter.readBinary(
-							blobFilePath
-						);
-						if (
-							existingData &&
-							arrayBuffersAreEqual(existingData, blobData)
-						) {
+					if (alreadyExists && typeof adapter.readBinary === "function") {
+						const existingData = await adapter.readBinary(blobFilePath);
+						if (existingData && arrayBuffersAreEqual(existingData, blobData)) {
 							shouldWrite = false;
 							result.skippedIdentical += 1;
 						}
@@ -230,9 +255,7 @@ export async function processAttachments(
 					result.compareDurationMs += getNowMs() - compareStartedAt;
 				} catch (existsError) {
 					console.error(existsError);
-					throw new Error(
-						`Failed to download blob from ${blob_url}.`
-					);
+					throw new Error(`Failed to download blob from ${blob_url}.`);
 				}
 			}
 
@@ -242,6 +265,7 @@ export async function processAttachments(
 				result.writeDurationMs += getNowMs() - writeStartedAt;
 				result.downloaded += 1;
 			}
+			result.fileNames.push(resolvedFileName);
 		} catch (error) {
 			console.error(error);
 			throw new Error(`Failed to download blob from ${blob_url}.`);

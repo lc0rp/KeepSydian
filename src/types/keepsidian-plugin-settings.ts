@@ -26,6 +26,7 @@ export interface KeepSidianPluginSettings {
 	saveLocation: string;
 	saveLocationMode: SaveLocationMode;
 	noteFileNamePattern: string;
+	embedImportedImages: boolean;
 	oauthFlow: "desktop" | "webviewer";
 	oauthDebugMode: boolean;
 	oauthPlaywrightUseSystemBrowser: boolean;
@@ -62,6 +63,7 @@ export const DEFAULT_SETTINGS: KeepSidianPluginSettings = {
 	saveLocation: NEW_INSTALL_SAVE_LOCATION,
 	saveLocationMode: DEFAULT_SAVE_LOCATION_MODE,
 	noteFileNamePattern: DEFAULT_NOTE_FILE_NAME_PATTERN,
+	embedImportedImages: false,
 	oauthFlow: "desktop",
 	oauthDebugMode: false,
 	oauthPlaywrightUseSystemBrowser: true,

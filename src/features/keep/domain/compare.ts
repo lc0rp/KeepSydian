@@ -7,6 +7,7 @@ import {
 } from "../constants";
 import { buildNotePath } from "@services/index";
 import { findExistingKeepNotePath, type ExistingKeepNoteIndex } from "./noteLookup";
+import { stripManagedImageEmbeds } from "./attachmentEmbeds";
 
 interface UpdatedFileInfo {
 	textWithoutFrontmatter: string;
@@ -52,7 +53,7 @@ async function getExistingFileInfo(noteFilePath: string, app: App): Promise<Exis
 
 	return {
 		// Read from noteFilePath
-		textWithoutFrontmatter: existingBody,
+		textWithoutFrontmatter: stripManagedImageEmbeds(existingBody),
 		createdDate: existingCreatedDate,
 		updatedDate: existingUpdatedDate,
 		fsCreatedDate: fsCreatedDate,
