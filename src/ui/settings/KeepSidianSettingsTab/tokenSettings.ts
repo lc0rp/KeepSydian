@@ -83,22 +83,19 @@ export function addSyncTokenSetting(containerEl: HTMLElement, options: TokenSett
 	});
 
 	if (Platform.isDesktopApp) {
-		const ownerDocument = containerEl.ownerDocument;
-		const helperDescription = ownerDocument.createDocumentFragment();
-		const helperStatus = containerEl.createEl("span", {
-			cls: options.helperInstalled
-				? "keepsidian-token-helper-availability is-installed"
-				: "keepsidian-token-helper-availability is-missing",
-			text: options.helperInstalled ? "Wizard downloaded." : "Wizard download needed.",
-		});
-		helperDescription.appendChild(helperStatus);
-		helperDescription.append(
-			" This option uses a Wizard to open a web browser, guide sign-in, and retrieve the token. It requires a small open-source download."
-		);
-
 		const retrievalSetting = new Setting(containerEl)
 			.setName("Option 1: guided token retrieval (desktop only)")
-			.setDesc(helperDescription);
+			.setDesc("");
+		retrievalSetting.descEl.createEl("span", {
+			cls: [
+				"keepsidian-token-helper-availability",
+				options.helperInstalled ? "is-installed" : "is-missing",
+			],
+			text: options.helperInstalled ? "Wizard downloaded." : "Wizard download needed.",
+		});
+		retrievalSetting.descEl.append(
+			" This option uses a Wizard to open a web browser, guide sign-in, and retrieve the token. It requires a small open-source download."
+		);
 
 		retrievalSetting.addButton((button) =>
 			button.setButtonText("Launch wizard").onClick(() => void options.onHelperLaunch())

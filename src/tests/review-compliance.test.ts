@@ -92,6 +92,12 @@ describe("Obsidian community review compliance", () => {
 		}
 	});
 
+	it("builds Setting descriptions in their own descEl instead of passing cross-realm fragments", () => {
+		const tokenSettings = readProjectFile("src/ui/settings/KeepSidianSettingsTab/tokenSettings.ts");
+
+		expect(tokenSettings).not.toContain("createDocumentFragment");
+	});
+
 	it("keeps the release workflow descriptive and provenance-attested", () => {
 		const releaseWorkflow = readProjectFile(".github/workflows/release.yml");
 

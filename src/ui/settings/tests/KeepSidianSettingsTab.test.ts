@@ -251,6 +251,15 @@ describe("KeepSidianSettingsTab", () => {
 			"Enable debug logging",
 			"Notes",
 		]);
+		const guidedRetrieval = Array.from(settingsTab.containerEl.querySelectorAll(".setting-item")).find(
+			(element) =>
+				element.querySelector(".setting-item-name")?.textContent ===
+				"Option 1: guided token retrieval (desktop only)"
+		);
+		expect(guidedRetrieval?.querySelector(".setting-item-description")?.textContent).toBe(
+			"Wizard downloaded. This option uses a Wizard to open a web browser, guide sign-in, and retrieve the token. It requires a small open-source download."
+		);
+		expect(guidedRetrieval?.textContent).not.toContain("[object DocumentFragment]");
 	});
 
 	test("should hide helper retrieval on mobile", async () => {
