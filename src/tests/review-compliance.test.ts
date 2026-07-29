@@ -34,6 +34,10 @@ describe("Obsidian community review compliance", () => {
 		}
 	});
 
+	it("keeps sync status APIs compatible with the declared minimum app version", () => {
+		expect(readProjectFile("src/app/sync-ui.ts")).not.toContain(".messageEl");
+	});
+
 	it("avoids main-window DOM globals and cross-window-unsafe element checks", () => {
 		const reviewedFiles = [
 			"src/ui/modals/SyncProgressModal.ts",
@@ -46,6 +50,27 @@ describe("Obsidian community review compliance", () => {
 			expect(source).not.toMatch(/(?<![\w.])document\.(?:createElement|createDocumentFragment|createTextNode)/);
 			expect(source).not.toMatch(/\binstanceof HTML(?:Button|Div|Span)Element\b/);
 		}
+	});
+
+	it("avoids the review-flagged global, coercion, and assertion patterns", () => {
+		const tokenExchange = readProjectFile("src/integrations/google/keepTokenExchange.ts");
+		const keepApi = readProjectFile("src/integrations/server/keepApi.ts");
+		const importOptionsModal = readProjectFile("src/ui/modals/NoteImportOptionsModal.ts");
+
+		expect(tokenExchange).not.toContain("globalThis");
+		expect(tokenExchange).not.toContain('"Failed to parse server response: " +');
+		expect(tokenExchange).not.toMatch(/\berror as Error\b/);
+		expect(keepApi).not.toMatch(/\bresponse as unknown\b/);
+		expect(importOptionsModal).not.toMatch(/premiumFeatures as NoteImportOptions/);
+	});
+
+	it("describes every directive suppression in the reviewed settings source", () => {
+		const directiveLines = readProjectFile("src/ui/settings/SubscriptionSettingsTab.ts")
+			.split("\n")
+			.filter((line) => line.includes("eslint-disable-next-line"));
+
+		expect(directiveLines.length).toBeGreaterThan(0);
+		expect(directiveLines.filter((line) => !line.includes(" -- "))).toEqual([]);
 	});
 
 	it("keeps the release workflow descriptive and provenance-attested", () => {
