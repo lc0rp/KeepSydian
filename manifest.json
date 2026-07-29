@@ -1,7 +1,7 @@
 {
 	"id": "keepsidian",
 	"name": "KeepSydian",
-	"version": "2.0.18",
+	"version": "2.0.19",
 	"minAppVersion": "1.6.5",
 	"description": "Two-way sync between your vault and Google Keep.",
 	"author": "lc0rp",
