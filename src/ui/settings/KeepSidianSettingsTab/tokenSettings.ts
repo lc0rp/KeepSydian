@@ -85,21 +85,19 @@ export function addSyncTokenSetting(containerEl: HTMLElement, options: TokenSett
 	if (Platform.isDesktopApp) {
 		const ownerDocument = containerEl.ownerDocument;
 		const helperDescription = ownerDocument.createDocumentFragment();
-		const helperStatus = ownerDocument.createElement("span");
-		helperStatus.className = options.helperInstalled
-			? "keepsidian-token-helper-availability is-installed"
-			: "keepsidian-token-helper-availability is-missing";
-		helperStatus.textContent = options.helperInstalled ? "Wizard downloaded." : "Wizard download needed.";
+		const helperStatus = containerEl.createEl("span", {
+			cls: options.helperInstalled
+				? "keepsidian-token-helper-availability is-installed"
+				: "keepsidian-token-helper-availability is-missing",
+			text: options.helperInstalled ? "Wizard downloaded." : "Wizard download needed.",
+		});
 		helperDescription.appendChild(helperStatus);
-		helperDescription.appendChild(
-			ownerDocument.createTextNode(
-				" This option uses a Wizard to open a web browser, guide sign-in, and retrieve the token. It requires a small open-source download."
-			)
+		helperDescription.append(
+			" This option uses a Wizard to open a web browser, guide sign-in, and retrieve the token. It requires a small open-source download."
 		);
 
 		const retrievalSetting = new Setting(containerEl)
-			// eslint-disable-next-line obsidianmd/ui/sentence-case -- Requested option title.
-			.setName("Option 1: Guided token retrieval (desktop only)")
+			.setName("Option 1: guided token retrieval (desktop only)")
 			.setDesc(helperDescription);
 
 		retrievalSetting.addButton((button) =>
@@ -121,8 +119,7 @@ export function addSyncTokenSetting(containerEl: HTMLElement, options: TokenSett
 		sourceLink.createEl("span", { text: "View wizard source code" });
 
 		const githubSetting = new Setting(containerEl)
-			// eslint-disable-next-line obsidianmd/ui/sentence-case -- Requested option title.
-			.setName("Option 2: Manual retrieval instructions")
+			.setName("Option 2: manual retrieval instructions")
 			.setDesc(
 				'Prefer manual steps? Click the button to follow the GitHub KIM instructions, and paste the token into the "sync token" field above.'
 			);

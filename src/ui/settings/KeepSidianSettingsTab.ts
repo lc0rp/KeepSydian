@@ -61,8 +61,7 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 		this.addEmailSetting(containerEl);
 		this.addSyncTokenSetting(containerEl);
 		containerEl.createEl("hr", { cls: "keepsidian-settings-hr" });
-		// eslint-disable-next-line obsidianmd/settings-tab/no-problematic-settings-headings -- Requested product section title.
-		new Setting(containerEl).setName("Note settings").setHeading();
+		new Setting(containerEl).setName("Notes").setHeading();
 		this.addSaveLocationSetting(containerEl);
 		containerEl.createEl("hr", { cls: "keepsidian-settings-hr" });
 		await this.addAutoSyncSettings(containerEl);

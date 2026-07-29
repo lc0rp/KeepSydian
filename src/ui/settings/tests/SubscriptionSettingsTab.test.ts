@@ -696,6 +696,7 @@ describe("SubscriptionSettingsTab", () => {
 
 			const subscribeLink = containerEl.querySelector('a[data-keepsidian-link="subscribe"]');
 			expect(subscribeLink).not.toBeNull();
+			expect(subscribeLink?.textContent).toBe("Support this project");
 			expect(subscribeLink?.getAttribute("href")).toBe("https://keepsidian.com/subscribe");
 			expect(subscribeLink?.getAttribute("target")).toBe("_blank");
 			expect(subscribeLink?.getAttribute("rel")).toBe("noopener noreferrer");

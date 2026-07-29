@@ -23,7 +23,6 @@ interface CreateElOptions {
 
 type MaybeObsidianElement = HTMLElement & {
 	empty?: () => void;
-	createEl?: <K extends keyof HTMLElementTagNameMap>(tagName: K, options?: CreateElOptions) => HTMLElementTagNameMap[K];
 	setText?: (text: string) => void;
 };
 
@@ -116,24 +115,7 @@ const createChild = <K extends keyof HTMLElementTagNameMap>(
 	parent: HTMLElement,
 	tagName: K,
 	options?: CreateElOptions
-): HTMLElementTagNameMap[K] => {
-	const maybeObsidianParent = parent as MaybeObsidianElement;
-	if (typeof maybeObsidianParent.createEl === "function") {
-		return maybeObsidianParent.createEl(tagName, options);
-	}
-	const element = parent.ownerDocument.createElement(tagName);
-	if (options?.text) {
-		element.textContent = options.text;
-	}
-	if (options?.cls) {
-		const classes = Array.isArray(options.cls) ? options.cls : [options.cls];
-		for (const className of classes) {
-			element.classList.add(className);
-		}
-	}
-	parent.appendChild(element);
-	return element;
-};
+): HTMLElementTagNameMap[K] => parent.createEl(tagName, options);
 
 function modeLabel(mode: SyncMode): string {
 	switch (mode) {

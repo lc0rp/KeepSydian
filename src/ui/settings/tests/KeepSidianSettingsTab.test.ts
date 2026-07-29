@@ -246,10 +246,10 @@ describe("KeepSidianSettingsTab", () => {
 			"Retrieve sync token",
 			"Email",
 			"Sync token",
-			"Option 1: Guided token retrieval (desktop only)",
-			"Option 2: Manual retrieval instructions",
+			"Option 1: guided token retrieval (desktop only)",
+			"Option 2: manual retrieval instructions",
 			"Enable debug logging",
-			"Note settings",
+			"Notes",
 		]);
 	});
 

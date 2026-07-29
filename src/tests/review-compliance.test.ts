@@ -64,13 +64,32 @@ describe("Obsidian community review compliance", () => {
 		expect(importOptionsModal).not.toMatch(/premiumFeatures as NoteImportOptions/);
 	});
 
-	it("describes every directive suppression in the reviewed settings source", () => {
-		const directiveLines = readProjectFile("src/ui/settings/SubscriptionSettingsTab.ts")
-			.split("\n")
-			.filter((line) => line.includes("eslint-disable-next-line"));
+	it("does not disable community-enforced settings rules", () => {
+		const reviewedFiles = [
+			"src/ui/settings/KeepSidianSettingsTab.ts",
+			"src/ui/settings/KeepSidianSettingsTab/tokenSettings.ts",
+			"src/ui/settings/SubscriptionSettingsTab.ts",
+		];
 
-		expect(directiveLines.length).toBeGreaterThan(0);
-		expect(directiveLines.filter((line) => !line.includes(" -- "))).toEqual([]);
+		for (const path of reviewedFiles) {
+			const source = readProjectFile(path);
+			expect(source).not.toMatch(
+				/eslint-disable[^\n]*obsidianmd\/(?:settings-tab\/no-problematic-settings-headings|ui\/sentence-case)/
+			);
+		}
+	});
+
+	it("uses Obsidian DOM creation helpers in reviewed production source", () => {
+		const reviewedFiles = [
+			"src/app/main.ts",
+			"src/ui/modals/SyncProgressModal.ts",
+			"src/ui/settings/KeepSidianSettingsTab/tokenSettings.ts",
+			"src/ui/settings/SubscriptionSettingsTab.ts",
+		];
+
+		for (const path of reviewedFiles) {
+			expect(readProjectFile(path)).not.toMatch(/\.createElement\s*\(/);
+		}
 	});
 
 	it("keeps the release workflow descriptive and provenance-attested", () => {

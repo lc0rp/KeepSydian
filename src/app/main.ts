@@ -220,29 +220,25 @@ export default class KeepSidianPlugin extends Plugin {
 		}
 
 		const fragment = doc.createDocumentFragment();
-		const heading = doc.createElement("div");
-		heading.classList.add("keepsidian-notice-heading");
-		heading.textContent = "KeepSidian uploads & two-way sync are locked until you:";
-		fragment.appendChild(heading);
+		fragment.createDiv({
+			cls: "keepsidian-notice-heading",
+			text: "KeepSidian uploads & two-way sync are locked until you:",
+		});
 
-		const list = doc.createElement("ul");
-		list.classList.add("keepsidian-notice-list");
+		const list = fragment.createEl("ul", { cls: "keepsidian-notice-list" });
 		for (const reason of result.reasons) {
-			const listItem = doc.createElement("li");
-			listItem.textContent = reason;
-			list.appendChild(listItem);
+			list.createEl("li", { text: reason });
 		}
-		fragment.appendChild(list);
 
-		const actions = doc.createElement("div");
-		actions.classList.add("keepsidian-notice-actions");
-		const settingsButton = doc.createElement("button");
-		settingsButton.classList.add("keepsidian-notice-button");
-		settingsButton.textContent = "Open beta settings";
-		settingsButton.setAttribute("aria-label", "Open beta settings");
-		settingsButton.setAttribute("type", "button");
-		actions.appendChild(settingsButton);
-		fragment.appendChild(actions);
+		const actions = fragment.createDiv({ cls: "keepsidian-notice-actions" });
+		const settingsButton = actions.createEl("button", {
+			cls: "keepsidian-notice-button",
+			text: "Open beta settings",
+			attr: {
+				"aria-label": "Open beta settings",
+				type: "button",
+			},
+		});
 
 		let notice: Notice;
 		settingsButton.addEventListener("click", () => {
