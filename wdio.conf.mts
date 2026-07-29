@@ -9,6 +9,7 @@ export const config: WebdriverIO.Config = {
 	runner: "local",
 	framework: "mocha",
 	specs: ["./test/specs/**/*.e2e.ts"],
+	exclude: ["./test/specs/**/*.live.e2e.ts"],
 	// How many instances of Obsidian should be launched in parallel
 	maxInstances: 4,
 

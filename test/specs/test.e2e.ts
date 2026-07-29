@@ -318,7 +318,7 @@ describe("KeepSidian", function () {
 		await openKeepSidianSettingsTab();
 	});
 
-	it("shows token helper retrieval button on desktop", async function () {
+	it("shows token helper wizard controls on desktop", async function () {
 		if (isAndroid()) {
 			this.skip();
 			return;
@@ -332,8 +332,10 @@ describe("KeepSidian", function () {
 		await emailInput.waitForExist({ timeout: 20000 });
 		await emailInput.setValue("test@example.com");
 
-		const helperButton = browser.$('//button[normalize-space(.)="Retrieve token with helper"]');
+		const helperButton = browser.$('//button[normalize-space(.)="Launch wizard"]');
 		await helperButton.waitForExist({ timeout: 20000 });
+		const helperAvailability = browser.$(".keepsidian-token-helper-availability");
+		await helperAvailability.waitForExist({ timeout: 20000 });
 	});
 
 	it("exchanges oauth2_4 token on change (desktop)", async function () {
