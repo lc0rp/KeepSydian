@@ -373,11 +373,11 @@ describe("KeepSidian", function () {
 
 		await openKeepSidianSettingsTab();
 
-		const helperButton = browser.$('//button[normalize-space(.)="Retrieve token with helper"]');
+		const helperButton = browser.$('//button[normalize-space(.)="Launch wizard"]');
 		expect(await helperButton.isExisting()).toBe(false);
 
 		const mobileDescription = browser.$(
-			'//*[contains(@class,"setting-item-name") and normalize-space(.)="Retrieve your sync token"]/ancestor::*[contains(@class,"setting-item")]//*[contains(@class,"setting-item-description")]'
+			'//*[contains(@class,"setting-item-name") and normalize-space(.)="Token retrieval instructions"]/ancestor::*[contains(@class,"setting-item")]//*[contains(@class,"setting-item-description")]'
 		);
 		await mobileDescription.waitForExist({ timeout: 20000 });
 		expect(await mobileDescription.getText()).toContain("Mobile:");
