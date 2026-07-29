@@ -12,12 +12,6 @@ type StatusBarItemElement = HTMLElement & {
 	) => HTMLElementTagNameMap[K];
 };
 
-type NoticeWithControls = Notice & {
-	setMessage?: (message: string) => void;
-	hide?: () => void;
-	messageEl?: HTMLElement;
-};
-
 const SYNC_NOTICE_PREFIX = "Syncing Google Keep Notes...";
 
 function getSyncPhaseLabel(plugin: KeepSidianPlugin): string {
@@ -30,7 +24,7 @@ function hasSetText(element: HTMLElement | null): element is StatusBarItemElemen
 	return element !== null && typeof (element as StatusBarItemElement).setText === "function";
 }
 
-function getNoticeControls(notice: Notice | null): NoticeWithControls | null {
+function getNoticeControls(notice: Notice | null): Notice | null {
 	return notice;
 }
 
@@ -48,21 +42,9 @@ function updateProgressNotice(plugin: KeepSidianPlugin) {
 	if (!plugin.progressNotice) {
 		return;
 	}
-	const noticeControls = getNoticeControls(plugin.progressNotice);
-	const setMessage = noticeControls?.setMessage;
-	if (setMessage) {
-		setMessage.call(
-			noticeControls,
-			formatSyncNoticeMessage(plugin.processedNotes, plugin.totalNotes)
-		);
-		return;
-	}
-	if (noticeControls?.messageEl) {
-		noticeControls.messageEl.textContent = formatSyncNoticeMessage(
-			plugin.processedNotes,
-			plugin.totalNotes
-		);
-	}
+	getNoticeControls(plugin.progressNotice)?.setMessage(
+		formatSyncNoticeMessage(plugin.processedNotes, plugin.totalNotes)
+	);
 }
 
 function setStatusBarText(plugin: KeepSidianPlugin, text: string) {
@@ -121,11 +103,11 @@ function getSummary(plugin: KeepSidianPlugin): LastSyncSummary | null {
 
 function clearScheduledSyncUiHides(plugin: KeepSidianPlugin) {
 	if (plugin.progressNoticeHideTimeout) {
-		clearTimeout(plugin.progressNoticeHideTimeout);
+		window.clearTimeout(plugin.progressNoticeHideTimeout);
 		plugin.progressNoticeHideTimeout = null;
 	}
 	if (plugin.progressBarHideTimeout) {
-		clearTimeout(plugin.progressBarHideTimeout);
+		window.clearTimeout(plugin.progressBarHideTimeout);
 		plugin.progressBarHideTimeout = null;
 	}
 }
@@ -157,7 +139,7 @@ export function startSyncUI(plugin: KeepSidianPlugin) {
 	clearScheduledSyncUiHides(plugin);
 
 	if (plugin.progressNotice) {
-		getNoticeControls(plugin.progressNotice)?.hide?.();
+		getNoticeControls(plugin.progressNotice)?.hide();
 		plugin.progressNotice = null;
 	}
 
@@ -216,24 +198,19 @@ export function finishSyncUI(plugin: KeepSidianPlugin, status: SyncRunStatus | b
 	clearScheduledSyncUiHides(plugin);
 	if (plugin.progressNotice) {
 		const noticeControls = getNoticeControls(plugin.progressNotice);
-		const setMessage = noticeControls?.setMessage;
-		if (setMessage) {
-			setMessage.call(
-				noticeControls,
+		if (noticeControls) {
+			noticeControls.setMessage(
 				success
 					? "Synced Google Keep Notes."
 					: normalizedStatus === "canceled"
 						? "Canceled Google Keep sync."
 						: "Failed to sync Google Keep Notes."
 			);
-		}
-		const hideNotice = noticeControls?.hide;
-		if (hideNotice) {
 			const delay = success ? 4000 : normalizedStatus === "canceled" ? 6000 : 10000;
 			const activeNotice = plugin.progressNotice;
-			plugin.progressNoticeHideTimeout = setTimeout(() => {
+			plugin.progressNoticeHideTimeout = window.setTimeout(() => {
 				if (plugin.progressNotice === activeNotice) {
-					hideNotice.call(noticeControls);
+					noticeControls.hide();
 					plugin.progressNotice = null;
 				}
 				plugin.progressNoticeHideTimeout = null;
@@ -256,7 +233,7 @@ export function finishSyncUI(plugin: KeepSidianPlugin, status: SyncRunStatus | b
 	if (plugin.progressContainerEl) {
 		plugin.progressContainerEl.toggleClass("complete", success);
 		plugin.progressContainerEl.toggleClass("failed", !success);
-		plugin.progressBarHideTimeout = setTimeout(() => {
+		plugin.progressBarHideTimeout = window.setTimeout(() => {
 			if (plugin.progressContainerEl) {
 				plugin.progressContainerEl.classList.add(HIDDEN_CLASS);
 			}

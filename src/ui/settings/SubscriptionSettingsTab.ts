@@ -11,7 +11,7 @@ export class SubscriptionSettingsTab {
 
 	constructor(containerEl: HTMLElement, plugin: KeepSidianPlugin) {
 		this.containerEl = containerEl;
-		this.sectionEl = document.createElement("div");
+		this.sectionEl = containerEl.ownerDocument.createElement("div");
 		this.sectionEl.classList.add("keepsidian-subscription-settings");
 		this.containerEl.appendChild(this.sectionEl);
 		this.plugin = plugin;
@@ -318,7 +318,7 @@ export class SubscriptionSettingsTab {
 
 		const subscribeUrl = `${KEEPSIDIAN_SERVER_URL}/subscribe`;
 		const subscribeLink = subscribeSetting.controlEl.createEl("a", {
-			// eslint-disable-next-line obsidianmd/ui/sentence-case
+			// eslint-disable-next-line obsidianmd/ui/sentence-case -- Keep the public project name intact.
 			text: "🌎 Support this project",
 			attr: {
 				href: subscribeUrl,

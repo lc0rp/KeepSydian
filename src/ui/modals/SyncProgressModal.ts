@@ -121,7 +121,7 @@ const createChild = <K extends keyof HTMLElementTagNameMap>(
 	if (typeof maybeObsidianParent.createEl === "function") {
 		return maybeObsidianParent.createEl(tagName, options);
 	}
-	const element = document.createElement(tagName);
+	const element = parent.ownerDocument.createElement(tagName);
 	if (options?.text) {
 		element.textContent = options.text;
 	}
@@ -538,7 +538,7 @@ export class SyncProgressModal extends Modal {
 			return;
 		}
 		this.chromeCloseButtonEl.removeEventListener("click", this.handleChromeCloseClick, true);
-		if (this.chromeCloseButtonEl instanceof HTMLButtonElement) {
+		if (this.chromeCloseButtonEl.instanceOf(HTMLButtonElement)) {
 			this.chromeCloseButtonEl.disabled = false;
 		}
 		this.chromeCloseButtonEl.classList.remove("is-disabled");
@@ -550,7 +550,7 @@ export class SyncProgressModal extends Modal {
 			return;
 		}
 		const disableClose = this.isCanceling;
-		if (this.chromeCloseButtonEl instanceof HTMLButtonElement) {
+		if (this.chromeCloseButtonEl.instanceOf(HTMLButtonElement)) {
 			this.chromeCloseButtonEl.disabled = disableClose;
 		}
 		this.chromeCloseButtonEl.classList.toggle("is-disabled", disableClose);
@@ -1628,7 +1628,7 @@ export class SyncProgressModal extends Modal {
 		this.renderEntryBody(body, entry, entry.label);
 	}
 
-	private renderExecutionRow(row: HTMLElement, entry: SyncPlanEntry) {
+	private renderExecutionRow(row: HTMLDivElement, entry: SyncPlanEntry) {
 		if (!this.executionSnapshot) {
 			return;
 		}
@@ -1644,9 +1644,7 @@ export class SyncProgressModal extends Modal {
 		const body = createChild(row, "div");
 		body.classList.add("keepsidian-sync-plan-row-body");
 		const badgeEl = this.renderEntryBody(body, entry, getRuntimeStatusLabel(entry, state));
-		if (row instanceof HTMLDivElement && statusSymbolEl instanceof HTMLSpanElement && badgeEl instanceof HTMLSpanElement) {
-			this.executionRowRefs.set(entry.id, { row, statusSymbolEl, badgeEl });
-		}
+		this.executionRowRefs.set(entry.id, { row, statusSymbolEl, badgeEl });
 	}
 
 	private updateExecutionRowInPlace(entryId: string) {

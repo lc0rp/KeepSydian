@@ -119,7 +119,7 @@ If your plugin does not need CSS, delete this file.
 	gap: 10px;
 }
 
-.keepsidian-color-picker-swatch {
+.keepsidian-color-picker-grid .keepsidian-color-picker-swatch {
 	position: relative;
 	display: inline-flex;
 	align-items: center;
@@ -129,7 +129,7 @@ If your plugin does not need CSS, delete this file.
 	padding: 0;
 	border: 0;
 	border-radius: 999px;
-	background: transparent !important;
+	background: transparent;
 	box-shadow: none;
 	appearance: none;
 	-webkit-appearance: none;
@@ -230,8 +230,8 @@ If your plugin does not need CSS, delete this file.
 	gap: 6px;
 }
 
-.keepsidian-hidden {
-	display: none !important;
+.keepsidian-hidden.keepsidian-hidden {
+	display: none;
 }
 
 .keepsidian-status .keepsidian-status-text {

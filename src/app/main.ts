@@ -59,15 +59,15 @@ export default class KeepSidianPlugin extends Plugin {
 	progressBar: ProgressBarComponent | null = null;
 	progressModal: SyncProgressModal | null = null;
 	progressNotice: Notice | null = null;
-	progressNoticeHideTimeout: ReturnType<typeof setTimeout> | null = null;
-	progressBarHideTimeout: ReturnType<typeof setTimeout> | null = null;
+	progressNoticeHideTimeout: number | null = null;
+	progressBarHideTimeout: number | null = null;
 	processedNotes = 0;
 	totalNotes: number | null = null;
 	lastSyncSummary: LastSyncSummary | null = null;
 	lastSyncLogPath: string | null = null;
 	currentSyncMode: SyncMode | null = null;
 	currentSyncPhaseLabel: string | null = null;
-	private autoSyncInterval?: ReturnType<typeof setInterval>;
+	private autoSyncInterval?: number;
 	private isSyncing = false;
 	private activeSyncRequest: ActiveSyncRequest | null = null;
 	private subscriptionActive: boolean | null = null;
@@ -509,7 +509,7 @@ export default class KeepSidianPlugin extends Plugin {
 			}
 			await this.runAutoSyncTick();
 		};
-		const intervalId = setInterval(() => {
+		const intervalId = window.setInterval(() => {
 			void runner();
 		}, intervalMs);
 		this.autoSyncInterval = intervalId;
@@ -520,7 +520,7 @@ export default class KeepSidianPlugin extends Plugin {
 
 	stopAutoSync() {
 		if (this.autoSyncInterval) {
-			clearInterval(this.autoSyncInterval);
+			window.clearInterval(this.autoSyncInterval);
 			this.autoSyncInterval = undefined;
 		}
 	}

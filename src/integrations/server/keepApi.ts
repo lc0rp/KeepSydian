@@ -180,7 +180,7 @@ export function parseResponse(response: RequestUrlResponse): GoogleKeepImportRes
 	} else if (typeof response.text === "string" && response.text.length > 0) {
 		raw = JSON.parse(response.text);
 	} else {
-		raw = response as unknown;
+		raw = response;
 	}
 
 	// Try strict validation first; fall back to raw for legacy tests/inputs

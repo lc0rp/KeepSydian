@@ -83,15 +83,16 @@ export function addSyncTokenSetting(containerEl: HTMLElement, options: TokenSett
 	});
 
 	if (Platform.isDesktopApp) {
-		const helperDescription = document.createDocumentFragment();
-		const helperStatus = document.createElement("span");
+		const ownerDocument = containerEl.ownerDocument;
+		const helperDescription = ownerDocument.createDocumentFragment();
+		const helperStatus = ownerDocument.createElement("span");
 		helperStatus.className = options.helperInstalled
 			? "keepsidian-token-helper-availability is-installed"
 			: "keepsidian-token-helper-availability is-missing";
 		helperStatus.textContent = options.helperInstalled ? "Wizard downloaded." : "Wizard download needed.";
 		helperDescription.appendChild(helperStatus);
 		helperDescription.appendChild(
-			document.createTextNode(
+			ownerDocument.createTextNode(
 				" This option uses a Wizard to open a web browser, guide sign-in, and retrieve the token. It requires a small open-source download."
 			)
 		);

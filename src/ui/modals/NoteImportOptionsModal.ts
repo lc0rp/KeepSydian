@@ -40,7 +40,7 @@ export class NoteImportOptionsModal extends Modal {
 					.setButtonText("Import")
 					.setCta()
 					.onClick(() => {
-						this.onSubmit(this.plugin.settings.premiumFeatures as NoteImportOptions);
+						this.onSubmit(this.plugin.settings.premiumFeatures);
 						this.close();
 					})
 			)

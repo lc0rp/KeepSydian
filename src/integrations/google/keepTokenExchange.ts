@@ -72,7 +72,7 @@ export async function exchangeOauthToken(
 			throw new Error("OAuth token must start with oauth2_4");
 		}
 		const testExchangeHook = (
-			globalThis as unknown as {
+			window as Window & {
 				__keepsidianTestExchange?: TestExchangeHook;
 			}
 		).__keepsidianTestExchange;
@@ -135,14 +135,18 @@ export async function exchangeOauthToken(
 			logSessionEvent("error", "Failed to parse server response during token exchange", {
 				errorMessage: e instanceof Error ? e.message : String(e),
 			});
-			throw new Error("Failed to parse server response: " + e);
+			throw new Error(
+				`Failed to parse server response: ${e instanceof Error ? e.message : String(e)}`
+			);
 		}
 	} catch (error) {
 		logErrorIfNotTest("Error exchanging OAuth token:", error);
 		logSessionEvent("error", "Error exchanging OAuth token", {
 			errorMessage: error instanceof Error ? error.message : String(error),
 		});
-		new Notice(`Failed to exchange OAuth token: ${(error as Error).message}`);
+		new Notice(
+			`Failed to exchange OAuth token: ${error instanceof Error ? error.message : String(error)}`
+		);
 		throw error;
 	}
 }
