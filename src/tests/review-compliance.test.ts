@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { satisfies } from "semver";
 
 const rootPath = resolve(__dirname, "../..");
 
@@ -58,5 +59,27 @@ describe("Obsidian community review compliance", () => {
 
 	it("does not rely on important CSS overrides", () => {
 		expect(readProjectFile("styles.css")).not.toContain("!important");
+	});
+
+	it("locks every dependency named by the review to a remediated version", () => {
+		const lock = JSON.parse(readProjectFile("package-lock.json")) as {
+			packages: Record<string, { version?: string }>;
+		};
+		const safeRanges: Record<string, string> = {
+			"@babel/core": ">7.29.0",
+			"brace-expansion": ">=1.1.13 <2 || >=2.0.3 <3 || >=5.0.5",
+			"js-yaml": ">=3.15.0 <4 || >=4.3.0",
+			picomatch: ">=2.3.2 <3 || >=4.0.4",
+		};
+
+		for (const [dependency, safeRange] of Object.entries(safeRanges)) {
+			const versions = Object.entries(lock.packages)
+				.filter(([path]) => path === `node_modules/${dependency}` || path.endsWith(`/node_modules/${dependency}`))
+				.map(([, metadata]) => metadata.version)
+				.filter((version): version is string => version !== undefined);
+
+			expect(versions.length).toBeGreaterThan(0);
+			expect(versions.filter((version) => !satisfies(version, safeRange))).toEqual([]);
+		}
 	});
 });
