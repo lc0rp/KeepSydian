@@ -588,9 +588,8 @@ describe("KeepSidian", function () {
 		await cancelButton.waitForExist({ timeout: 20000 });
 		await cancelButton.click();
 
-		const cancelingButton = browser.$(exactButtonByText("Canceling ..."));
-		await cancelingButton.waitForExist({ timeout: 20000 });
-
+		// The disabled canceling state is covered by modal unit tests and may complete
+		// before WebDriver's next poll when a seeded run observes cancellation quickly.
 		const canceledSummary = browser.$('//*[contains(normalize-space(.),"was canceled after")]');
 		await canceledSummary.waitForExist({ timeout: 20000 });
 		expect(await browser.$('//*[normalize-space(.)="Sync center"]').isExisting()).toBe(true);
