@@ -54,6 +54,7 @@ export interface KeepSidianPluginSettings {
 	twoWaySyncBackupAcknowledged: boolean;
 	twoWaySyncEnabled: boolean;
 	twoWaySyncAutoSyncEnabled: boolean;
+	feedbackPromptLastShownVersion?: string;
 }
 
 export const DEFAULT_SETTINGS: KeepSidianPluginSettings = {
@@ -91,6 +92,7 @@ export const DEFAULT_SETTINGS: KeepSidianPluginSettings = {
 	twoWaySyncBackupAcknowledged: false,
 	twoWaySyncEnabled: false,
 	twoWaySyncAutoSyncEnabled: false,
+	feedbackPromptLastShownVersion: undefined,
 };
 
 export function normalizeRootedVaultPath(value: string): string {
