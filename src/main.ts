@@ -1,7 +1,7 @@
-import KeepSidianPlugin from "./app/main";
+import BaseKeepSidianPlugin from "./app/main";
 import { FeedbackSurveyModal } from "./ui/modals/FeedbackSurveyModal";
 
-export default class KeepSydianPlugin extends KeepSidianPlugin {
+export default class KeepSydianPlugin extends BaseKeepSidianPlugin {
 	async onload(): Promise<void> {
 		await super.onload();
 		await this.maybeShowFeedbackSurvey();
