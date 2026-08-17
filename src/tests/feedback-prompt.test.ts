@@ -36,8 +36,9 @@ describe("post-install feedback prompt", () => {
 		await plugin.onload();
 
 		expect(openSpy).toHaveBeenCalledTimes(1);
-		expect(plugin.settings.feedbackPromptLastShownVersion).toBe(TEST_MANIFEST.version);
-		expect(plugin.saveData).toHaveBeenCalled();
+		expect(plugin.saveData).toHaveBeenCalledWith(
+			expect.objectContaining({ feedbackPromptLastShownVersion: TEST_MANIFEST.version })
+		);
 		openSpy.mockRestore();
 	});
 
@@ -48,7 +49,9 @@ describe("post-install feedback prompt", () => {
 		await plugin.onload();
 
 		expect(openSpy).toHaveBeenCalledTimes(1);
-		expect(plugin.settings.feedbackPromptLastShownVersion).toBe(TEST_MANIFEST.version);
+		expect(plugin.saveData).toHaveBeenCalledWith(
+			expect.objectContaining({ feedbackPromptLastShownVersion: TEST_MANIFEST.version })
+		);
 		openSpy.mockRestore();
 	});
 
