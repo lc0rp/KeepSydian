@@ -519,6 +519,7 @@ describe("Google Keep Import Functions", () => {
 			jest.spyOn(attachmentsModule, "processAttachments").mockResolvedValue({
 				downloaded: 1,
 				skippedIdentical: 0,
+				failures: [],
 				totalDurationMs: 0,
 				fetchDurationMs: 0,
 				compareDurationMs: 0,
@@ -531,6 +532,58 @@ describe("Google Keep Import Functions", () => {
 
 			expect(ensureFolderSpy).toHaveBeenCalledTimes(2);
 			expect(ensureFolderSpy.mock.calls.map(([, path]) => path)).toEqual(["Test Folder", "Test Folder/media"]);
+		});
+
+		it("continues the note batch and reports attachment warnings to the caller", async () => {
+			const notesWithWarning = [
+				{
+					...mockNotes[0],
+					title: "Attachment note",
+					blob_urls: ["/keep/media/note-1/blob-1"],
+				},
+				{
+					...mockNotes[0],
+					title: "Later note",
+				},
+			];
+			const reportProgress = jest.fn();
+			const onAttachmentWarning = jest.fn();
+			jest.spyOn(loggingModule, "logSync").mockResolvedValue(undefined);
+			jest.spyOn(attachmentsModule, "processAttachments").mockResolvedValue({
+				downloaded: 0,
+				skippedIdentical: 0,
+				failures: [
+					{
+						url: "/keep/media/note-1/blob-1",
+						message: "Google Keep attachment not found",
+						status: 404,
+					},
+				],
+				totalDurationMs: 0,
+				fetchDurationMs: 0,
+				compareDurationMs: 0,
+				writeDurationMs: 0,
+				fileNames: [],
+			});
+
+			await processAndSaveNotes(mockPlugin, notesWithWarning, {
+				reportProgress,
+				onAttachmentWarning,
+			});
+
+			expect(reportProgress).toHaveBeenCalledTimes(2);
+			expect(onAttachmentWarning).toHaveBeenCalledWith({
+				noteTitle: "Attachment note",
+				notePath: "Test Folder/Attachment note.md",
+				url: "/keep/media/note-1/blob-1",
+				message: "Google Keep attachment not found",
+				status: 404,
+			});
+			expect(loggingModule.logSync).toHaveBeenCalledWith(
+				mockPlugin,
+				expect.stringContaining("attachment warning (404): Google Keep attachment not found"),
+				expect.anything()
+			);
 		});
 	});
 
@@ -746,6 +799,7 @@ describe("Google Keep Import Functions", () => {
 			const processAttachmentsSpy = jest.spyOn(attachmentsModule, "processAttachments").mockResolvedValue({
 				downloaded: 2,
 				skippedIdentical: 0,
+				failures: [],
 				totalDurationMs: 24,
 				fetchDurationMs: 12,
 				compareDurationMs: 6,
@@ -795,6 +849,7 @@ describe("Google Keep Import Functions", () => {
 			jest.spyOn(attachmentsModule, "processAttachments").mockResolvedValue({
 				downloaded: 2,
 				skippedIdentical: 0,
+				failures: [],
 				totalDurationMs: 0,
 				fetchDurationMs: 0,
 				compareDurationMs: 0,
@@ -831,6 +886,7 @@ describe("Google Keep Import Functions", () => {
 			const processAttachmentsSpy = jest.spyOn(attachmentsModule, "processAttachments").mockResolvedValue({
 				downloaded: 0,
 				skippedIdentical: 1,
+				failures: [],
 				totalDurationMs: 18,
 				fetchDurationMs: 8,
 				compareDurationMs: 6,

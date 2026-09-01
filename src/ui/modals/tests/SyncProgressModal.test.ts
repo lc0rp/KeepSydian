@@ -69,11 +69,9 @@ describe("SyncProgressModal", () => {
 
 	function findButton(modal: SyncProgressModal, label: string): HTMLButtonElement | null {
 		const buttons = Array.from(modal.contentEl.querySelectorAll("button"));
-		return (
-			buttons.find((candidate) => (candidate.textContent?.replace(/\s+/g, " ").trim() ?? "") === label) ??
+		return (buttons.find((candidate) => (candidate.textContent?.replace(/\s+/g, " ").trim() ?? "") === label) ??
 			buttons.find((candidate) => (candidate.textContent?.replace(/\s+/g, " ").trim() ?? "").includes(label)) ??
-			null
-		) as HTMLButtonElement | null;
+			null) as HTMLButtonElement | null;
 	}
 
 	function getRowTitles(modal: SyncProgressModal): string[] {
@@ -256,14 +254,10 @@ describe("SyncProgressModal", () => {
 		getButton(modal, "Start sync").click();
 		await flushUI();
 
-		expect(modalOptions.buildSyncPlan).toHaveBeenLastCalledWith(
-			"import",
-			expect.any(Object),
-			{
-				kind: "custom-since",
-				since: new Date(2025, 3, 12, 9, 17, 0, 0).toISOString(),
-			}
-		);
+		expect(modalOptions.buildSyncPlan).toHaveBeenLastCalledWith("import", expect.any(Object), {
+			kind: "custom-since",
+			since: new Date(2025, 3, 12, 9, 17, 0, 0).toISOString(),
+		});
 	});
 
 	test("reopening the modal resets download scope to the default", async () => {
@@ -276,11 +270,7 @@ describe("SyncProgressModal", () => {
 		getButton(firstModal, "Start sync").click();
 		await flushUI();
 
-		expect(modalOptions.buildSyncPlan).toHaveBeenLastCalledWith(
-			"import",
-			expect.any(Object),
-			{ kind: "all" }
-		);
+		expect(modalOptions.buildSyncPlan).toHaveBeenLastCalledWith("import", expect.any(Object), { kind: "all" });
 
 		const secondModal = new SyncProgressModal(app, modalOptions);
 		secondModal.onOpen();
@@ -289,11 +279,7 @@ describe("SyncProgressModal", () => {
 		getButton(secondModal, "Start sync").click();
 		await flushUI();
 
-		expect(modalOptions.buildSyncPlan).toHaveBeenLastCalledWith(
-			"import",
-			expect.any(Object),
-			{ kind: "last-sync" }
-		);
+		expect(modalOptions.buildSyncPlan).toHaveBeenLastCalledWith("import", expect.any(Object), { kind: "last-sync" });
 	});
 
 	test("customize sync two-way mode surfaces gate guidance and deep-links to settings", async () => {
@@ -724,12 +710,7 @@ describe("SyncProgressModal", () => {
 		await flushUI();
 
 		expect(modal.contentEl.textContent).toContain("Review download plan");
-		expect(modalOptions.buildSyncPlan).toHaveBeenNthCalledWith(
-			1,
-			"two-way",
-			expect.any(Object),
-			{ kind: "all" }
-		);
+		expect(modalOptions.buildSyncPlan).toHaveBeenNthCalledWith(1, "two-way", expect.any(Object), { kind: "all" });
 
 		getButton(modal, "Execute").click();
 		await flushUI();
@@ -772,5 +753,20 @@ describe("SyncProgressModal", () => {
 
 		expect(modal.contentEl.textContent).toContain("Last two-way sync completed");
 		expect(modal.contentEl.textContent).toContain("Synced 4/4 notes");
+	});
+
+	test("shows attachment warnings as a completed download result", async () => {
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Start sync").click();
+		await flushUI();
+		getButton(modal, "Execute").click();
+		await flushUI();
+
+		modal.setComplete("warning", 3, 2);
+		await flushUI();
+
+		expect(modal.contentEl.textContent).toContain("Download complete with warnings");
+		expect(modal.contentEl.textContent).toContain("Sync complete with 2 attachment warnings. Processed 3 notes.");
 	});
 });

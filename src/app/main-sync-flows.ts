@@ -8,12 +8,7 @@ import { HIDDEN_CLASS } from "@app/ui-constants";
 import { logSync, prepareSyncLog } from "@app/logging";
 import { appendPerfTrace } from "@app/perf-trace";
 import { isSyncCancellationError } from "@app/sync-cancel";
-import {
-	startSyncUI,
-	finishSyncUI,
-	setTotalNotes as uiSetTotalNotes,
-	reportSyncProgress,
-} from "@app/sync-ui";
+import { startSyncUI, finishSyncUI, setTotalNotes as uiSetTotalNotes, reportSyncProgress } from "@app/sync-ui";
 import type { DownloadScope, SyncMode, SyncPlan, SyncPlanStage } from "@types";
 import {
 	buildImportSyncPlan,
@@ -36,6 +31,7 @@ export interface PreparedSyncPlan {
 	importEntryIds?: string[];
 	completionDate?: string;
 	pushNotes?: NoteForPush[];
+	attachmentWarnings?: number;
 }
 
 export interface RunPreparedSyncPlanResult {
@@ -80,6 +76,16 @@ function resetProgressIndicatorsForNextStage(plugin: KeepSidianPlugin) {
 	plugin.progressModal?.setProgress(0, undefined);
 }
 
+function getSuccessfulRunStatus(attachmentWarnings: number) {
+	return attachmentWarnings > 0 ? ("warning" as const) : ("success" as const);
+}
+
+function formatAttachmentWarningSuffix(attachmentWarnings: number): string {
+	return attachmentWarnings > 0
+		? ` with ${attachmentWarnings} attachment warning${attachmentWarnings === 1 ? "" : "s"}`
+		: "";
+}
+
 export async function ensureStoragePathsOrThrow(plugin: KeepSidianPlugin): Promise<void> {
 	const saveLocation = resolveLogBaseFolder(plugin.app, plugin.settings);
 	try {
@@ -92,8 +98,7 @@ export async function ensureStoragePathsOrThrow(plugin: KeepSidianPlugin): Promi
 
 async function getManualSupportState(plugin: KeepSidianPlugin): Promise<boolean> {
 	const isSupporterActive = await plugin.subscriptionService.isSubscriptionActive();
-	(plugin as unknown as { subscriptionActive: boolean | null }).subscriptionActive =
-		isSupporterActive;
+	(plugin as unknown as { subscriptionActive: boolean | null }).subscriptionActive = isSupporterActive;
 	return isSupporterActive;
 }
 
@@ -118,11 +123,7 @@ export async function buildManualSyncPlan(
 	}
 
 	if (mode === "push") {
-		const builtPushPlan = await buildPushSyncPlan(
-			plugin,
-			allowPerNoteSelection,
-			selectionLockedReason
-		);
+		const builtPushPlan = await buildPushSyncPlan(plugin, allowPerNoteSelection, selectionLockedReason);
 		return {
 			plan: builtPushPlan.plan,
 			mode,
@@ -150,13 +151,9 @@ export async function buildManualSyncPlan(
 	};
 }
 
-function getSelectedImportNotes(
-	preparedPlan: PreparedSyncPlan
-): PreNormalizedNote[] {
+function getSelectedImportNotes(preparedPlan: PreparedSyncPlan): PreNormalizedNote[] {
 	const selectedEntryIds = new Set(
-		preparedPlan.plan.entries
-			.filter((entry) => entry.selectable && entry.selected)
-			.map((entry) => entry.id)
+		preparedPlan.plan.entries.filter((entry) => entry.selectable && entry.selected).map((entry) => entry.id)
 	);
 	const importNotes = preparedPlan.importNotes ?? [];
 	const importEntryIds = preparedPlan.importEntryIds ?? [];
@@ -168,9 +165,7 @@ function getSelectedImportNotes(
 
 function getSelectedPushNotes(preparedPlan: PreparedSyncPlan): NoteForPush[] {
 	const selectedEntryIds = new Set(
-		preparedPlan.plan.entries
-			.filter((entry) => entry.selectable && entry.selected)
-			.map((entry) => entry.id)
+		preparedPlan.plan.entries.filter((entry) => entry.selectable && entry.selected).map((entry) => entry.id)
 	);
 	return (preparedPlan.pushNotes ?? []).filter((note, index) =>
 		selectedEntryIds.has(`upload:${index}:${normalizePathSafe(note.fullPath)}`)
@@ -207,11 +202,11 @@ export async function runPreparedSyncPlan(
 			batchOptions
 		);
 		plugin.currentSyncMode = preparedPlan.mode;
-		plugin.currentSyncPhaseLabel =
-			preparedPlan.mode === "two-way" ? "Download step" : "Syncing";
+		plugin.currentSyncPhaseLabel = preparedPlan.mode === "two-way" ? "Download step" : "Syncing";
 		startSyncUI(plugin);
 
 		try {
+			let attachmentWarnings = 0;
 			const selectedNotes = getSelectedImportNotes(preparedPlan);
 			const selectedEntryIds = preparedPlan.plan.entries
 				.filter((entry) => entry.selectable && entry.selected)
@@ -223,8 +218,10 @@ export async function runPreparedSyncPlan(
 			const syncCallbacks = {
 				setTotalNotes: (n: number) => uiSetTotalNotes(plugin, n),
 				reportProgress: () => reportSyncProgress(plugin),
-				onEntrySettled: (entryId: string, success: boolean) =>
-					runCallbacks?.onEntrySettled?.(entryId, success),
+				onEntrySettled: (entryId: string, success: boolean) => runCallbacks?.onEntrySettled?.(entryId, success),
+				onAttachmentWarning: () => {
+					attachmentWarnings += 1;
+				},
 			};
 			uiSetTotalNotes(plugin, selectedNotes.length);
 			const importStartedAt = Date.now();
@@ -240,41 +237,33 @@ export async function runPreparedSyncPlan(
 				processedNotes: plugin.processedNotes,
 			});
 			if (preparedPlan.mode === "two-way") {
-				await logSync(
-					plugin,
-					`Two-way sync - import completed. Processed ${plugin.processedNotes} note(s).`
-				);
+				await logSync(plugin, `Two-way sync - import completed. Processed ${plugin.processedNotes} note(s).`);
 				resetProgressIndicatorsForNextStage(plugin);
 				plugin.currentSyncPhaseLabel = "Upload step";
 				await logSync(plugin, `Two-way sync - preparing push review`);
 				const isSupporterActive = await getManualSupportState(plugin);
 				const allowPerNoteSelection = isSupporterActive;
-				const selectionLockedReason = allowPerNoteSelection
-					? undefined
-					: SUPPORTER_LOCK_REASON;
-				const builtPushPlan = await buildPushSyncPlan(
-					plugin,
-					allowPerNoteSelection,
-					selectionLockedReason
-				);
+				const selectionLockedReason = allowPerNoteSelection ? undefined : SUPPORTER_LOCK_REASON;
+				const builtPushPlan = await buildPushSyncPlan(plugin, allowPerNoteSelection, selectionLockedReason);
 				return {
 					nextPlan: {
 						plan: withPlanMode(builtPushPlan.plan, "two-way"),
 						mode: "two-way",
 						stage: "upload",
 						pushNotes: builtPushPlan.notesToPush,
+						attachmentWarnings,
 					},
 				};
 			}
 			const completionLogStartedAt = Date.now();
 			await logSync(
 				plugin,
-				`Manual sync ended - success. Processed ${plugin.processedNotes} note(s).`
+				`Manual sync ended - success${formatAttachmentWarningSuffix(attachmentWarnings)}. Processed ${plugin.processedNotes} note(s).`
 			);
 			await appendPerfTrace(plugin, "import-run-success-log-complete", {
 				durationMs: Date.now() - completionLogStartedAt,
 			});
-			finishSyncUI(plugin, "success");
+			finishSyncUI(plugin, getSuccessfulRunStatus(attachmentWarnings), attachmentWarnings);
 			await appendPerfTrace(plugin, "import-run-finish-ui-complete", {
 				processedNotes: plugin.processedNotes,
 				totalNotes: plugin.totalNotes,
@@ -321,6 +310,7 @@ export async function runPreparedSyncPlan(
 	plugin.currentSyncPhaseLabel = preparedPlan.mode === "two-way" ? "Upload step" : "Syncing";
 	startSyncUI(plugin);
 	try {
+		const attachmentWarnings = preparedPlan.attachmentWarnings ?? 0;
 		const selectedNotes = getSelectedPushNotes(preparedPlan);
 		uiSetTotalNotes(plugin, selectedNotes.length);
 		const pushed = await pushGoogleKeepNotes(
@@ -328,18 +318,17 @@ export async function runPreparedSyncPlan(
 			{
 				setTotalNotes: (n) => uiSetTotalNotes(plugin, n),
 				reportProgress: () => reportSyncProgress(plugin),
-				onEntrySettled: (entryId: string, success: boolean) =>
-					runCallbacks?.onEntrySettled?.(entryId, success),
+				onEntrySettled: (entryId: string, success: boolean) => runCallbacks?.onEntrySettled?.(entryId, success),
 			},
 			selectedNotes
 		);
 		await logSync(
 			plugin,
 			preparedPlan.mode === "two-way"
-				? `Two-way sync ended - success. Pushed ${pushed} note(s).`
+				? `Two-way sync ended - success${formatAttachmentWarningSuffix(attachmentWarnings)}. Pushed ${pushed} note(s).`
 				: `Push sync ended - success. Pushed ${pushed} note(s).`
 		);
-		finishSyncUI(plugin, "success");
+		finishSyncUI(plugin, getSuccessfulRunStatus(attachmentWarnings), attachmentWarnings);
 		if (preparedPlan.mode === "two-way") {
 			onTwoWaySuccess();
 		}
@@ -392,22 +381,24 @@ export async function runImportWithOptions(
 	plugin.currentSyncMode = "import";
 	startSyncUI(plugin);
 	try {
+		let attachmentWarnings = 0;
 		await importGoogleKeepNotesWithOptions(plugin, options, {
 			setTotalNotes: (n) => uiSetTotalNotes(plugin, n),
 			reportProgress: () => reportSyncProgress(plugin),
+			onAttachmentWarning: () => {
+				attachmentWarnings += 1;
+			},
 		});
 		await logSync(
 			plugin,
-			`Manual sync ended - success. Processed ${plugin.processedNotes} note(s).`
+			`Manual sync ended - success${formatAttachmentWarningSuffix(attachmentWarnings)}. Processed ${plugin.processedNotes} note(s).`
 		);
-		finishSyncUI(plugin, true);
+		finishSyncUI(plugin, getSuccessfulRunStatus(attachmentWarnings), attachmentWarnings);
 	} catch (error: unknown) {
 		finishSyncUI(plugin, false);
 		await logSync(
 			plugin,
-			`Manual sync ended - failed: ${getErrorMessage(error)}. Processed ${
-				plugin.processedNotes
-			} note(s).`
+			`Manual sync ended - failed: ${getErrorMessage(error)}. Processed ${plugin.processedNotes} note(s).`
 		);
 	}
 }
@@ -420,8 +411,7 @@ export async function runImportNotesFlow(
 ): Promise<void> {
 	try {
 		const isSubscriptionActive = await plugin.subscriptionService.isSubscriptionActive();
-		(plugin as unknown as { subscriptionActive: boolean | null }).subscriptionActive =
-			isSubscriptionActive;
+		(plugin as unknown as { subscriptionActive: boolean | null }).subscriptionActive = isSubscriptionActive;
 
 		try {
 			await ensureStoragePathsOrThrow(plugin);
@@ -441,51 +431,44 @@ export async function runImportNotesFlow(
 		plugin.currentSyncPhaseLabel = auto ? "Background sync" : "Syncing";
 		startSyncUI(plugin);
 		try {
+			let attachmentWarnings = 0;
 			const callbacks = {
 				setTotalNotes: (n: number) => uiSetTotalNotes(plugin, n),
 				reportProgress: () => reportSyncProgress(plugin),
+				onAttachmentWarning: () => {
+					attachmentWarnings += 1;
+				},
 			};
 			if (!auto && isSubscriptionActive) {
-				await importGoogleKeepNotesWithOptions(
-					plugin,
-					options ?? plugin.settings.premiumFeatures,
-					callbacks
-				);
+				await importGoogleKeepNotesWithOptions(plugin, options ?? plugin.settings.premiumFeatures, callbacks);
 			} else {
 				await importGoogleKeepNotes(plugin, callbacks);
 			}
 			await logSync(
 				plugin,
-				`${auto ? "Auto" : "Manual"} sync ended - success. Processed ${
+				`${auto ? "Auto" : "Manual"} sync ended - success${formatAttachmentWarningSuffix(attachmentWarnings)}. Processed ${
 					plugin.processedNotes
 				} note(s).`
 			);
-			finishSyncUI(plugin, true);
+			finishSyncUI(plugin, getSuccessfulRunStatus(attachmentWarnings), attachmentWarnings);
 		} catch (error: unknown) {
 			finishSyncUI(plugin, false);
 			const errorMessage = getErrorMessage(error);
 			await logSync(
 				plugin,
-				`${auto ? "Auto" : "Manual"} sync ended - failed: ${errorMessage}. Processed ${
-					plugin.processedNotes
-				} note(s).`
+				`${auto ? "Auto" : "Manual"} sync ended - failed: ${errorMessage}. Processed ${plugin.processedNotes} note(s).`
 			);
 		}
 	} catch (error: unknown) {
 		const errorMessage = getErrorMessage(error);
 		await logSync(
 			plugin,
-			`${auto ? "Auto" : "Manual"} sync ended - failed: ${errorMessage}. Processed ${
-				plugin.processedNotes
-			} note(s).`
+			`${auto ? "Auto" : "Manual"} sync ended - failed: ${errorMessage}. Processed ${plugin.processedNotes} note(s).`
 		);
 	}
 }
 
-export async function runPushNotesFlow(
-	plugin: KeepSidianPlugin,
-	getErrorMessage: ErrorMessageResolver
-): Promise<void> {
+export async function runPushNotesFlow(plugin: KeepSidianPlugin, getErrorMessage: ErrorMessageResolver): Promise<void> {
 	try {
 		try {
 			await ensureStoragePathsOrThrow(plugin);
@@ -514,17 +497,11 @@ export async function runPushNotesFlow(
 		} catch (error: unknown) {
 			finishSyncUI(plugin, false);
 			const errorMessage = getErrorMessage(error);
-			await logSync(
-				plugin,
-				`Push sync ended - failed: ${errorMessage}. Processed ${plugin.processedNotes} note(s).`
-			);
+			await logSync(plugin, `Push sync ended - failed: ${errorMessage}. Processed ${plugin.processedNotes} note(s).`);
 		}
 	} catch (error: unknown) {
 		const errorMessage = getErrorMessage(error);
-		await logSync(
-			plugin,
-			`Push sync ended - failed: ${errorMessage}. Processed ${plugin.processedNotes} note(s).`
-		);
+		await logSync(plugin, `Push sync ended - failed: ${errorMessage}. Processed ${plugin.processedNotes} note(s).`);
 	}
 }
 
@@ -554,27 +531,26 @@ export async function runTwoWaySyncFlow(
 		plugin.currentSyncMode = "two-way";
 		plugin.currentSyncPhaseLabel = "Download step";
 		startSyncUI(plugin);
+		let attachmentWarnings = 0;
 		const callbacks = {
 			setTotalNotes: (n: number) => uiSetTotalNotes(plugin, n),
 			reportProgress: () => reportSyncProgress(plugin),
+			onAttachmentWarning: () => {
+				attachmentWarnings += 1;
+			},
 		};
 
 		let importProcessed = 0;
 		try {
 			await importGoogleKeepNotes(plugin, callbacks);
 			importProcessed = plugin.processedNotes;
-			await logSync(
-				plugin,
-				`Two-way sync - import completed. Processed ${importProcessed} note(s).`
-			);
+			await logSync(plugin, `Two-way sync - import completed. Processed ${importProcessed} note(s).`);
 		} catch (error: unknown) {
 			finishSyncUI(plugin, false);
 			const errorMessage = getErrorMessage(error);
 			await logSync(
 				plugin,
-				`Two-way sync ended - import failed: ${errorMessage}. Processed ${
-					plugin.processedNotes
-				} note(s).`
+				`Two-way sync ended - import failed: ${errorMessage}. Processed ${plugin.processedNotes} note(s).`
 			);
 			return;
 		}
@@ -587,26 +563,21 @@ export async function runTwoWaySyncFlow(
 			const pushed = await pushGoogleKeepNotes(plugin, callbacks);
 			await logSync(
 				plugin,
-				`Two-way sync ended - success. Imported ${importProcessed} note(s), pushed ${pushed} note(s).`
+				`Two-way sync ended - success${formatAttachmentWarningSuffix(attachmentWarnings)}. Imported ${importProcessed} note(s), pushed ${pushed} note(s).`
 			);
-			finishSyncUI(plugin, true);
+			finishSyncUI(plugin, getSuccessfulRunStatus(attachmentWarnings), attachmentWarnings);
 			onTwoWaySuccess();
 		} catch (error: unknown) {
 			finishSyncUI(plugin, false);
 			const errorMessage = getErrorMessage(error);
 			await logSync(
 				plugin,
-				`Two-way sync ended - push failed: ${errorMessage}. Processed ${
-					plugin.processedNotes
-				} note(s).`
+				`Two-way sync ended - push failed: ${errorMessage}. Processed ${plugin.processedNotes} note(s).`
 			);
 		}
 	} catch (error: unknown) {
 		const errorMessage = getErrorMessage(error);
-		await logSync(
-			plugin,
-			`Two-way sync ended - failed: ${errorMessage}. Processed ${plugin.processedNotes} note(s).`
-		);
+		await logSync(plugin, `Two-way sync ended - failed: ${errorMessage}. Processed ${plugin.processedNotes} note(s).`);
 	}
 }
 
@@ -618,9 +589,7 @@ export async function openLatestSyncLogFlow(plugin: KeepSidianPlugin): Promise<v
 	}
 
 	let logPath = plugin.lastSyncLogPath;
-	const logsFolder = normalizePathSafe(
-		`${resolveLogBaseFolder(plugin.app, plugin.settings)}/_KeepSidianLogs`
-	);
+	const logsFolder = normalizePathSafe(`${resolveLogBaseFolder(plugin.app, plugin.settings)}/_KeepSidianLogs`);
 
 	if (!logPath) {
 		if (typeof adapter.list === "function") {
