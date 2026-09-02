@@ -312,6 +312,71 @@ describe("KeepSidian", function () {
 		expect(pluginLoaded).toBe(true);
 	});
 
+	it("shows the versioned feedback invitation without opening the survey", async function () {
+		if (isAndroid()) {
+			this.skip();
+			return;
+		}
+
+		const modal = browser.$(".keepsidian-feedback-modal");
+		await modal.waitForExist({ timeout: 20000 });
+		const pluginVersion = await browser.execute(() => {
+			type ObsidianWindow = Window & {
+				app?: {
+					plugins?: {
+						getPlugin?: (id: string) => { manifest?: { version?: string } } | undefined;
+					};
+				};
+			};
+
+			return (window as ObsidianWindow).app?.plugins?.getPlugin?.("keepsidian")?.manifest?.version;
+		});
+		expect(pluginVersion).toBeTruthy();
+		expect(await modal.getText()).toContain(`KeepSydian ${pluginVersion}`);
+		expect(await modal.getText()).toContain("What's new");
+		expect(await modal.getText()).toContain("Help shape what we build next");
+		expect(await modal.$$("li")).toBeElementsArrayOfSize(2);
+		expect(await modal.$$("iframe, script[src], img[src], link[href]")).toBeElementsArrayOfSize(0);
+
+		const feedbackLink = modal.$('a[data-keepsidian-link="feedback-survey"]');
+		expect(await feedbackLink.getAttribute("href")).toBe(
+			"https://forms.gle/pVs8GtohFWmqs5F4A"
+		);
+		expect(await feedbackLink.getAttribute("target")).toBe("_blank");
+
+		await browser.saveScreenshot("/tmp/keepsidian-feedback-survey.png");
+		await modal.$(exactButtonByText("Maybe later")).click();
+		await modal.waitForExist({ reverse: true, timeout: 20000 });
+
+		await browser.executeObsidian(async ({ app }) => {
+			const plugin = app.plugins.getPlugin("keepsidian") as
+				| {
+						feedbackPromptLastShownVersion?: string;
+						maybeShowFeedbackSurvey?: () => Promise<void>;
+				  }
+				| undefined;
+			await plugin?.maybeShowFeedbackSurvey?.();
+		});
+		expect(await modal.isExisting()).toBe(false);
+
+		await browser.executeObsidian(async ({ app }) => {
+			const plugin = app.plugins.getPlugin("keepsidian") as
+				| {
+						feedbackPromptLastShownVersion?: string;
+						maybeShowFeedbackSurvey?: () => Promise<void>;
+				  }
+				| undefined;
+			if (!plugin?.maybeShowFeedbackSurvey) {
+				throw new Error("Feedback prompt integration is not available");
+			}
+			plugin.feedbackPromptLastShownVersion = "previous-version";
+			await plugin.maybeShowFeedbackSurvey();
+		});
+		await modal.waitForExist({ timeout: 20000 });
+		await modal.$(exactButtonByText("Maybe later")).click();
+		await modal.waitForExist({ reverse: true, timeout: 20000 });
+	});
+
 	it("registers expected commands", async () => {
 		const commandIds = await browser.execute(() => {
 			type ObsidianWindow = Window & {

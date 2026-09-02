@@ -5,6 +5,7 @@ import { resolveLoadedSettings } from "../types/keepsidian-plugin-settings";
 import { SubscriptionService } from "@services/subscription";
 import type { NoteImportOptions } from "@ui/modals/NoteImportOptionsModal";
 import { SyncProgressModal } from "@ui/modals/SyncProgressModal";
+import { FeedbackSurveyModal } from "@ui/modals/FeedbackSurveyModal";
 import { initializeStatusBar } from "@app/sync-ui";
 import { logSync } from "@app/logging";
 import { SyncCancellationError } from "@app/sync-cancel";
@@ -50,6 +51,10 @@ interface ActiveSyncRequest {
 	cancelRequested: boolean;
 }
 
+interface FeedbackPromptData {
+	feedbackPromptLastShownVersion?: string;
+}
+
 export default class KeepSidianPlugin extends Plugin {
 	settings: KeepSidianPluginSettings;
 	subscriptionService: SubscriptionService;
@@ -72,6 +77,7 @@ export default class KeepSidianPlugin extends Plugin {
 	private activeSyncRequest: ActiveSyncRequest | null = null;
 	private subscriptionActive: boolean | null = null;
 	private lastAutoSyncGateReasons: string[] | null = null;
+	private feedbackPromptLastShownVersion?: string;
 
 	async onload() {
 		await this.loadSettings();
@@ -93,6 +99,19 @@ export default class KeepSidianPlugin extends Plugin {
 		if (this.settings.autoSyncEnabled) {
 			this.startAutoSync();
 		}
+
+		await this.maybeShowFeedbackSurvey();
+	}
+
+	private async maybeShowFeedbackSurvey(): Promise<void> {
+		const currentVersion = this.manifest.version?.trim();
+		if (!currentVersion || this.feedbackPromptLastShownVersion === currentVersion) {
+			return;
+		}
+
+		this.feedbackPromptLastShownVersion = currentVersion;
+		await this.saveSettings();
+		new FeedbackSurveyModal(this.app, currentVersion).open();
 	}
 
 	private initializeSettings() {
@@ -116,7 +135,8 @@ export default class KeepSidianPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		const saved = (await this.loadData()) as Partial<KeepSidianPluginSettings> | null;
+		const saved = (await this.loadData()) as (Partial<KeepSidianPluginSettings> & FeedbackPromptData) | null;
+		this.feedbackPromptLastShownVersion = saved?.feedbackPromptLastShownVersion;
 		this.settings = resolveLoadedSettings(saved);
 		const sensitiveSettingsChanged =
 			hydrateSyncTokenFromSecretStorage(this) || hydrateDriveSecretsFromSecretStorage(this);
@@ -124,7 +144,7 @@ export default class KeepSidianPlugin extends Plugin {
 		this.lastSyncSummary = this.settings.lastSyncSummary ?? null;
 		this.lastSyncLogPath = this.settings.lastSyncLogPath ?? null;
 		if (sensitiveSettingsChanged) {
-			await this.saveData(buildPersistedSettings(this));
+			await this.saveData(this.buildPersistedData());
 		}
 	}
 
@@ -328,11 +348,20 @@ export default class KeepSidianPlugin extends Plugin {
 		}
 	}
 
+	private buildPersistedData(): KeepSidianPluginSettings & FeedbackPromptData {
+		return {
+			...buildPersistedSettings(this),
+			...(this.feedbackPromptLastShownVersion
+				? { feedbackPromptLastShownVersion: this.feedbackPromptLastShownVersion }
+				: {}),
+		};
+	}
+
 	async saveSettings() {
 		this.settings.lastSyncSummary = this.lastSyncSummary;
 		this.settings.lastSyncLogPath = this.lastSyncLogPath ?? null;
 		persistSensitiveSettingsToSecretStorage(this);
-		await this.saveData(buildPersistedSettings(this));
+		await this.saveData(this.buildPersistedData());
 	}
 
 	isSyncInProgress(): boolean {

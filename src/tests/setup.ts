@@ -1,11 +1,27 @@
 import "@testing-library/jest-dom";
 
+class MockButtonComponent {
+	constructor(private readonly buttonEl: HTMLButtonElement) {}
+
+	setButtonText(text: string): this {
+		this.buttonEl.textContent = text;
+		return this;
+	}
+
+	onClick(handler: () => void): this {
+		this.buttonEl.addEventListener("click", handler);
+		return this;
+	}
+}
+
 // Mock the Setting class from Obsidian
 class MockSetting {
 	containerEl: HTMLElement;
+	controlEl: HTMLElement;
 
 	constructor(containerEl: HTMLElement) {
 		this.containerEl = containerEl;
+		this.controlEl = containerEl.createDiv();
 	}
 
 	setName(_name: string) {
@@ -20,8 +36,10 @@ class MockSetting {
 		return this;
 	}
 
-	addButton(cb: (button: Record<string, unknown>) => void) {
-		cb({});
+	addButton(cb: (button: MockButtonComponent) => void) {
+		const buttonEl = document.createElement("button");
+		this.controlEl.appendChild(buttonEl);
+		cb(new MockButtonComponent(buttonEl));
 		return this;
 	}
 

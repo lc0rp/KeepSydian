@@ -21,6 +21,13 @@ describe("FeedbackSurveyModal", () => {
 		expect(Array.from(modal.contentEl.querySelectorAll("li")).map((element) => element.textContent)).toEqual(
 			WHATS_NEW_ITEMS
 		);
+		expect(WHATS_NEW_ITEMS).toContain(
+			"A failed image or attachment download no longer stops the rest of your notes from importing."
+		);
+		expect(WHATS_NEW_ITEMS).toContain(
+			"KeepSydian preserves existing YAML comments and formatting when it refreshes imported-note metadata."
+		);
+		expect(modal.contentEl.textContent).toContain("survey opens on an external Google form in your browser");
 
 		const surveyLink = modal.contentEl.querySelector<HTMLAnchorElement>(
 			'a[data-keepsidian-link="feedback-survey"]'
@@ -28,6 +35,7 @@ describe("FeedbackSurveyModal", () => {
 		expect(surveyLink?.getAttribute("href")).toBe(FEEDBACK_SURVEY_URL);
 		expect(surveyLink?.getAttribute("target")).toBe("_blank");
 		expect(surveyLink?.getAttribute("rel")).toBe("noopener noreferrer");
+		expect(surveyLink?.hasAttribute("role")).toBe(false);
 		expect(surveyLink?.textContent).toBe("Give feedback");
 		expect(modal.contentEl.textContent).toContain("Maybe later");
 	});

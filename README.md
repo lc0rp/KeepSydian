@@ -120,6 +120,11 @@ after the request, and does not log or store your credentials or notes.
 
 This server lets you use KeepSydian without installing and maintaining a local Python environment.
 
+After installation or an upgrade, KeepSydian may show one local feedback invitation for that plugin version. The
+survey is not loaded and no survey event is sent unless you select **Give feedback**. That action opens the external
+[KeepSydian user feedback survey](https://forms.gle/pVs8GtohFWmqs5F4A) in Google Forms. Survey responses and any
+optional email address are handled by the form, not stored in your vault or returned to the plugin.
+
 ## Sync details
 
 ### Conflicts
@@ -178,7 +183,7 @@ plugin could remain in the official directory. Only the spelling changed.
 
 Found a bug or have an idea? [Open an issue](https://github.com/lc0rp/KeepSydian/issues).
 
-You can also vote on the [KeepSydian wishlist](https://umh39lhux3j.typeform.com/to/NKbRukRg).
+You can also complete the [KeepSydian user feedback survey](https://forms.gle/pVs8GtohFWmqs5F4A).
 
 ## License
 

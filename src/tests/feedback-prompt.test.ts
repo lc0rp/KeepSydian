@@ -24,6 +24,24 @@ function createPlugin(savedData: Record<string, unknown> | null = {}) {
 	return plugin;
 }
 
+function createPluginWithSecretStorage(savedData: Record<string, unknown>) {
+	let persistedData = savedData;
+	const app = {
+		workspace: {},
+		vault: {},
+		secretStorage: {
+			getSecret: jest.fn().mockReturnValue(null),
+			setSecret: jest.fn(),
+		},
+	} as unknown as Plugin["app"];
+	const plugin = new KeepSydianPlugin(app, TEST_MANIFEST);
+	plugin.loadData = jest.fn().mockImplementation(async () => persistedData);
+	plugin.saveData = jest.fn().mockImplementation(async (data: Record<string, unknown>) => {
+		persistedData = data;
+	});
+	return { plugin, getPersistedData: () => persistedData };
+}
+
 describe("post-install feedback prompt", () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
@@ -63,6 +81,23 @@ describe("post-install feedback prompt", () => {
 
 		expect(openSpy).not.toHaveBeenCalled();
 		expect(plugin.saveData).not.toHaveBeenCalled();
+		openSpy.mockRestore();
+	});
+
+	it("keeps the same-version marker while migrating settings to Secret Storage", async () => {
+		const openSpy = jest.spyOn(FeedbackSurveyModal.prototype, "open");
+		const { plugin, getPersistedData } = createPluginWithSecretStorage({
+			email: "supporter@example.com",
+			token: "legacy-token",
+			feedbackPromptLastShownVersion: TEST_MANIFEST.version,
+		});
+
+		await plugin.onload();
+
+		expect(openSpy).not.toHaveBeenCalled();
+		expect(getPersistedData()).toEqual(
+			expect.objectContaining({ feedbackPromptLastShownVersion: TEST_MANIFEST.version })
+		);
 		openSpy.mockRestore();
 	});
 });

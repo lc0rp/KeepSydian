@@ -3,9 +3,8 @@ import { Modal, Setting, type App } from "obsidian";
 export const FEEDBACK_SURVEY_URL = "https://forms.gle/pVs8GtohFWmqs5F4A";
 
 export const WHATS_NEW_ITEMS = [
-	"Imported Google Keep images can now be displayed directly in your Obsidian notes.",
-	"Google Keep token setup and status feedback are clearer and more reliable.",
-	"Compatibility and reliability have been improved across supported Obsidian environments.",
+	"A failed image or attachment download no longer stops the rest of your notes from importing.",
+	"KeepSydian preserves existing YAML comments and formatting when it refreshes imported-note metadata.",
 ] as const;
 
 export class FeedbackSurveyModal extends Modal {
@@ -26,7 +25,7 @@ export class FeedbackSurveyModal extends Modal {
 
 		contentEl.createEl("h3", { text: "Help shape what we build next" });
 		contentEl.createEl("p", {
-			text: "Got 2 minutes? Tell us what's working, what's frustrating, and what you'd most like us to improve.",
+			text: "Take about 2–3 minutes to tell us what's working, what's frustrating, and what you'd most like us to improve; the survey opens on an external Google form in your browser.",
 		});
 
 		const actions = new Setting(contentEl);
@@ -40,7 +39,6 @@ export class FeedbackSurveyModal extends Modal {
 			},
 		});
 		surveyLink.classList.add("keepsidian-link-button");
-		surveyLink.setAttribute("role", "button");
 
 		actions.addButton((button) =>
 			button.setButtonText("Maybe later").onClick(() => {
