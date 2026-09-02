@@ -29,12 +29,8 @@ function getNoticeControls(notice: Notice | null): Notice | null {
 }
 
 function formatSyncNoticeMessage(processedNotes: number, totalNotes: number | null): string {
-	const safeProcessed =
-		Number.isFinite(processedNotes) && processedNotes >= 0
-			? Math.floor(processedNotes)
-			: 0;
-	const totalLabel =
-		typeof totalNotes === "number" && totalNotes > 0 ? String(totalNotes) : "?";
+	const safeProcessed = Number.isFinite(processedNotes) && processedNotes >= 0 ? Math.floor(processedNotes) : 0;
+	const totalLabel = typeof totalNotes === "number" && totalNotes > 0 ? String(totalNotes) : "?";
 	return `${SYNC_NOTICE_PREFIX} ${safeProcessed}/${totalLabel}`;
 }
 
@@ -156,10 +152,7 @@ export function startSyncUI(plugin: KeepSidianPlugin) {
 	setStatusBarTooltip(plugin, `KeepSidian ${getSyncPhaseLabel(plugin).toLowerCase()}...`);
 	plugin.progressModal?.setProgress(0, undefined);
 
-	plugin.progressNotice = new Notice(
-		formatSyncNoticeMessage(plugin.processedNotes, plugin.totalNotes),
-		0
-	);
+	plugin.progressNotice = new Notice(formatSyncNoticeMessage(plugin.processedNotes, plugin.totalNotes), 0);
 }
 
 export function reportSyncProgress(plugin: KeepSidianPlugin) {
@@ -171,12 +164,7 @@ export function reportSyncProgress(plugin: KeepSidianPlugin) {
 			: `${getSyncPhaseLabel(plugin)}: ${plugin.processedNotes}`;
 	setStatusBarText(plugin, text);
 	setStatusBarTooltip(plugin, `KeepSidian ${getSyncPhaseLabel(plugin).toLowerCase()}...`);
-	if (
-		plugin.progressContainerEl &&
-		plugin.progressBar &&
-		typeof total === "number" &&
-		total > 0
-	) {
+	if (plugin.progressContainerEl && plugin.progressBar && typeof total === "number" && total > 0) {
 		const pct = Math.max(0, Math.min(100, Math.round((plugin.processedNotes / total) * 100)));
 		plugin.progressContainerEl.classList.remove("indeterminate");
 		plugin.progressBar.setValue(pct);
@@ -192,16 +180,18 @@ function normalizeSyncRunStatus(status: SyncRunStatus | boolean): SyncRunStatus 
 	return status;
 }
 
-export function finishSyncUI(plugin: KeepSidianPlugin, status: SyncRunStatus | boolean) {
+export function finishSyncUI(plugin: KeepSidianPlugin, status: SyncRunStatus | boolean, attachmentWarnings = 0) {
 	const normalizedStatus = normalizeSyncRunStatus(status);
-	const success = normalizedStatus === "success";
+	const success = normalizedStatus === "success" || normalizedStatus === "warning";
 	clearScheduledSyncUiHides(plugin);
 	if (plugin.progressNotice) {
 		const noticeControls = getNoticeControls(plugin.progressNotice);
 		if (noticeControls) {
 			noticeControls.setMessage(
 				success
-					? "Synced Google Keep Notes."
+					? normalizedStatus === "warning"
+						? `Synced Google Keep Notes with ${attachmentWarnings} attachment warning${attachmentWarnings === 1 ? "" : "s"}.`
+						: "Synced Google Keep Notes."
 					: normalizedStatus === "canceled"
 						? "Canceled Google Keep sync."
 						: "Failed to sync Google Keep Notes."
@@ -224,6 +214,7 @@ export function finishSyncUI(plugin: KeepSidianPlugin, status: SyncRunStatus | b
 		totalNotes: typeof totalValue === "number" && totalValue > 0 ? totalValue : null,
 		success,
 		status: normalizedStatus,
+		...(attachmentWarnings > 0 ? { attachmentWarnings } : {}),
 		mode: plugin.currentSyncMode ?? "import",
 	};
 	plugin.lastSyncSummary = summary;
@@ -240,7 +231,7 @@ export function finishSyncUI(plugin: KeepSidianPlugin, status: SyncRunStatus | b
 			plugin.progressBarHideTimeout = null;
 		}, 3000);
 	}
-	plugin.progressModal?.setComplete(normalizedStatus, plugin.processedNotes);
+	plugin.progressModal?.setComplete(normalizedStatus, plugin.processedNotes, attachmentWarnings);
 	plugin.progressModal?.setIdleSummary(summary);
 	void plugin.saveSettings();
 }

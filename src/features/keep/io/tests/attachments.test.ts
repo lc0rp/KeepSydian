@@ -151,6 +151,35 @@ describe("processAttachments", () => {
 		expectAttachmentMetrics(result, { downloaded: 2, skippedIdentical: 0 });
 	});
 
+	it("continues after a failed attachment and reports an actionable warning", async () => {
+		const downloadedBlob = new ArrayBuffer(8);
+		(requestUrl as jest.Mock)
+			.mockResolvedValueOnce({
+				status: 404,
+				text: '{"error":"Google Keep attachment not found"}',
+			})
+			.mockResolvedValueOnce({ status: 200, arrayBuffer: downloadedBlob });
+
+		const result = await processAttachments(
+			mockPlugin.app,
+			["https://example.com/missing.jpg", "https://example.com/available.jpg"],
+			"/test/location"
+		);
+
+		expect(result.downloaded).toBe(1);
+		expect(result.failures).toEqual([
+			{
+				url: "https://example.com/missing.jpg",
+				status: 404,
+				message: "Google Keep attachment not found",
+			},
+		]);
+		expect(mockPlugin.app.vault.adapter.writeBinary).toHaveBeenCalledWith(
+			"/test/location/media/available.jpg",
+			downloadedBlob
+		);
+	});
+
 	it("should handle empty blob URLs array", async () => {
 		const result = await processAttachments(mockPlugin.app, [], "/test/location");
 
@@ -160,7 +189,7 @@ describe("processAttachments", () => {
 		expectAttachmentMetrics(result, { downloaded: 0, skippedIdentical: 0 });
 	});
 
-	it("should fail after exhausting retries for transient attachment fetch errors", async () => {
+	it("should report a warning after exhausting retries for transient attachment fetch errors", async () => {
 		jest.useFakeTimers();
 		// Mock failed request
 		(requestUrl as jest.Mock)
@@ -172,18 +201,19 @@ describe("processAttachments", () => {
 		const saveLocation = "/test/location";
 
 		const promise = processAttachments(mockPlugin.app, blobUrls, saveLocation);
-		const rejectionExpectation = expect(promise).rejects.toThrow(
-			"Failed to download blob from https://example.com/image1.jpg."
-		);
-
 		await jest.runOnlyPendingTimersAsync();
 		await jest.runOnlyPendingTimersAsync();
 
-		await rejectionExpectation;
+		const result = await promise;
 
-		// Verify requestUrl was called but writeBinary wasn't
 		expect(requestUrl).toHaveBeenCalledTimes(3);
 		expect(mockPlugin.app.vault.adapter.writeBinary).not.toHaveBeenCalled();
+		expect(result.failures).toEqual([
+			{
+				url: "https://example.com/image1.jpg",
+				message: "Network error",
+			},
+		]);
 	});
 
 	it("should retry transient attachment fetch failures and eventually succeed", async () => {
@@ -211,18 +241,68 @@ describe("processAttachments", () => {
 		expectAttachmentMetrics(result, { downloaded: 1, skippedIdentical: 0 });
 	});
 
-	it("should fail fast for non-retryable attachment fetch errors", async () => {
+	it("should report non-retryable attachment fetch errors without retrying", async () => {
 		(requestUrl as jest.Mock).mockRejectedValueOnce(new NetworkError("Google Keep attachment not found", 404));
 
-		await expect(
-			processAttachments(mockPlugin.app, ["https://example.com/image1.jpg"], "/test/location")
-		).rejects.toThrow("Failed to download blob from https://example.com/image1.jpg.");
+		const result = await processAttachments(mockPlugin.app, ["https://example.com/image1.jpg"], "/test/location");
 
 		expect(requestUrl).toHaveBeenCalledTimes(1);
 		expect(mockPlugin.app.vault.adapter.writeBinary).not.toHaveBeenCalled();
+		expect(result.failures).toEqual([
+			{
+				url: "https://example.com/image1.jpg",
+				message: "Google Keep attachment not found",
+				status: 404,
+			},
+		]);
 	});
 
-	it("should handle file write failure", async () => {
+	it("does not retry access-denied attachment responses", async () => {
+		jest.useFakeTimers();
+		(requestUrl as jest.Mock).mockRejectedValue(new NetworkError("Google Keep attachment access denied", 403));
+
+		const promise = processAttachments(mockPlugin.app, ["https://example.com/denied.jpg"], "/test/location");
+		await jest.runOnlyPendingTimersAsync();
+		await jest.runOnlyPendingTimersAsync();
+		const result = await promise;
+
+		expect(requestUrl).toHaveBeenCalledTimes(1);
+		expect(result.failures).toEqual([
+			{
+				url: "https://example.com/denied.jpg",
+				message: "Google Keep attachment access denied",
+				status: 403,
+			},
+		]);
+	});
+
+	it("honors server Retry-After guidance before retrying rate-limited attachments", async () => {
+		jest.useFakeTimers();
+		const downloadedBlob = new ArrayBuffer(8);
+		(requestUrl as jest.Mock)
+			.mockResolvedValueOnce({
+				status: 429,
+				headers: { "retry-after": "5" },
+				text: '{"error":"Google Keep rate limit exceeded. Please wait a moment and retry."}',
+			})
+			.mockResolvedValueOnce({ status: 200, arrayBuffer: downloadedBlob });
+
+		const promise = processAttachments(mockPlugin.app, ["https://example.com/rate-limited.jpg"], "/test/location");
+		await Promise.resolve();
+		expect(requestUrl).toHaveBeenCalledTimes(1);
+
+		await jest.advanceTimersByTimeAsync(4_999);
+		expect(requestUrl).toHaveBeenCalledTimes(1);
+
+		await jest.advanceTimersByTimeAsync(1);
+		const result = await promise;
+
+		expect(requestUrl).toHaveBeenCalledTimes(2);
+		expect(result.downloaded).toBe(1);
+		expect(result.failures).toEqual([]);
+	});
+
+	it("should report file write failures as attachment warnings", async () => {
 		// Mock successful request but failed write
 		const mockArrayBuffer = new ArrayBuffer(8);
 		(requestUrl as jest.Mock).mockResolvedValueOnce({
@@ -233,13 +313,16 @@ describe("processAttachments", () => {
 		const blobUrls = ["https://example.com/image1.jpg"];
 		const saveLocation = "/test/location";
 
-		await expect(processAttachments(mockPlugin.app, blobUrls, saveLocation)).rejects.toThrow(
-			"Failed to download blob from https://example.com/image1.jpg."
-		);
+		const result = await processAttachments(mockPlugin.app, blobUrls, saveLocation);
 
-		// Verify both functions were called
 		expect(requestUrl).toHaveBeenCalledTimes(1);
 		expect(mockPlugin.app.vault.adapter.writeBinary).toHaveBeenCalledTimes(1);
+		expect(result.failures).toEqual([
+			{
+				url: "https://example.com/image1.jpg",
+				message: "Write error",
+			},
+		]);
 	});
 
 	it("should handle invalid blob URLs", async () => {

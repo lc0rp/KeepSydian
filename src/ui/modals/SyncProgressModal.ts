@@ -336,6 +336,9 @@ function getResultTitle(plan: SyncPlan, status: SyncRunStatus | null): string {
 	if (status === "failed") {
 		return plan.stage === "upload" ? "Upload failed" : "Download failed";
 	}
+	if (status === "warning") {
+		return plan.stage === "upload" ? "Upload complete with warnings" : "Download complete with warnings";
+	}
 	return plan.stage === "upload" ? "Upload complete" : "Download complete";
 }
 
@@ -370,7 +373,11 @@ export class SyncProgressModal extends Modal {
 	private isGeneratingReview = false;
 	private processed = 0;
 	private total: number | undefined;
-	private lastResult: { status: SyncRunStatus; processed: number } | null = null;
+	private lastResult: {
+		status: SyncRunStatus;
+		processed: number;
+		attachmentWarnings: number;
+	} | null = null;
 	private summary: LastSyncSummary | null = null;
 	private preparedPlan: PreparedSyncPlan | null = null;
 	private executionSnapshot: ExecutionSnapshot | null = null;
@@ -738,10 +745,9 @@ export class SyncProgressModal extends Modal {
 		void this.refreshUI();
 	}
 
-	setComplete(status: SyncRunStatus | boolean, processed: number) {
-		const normalizedStatus =
-			typeof status === "boolean" ? (status ? "success" : "failed") : status;
-		this.lastResult = { status: normalizedStatus, processed };
+	setComplete(status: SyncRunStatus | boolean, processed: number, attachmentWarnings = 0) {
+		const normalizedStatus = typeof status === "boolean" ? (status ? "success" : "failed") : status;
+		this.lastResult = { status: normalizedStatus, processed, attachmentWarnings };
 		if (this.executionSnapshot) {
 			this.showExecutionResult = normalizedStatus !== "canceled";
 		}
@@ -757,8 +763,7 @@ export class SyncProgressModal extends Modal {
 		if (!this.showExecutionResult) {
 			this.lastResult = null;
 		}
-		const summaryStatus =
-			summary == null ? null : (summary.status ?? (summary.success ? "success" : "failed"));
+		const summaryStatus = summary == null ? null : (summary.status ?? (summary.success ? "success" : "failed"));
 		if (summaryStatus !== "failed") {
 			this.modalAlert = null;
 		}
@@ -804,7 +809,13 @@ export class SyncProgressModal extends Modal {
 	}
 
 	private canRefreshRunningInPlace(entryId?: string): boolean {
-		if (this.getSurface() !== "running" || !this.executionSnapshot || !this.statusEl || !this.stepperEl || !this.planSummaryEl) {
+		if (
+			this.getSurface() !== "running" ||
+			!this.executionSnapshot ||
+			!this.statusEl ||
+			!this.stepperEl ||
+			!this.planSummaryEl
+		) {
 			return false;
 		}
 		if (!this.planListEl) {
@@ -987,22 +998,14 @@ export class SyncProgressModal extends Modal {
 			cancelButton.classList.add("keepsidian-modal-dismiss-prompt-action--danger");
 			cancelButton.disabled = this.isCanceling;
 
-			const backgroundButton = this.createActionButton(
-				this.dismissPromptActionsEl,
-				"Run in background",
-				async () => {
-					await this.dismissToBackground();
-				}
-			);
+			const backgroundButton = this.createActionButton(this.dismissPromptActionsEl, "Run in background", async () => {
+				await this.dismissToBackground();
+			});
 			backgroundButton.classList.add("keepsidian-modal-dismiss-prompt-action--ghost");
 		} else {
-			const closeButton = this.createActionButton(
-				this.dismissPromptActionsEl,
-				"Close",
-				async () => {
-					await this.confirmDismiss();
-				}
-			);
+			const closeButton = this.createActionButton(this.dismissPromptActionsEl, "Close", async () => {
+				await this.confirmDismiss();
+			});
 			closeButton.classList.add("keepsidian-modal-dismiss-prompt-action--danger");
 		}
 
@@ -1073,6 +1076,10 @@ export class SyncProgressModal extends Modal {
 			}
 			if (this.lastResult?.status === "canceled") {
 				return `Sync canceled after ${this.lastResult.processed} notes.`;
+			}
+			if (this.lastResult?.status === "warning") {
+				const warningCount = this.lastResult.attachmentWarnings;
+				return `Sync complete with ${warningCount} attachment warning${warningCount === 1 ? "" : "s"}. Processed ${this.lastResult.processed} notes.`;
 			}
 			return this.lastResult?.status === "success"
 				? `Sync complete. Processed ${this.lastResult.processed} notes.`
@@ -1313,7 +1320,8 @@ export class SyncProgressModal extends Modal {
 			helper.classList.add("keepsidian-sync-center-scope-helper");
 			const syncCustomScopeHelper = () => {
 				const error = parseCustomScopeInput(input.value).error ?? null;
-				helper.textContent = error ?? `Use ${CUSTOM_SCOPE_INPUT_FORMAT}. Notes changed after this date will be included.`;
+				helper.textContent =
+					error ?? `Use ${CUSTOM_SCOPE_INPUT_FORMAT}. Notes changed after this date will be included.`;
 				helper.classList.toggle("is-warning", Boolean(error));
 			};
 			syncCustomScopeHelper();
@@ -1364,7 +1372,13 @@ export class SyncProgressModal extends Modal {
 		if (!this.bodyEl) {
 			return;
 		}
-		if (this.planActionsEl && this.planPanelEl && this.planSummaryEl && this.planSelectionSummaryEl && this.planListEl) {
+		if (
+			this.planActionsEl &&
+			this.planPanelEl &&
+			this.planSummaryEl &&
+			this.planSelectionSummaryEl &&
+			this.planListEl
+		) {
 			return;
 		}
 		clearElement(this.bodyEl);
@@ -1381,7 +1395,13 @@ export class SyncProgressModal extends Modal {
 
 	private renderPlanSurface(surface: "review" | "running" | "result") {
 		this.ensurePlanSurfaceStructure();
-		if (!this.planActionsEl || !this.planPanelEl || !this.planSummaryEl || !this.planSelectionSummaryEl || !this.planListEl) {
+		if (
+			!this.planActionsEl ||
+			!this.planPanelEl ||
+			!this.planSummaryEl ||
+			!this.planSelectionSummaryEl ||
+			!this.planListEl
+		) {
 			return;
 		}
 		clearElement(this.planActionsEl);

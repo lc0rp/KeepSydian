@@ -52,13 +52,11 @@ describe("KeepSidianPlugin", () => {
 		statusBarItem.setText = jest.fn();
 		statusBarItem.setAttribute = jest.fn();
 		statusBarItem.addEventListener = jest.fn();
-		statusBarItem.createEl = jest.fn(
-			<K extends keyof HTMLElementTagNameMap>(tagName: K) => {
-				const child = document.createElement(tagName);
-				statusBarItem.appendChild(child);
-				return child;
-			}
-		);
+		statusBarItem.createEl = jest.fn(<K extends keyof HTMLElementTagNameMap>(tagName: K) => {
+			const child = document.createElement(tagName);
+			statusBarItem.appendChild(child);
+			return child;
+		});
 		plugin.addStatusBarItem = jest
 			.fn()
 			.mockReturnValue(statusBarItem as unknown as ReturnType<Plugin["addStatusBarItem"]>);
@@ -78,11 +76,7 @@ describe("KeepSidianPlugin", () => {
 
 			expect(plugin.settings).toEqual(DEFAULT_SETTINGS);
 			expect(plugin.addCommand).toHaveBeenCalledTimes(6);
-			expect(
-				(plugin.addCommand as jest.Mock).mock.calls.map(
-					(call) => call[0].id
-				)
-			).toEqual([
+			expect((plugin.addCommand as jest.Mock).mock.calls.map((call) => call[0].id)).toEqual([
 				"sync-now",
 				"open-sync-center",
 				"two-way-sync-google-keep",
@@ -90,24 +84,56 @@ describe("KeepSidianPlugin", () => {
 				"push-google-keep-notes",
 				"open-sync-log-file",
 			]);
-			expect(plugin.addSettingTab).toHaveBeenCalledWith(
-				expect.any(KeepSidianSettingsTab)
-			);
+			expect(plugin.addSettingTab).toHaveBeenCalledWith(expect.any(KeepSidianSettingsTab));
 			expect(plugin.statusTextEl?.textContent).toBe("Last sync: never");
-			const statusEl = (plugin.addStatusBarItem as jest.Mock).mock
-				.results[0].value;
-			expect(statusEl.setAttribute).toHaveBeenCalledWith(
-				"title",
-				"KeepSidian has not synced yet."
-			);
+			const statusEl = (plugin.addStatusBarItem as jest.Mock).mock.results[0].value;
+			expect(statusEl.setAttribute).toHaveBeenCalledWith("title", "KeepSidian has not synced yet.");
 		});
 	});
 
 	describe("importNotes", () => {
+		it("completes an import with a distinct warning outcome when attachments fail", async () => {
+			jest.spyOn(SyncModule, "importGoogleKeepNotes").mockImplementation(async (_plugin, callbacks) => {
+				callbacks?.onAttachmentWarning?.({
+					noteTitle: "Supporter note",
+					notePath: "KeepSidian/Supporter note.md",
+					url: "/keep/media/note/blob",
+					message: "Google Keep attachment not found",
+					status: 404,
+				});
+				return 1;
+			});
+
+			plugin.app = {
+				workspace: {},
+				vault: {
+					adapter: {
+						exists: jest.fn().mockResolvedValue(true),
+						read: jest.fn().mockResolvedValue(""),
+						write: jest.fn().mockResolvedValue(undefined),
+					},
+					createFolder: jest.fn().mockResolvedValue(undefined),
+				},
+			} as unknown as Plugin["app"];
+
+			await plugin.onload();
+			setTestCredentials(plugin);
+			jest.spyOn(plugin.subscriptionService, "isSubscriptionActive").mockResolvedValue(false);
+
+			await plugin.importNotes();
+			await new Promise((resolve) => setTimeout(resolve, 0));
+
+			expect(plugin.lastSyncSummary).toEqual(
+				expect.objectContaining({
+					status: "warning",
+					success: true,
+					attachmentWarnings: 1,
+				})
+			);
+		});
+
 		it("should use basic import for non-premium users", async () => {
-			const importMock = jest
-				.spyOn(SyncModule, "importGoogleKeepNotes")
-				.mockResolvedValue(0);
+			const importMock = jest.spyOn(SyncModule, "importGoogleKeepNotes").mockResolvedValue(0);
 
 			// Provide minimal vault adapter to allow precondition checks
 			plugin.app = {
@@ -139,36 +165,26 @@ describe("KeepSidianPlugin", () => {
 					reportProgress: expect.any(Function),
 				})
 			);
-			expect(Notice).toHaveBeenCalledWith(
-				expect.stringMatching(/Syncing Google Keep Notes\.\.\. 0\/\?/),
-				0
-			);
+			expect(Notice).toHaveBeenCalledWith(expect.stringMatching(/Syncing Google Keep Notes\.\.\. 0\/\?/), 0);
 			expect(plugin.progressNotice).not.toBeNull();
-			const statusEl = (plugin.addStatusBarItem as jest.Mock).mock
-				.results[0].value;
+			const statusEl = (plugin.addStatusBarItem as jest.Mock).mock.results[0].value;
 			const tooltipCalls = (statusEl.setAttribute as jest.Mock).mock.calls
 				.filter(([attr]) => attr === "title")
 				.map(([, value]) => value);
 			expect(tooltipCalls).toContain("KeepSidian syncing...");
-			expect(
-				tooltipCalls.some((value: string) =>
-					value.startsWith("KeepSidian last synced")
-				)
-			).toBe(true);
+			expect(tooltipCalls.some((value: string) => value.startsWith("KeepSidian last synced"))).toBe(true);
 			expect(plugin.statusTextEl?.textContent).toContain("Last synced");
 			isSubscriptionActiveSpy.mockRestore();
 		});
 
 		it("updates the sync notice as progress advances", async () => {
 			const setMessage = jest.fn();
-			(Notice as unknown as jest.Mock).mockImplementationOnce(
-				(message: string, timeout?: number) => ({
-					message,
-					timeout,
-					setMessage,
-					hide: jest.fn(),
-				})
-			);
+			(Notice as unknown as jest.Mock).mockImplementationOnce((message: string, timeout?: number) => ({
+				message,
+				timeout,
+				setMessage,
+				hide: jest.fn(),
+			}));
 			const importMock = jest
 				.spyOn(SyncModule, "importGoogleKeepNotes")
 				.mockImplementation(async (_plugin, callbacks) => {
@@ -199,12 +215,8 @@ describe("KeepSidianPlugin", () => {
 			await plugin.importNotes();
 			await new Promise((resolve) => setTimeout(resolve, 0));
 
-			expect(setMessage).toHaveBeenCalledWith(
-				"Syncing Google Keep Notes... 0/2"
-			);
-			expect(setMessage).toHaveBeenCalledWith(
-				"Syncing Google Keep Notes... 1/2"
-			);
+			expect(setMessage).toHaveBeenCalledWith("Syncing Google Keep Notes... 0/2");
+			expect(setMessage).toHaveBeenCalledWith("Syncing Google Keep Notes... 1/2");
 
 			isSubscriptionActiveSpy.mockRestore();
 			importMock.mockRestore();
@@ -234,12 +246,8 @@ describe("KeepSidianPlugin", () => {
 				.spyOn(plugin.subscriptionService, "isSubscriptionActive")
 				.mockResolvedValue(true);
 
-			const importMock = jest
-				.spyOn(SyncModule, "importGoogleKeepNotesWithOptions")
-				.mockResolvedValue(0);
-			const basicImportMock = jest
-				.spyOn(SyncModule, "importGoogleKeepNotes")
-				.mockResolvedValue(0);
+			const importMock = jest.spyOn(SyncModule, "importGoogleKeepNotesWithOptions").mockResolvedValue(0);
+			const basicImportMock = jest.spyOn(SyncModule, "importGoogleKeepNotes").mockResolvedValue(0);
 
 			await plugin.importNotes();
 			await new Promise((resolve) => setTimeout(resolve, 0));
@@ -273,8 +281,7 @@ describe("KeepSidianPlugin", () => {
 				open: jest.fn(),
 				beginReview: jest.fn(),
 			};
-			plugin.progressModal =
-				modalStub as unknown as KeepSidianPlugin["progressModal"];
+			plugin.progressModal = modalStub as unknown as KeepSidianPlugin["progressModal"];
 			(plugin as unknown as { isSyncing: boolean }).isSyncing = true;
 			plugin.processedNotes = 3;
 			plugin.totalNotes = 10;
@@ -297,9 +304,7 @@ describe("KeepSidianPlugin", () => {
 				},
 				vault: {
 					adapter: {
-						list: jest
-							.fn()
-							.mockResolvedValue({ files: [], folders: [] }),
+						list: jest.fn().mockResolvedValue({ files: [], folders: [] }),
 					},
 				},
 			} as unknown as Plugin["app"];
@@ -312,9 +317,7 @@ describe("KeepSidianPlugin", () => {
 
 			await plugin.openLatestSyncLog();
 
-			expect(
-				plugin.app.workspace.openLinkText as jest.Mock
-			).toHaveBeenCalledWith(logPath, "", true);
+			expect(plugin.app.workspace.openLinkText as jest.Mock).toHaveBeenCalledWith(logPath, "", true);
 		});
 
 		it("selects the latest log when none is stored", async () => {
@@ -334,16 +337,12 @@ describe("KeepSidianPlugin", () => {
 
 			await plugin.openLatestSyncLog();
 
-			expect(
-				plugin.app.workspace.openLinkText as jest.Mock
-			).toHaveBeenCalledWith(
+			expect(plugin.app.workspace.openLinkText as jest.Mock).toHaveBeenCalledWith(
 				"Google Keep/_KeepSidianLogs/2024-01-03.md",
 				"",
 				true
 			);
-			expect(plugin.lastSyncLogPath).toBe(
-				"Google Keep/_KeepSidianLogs/2024-01-03.md"
-			);
+			expect(plugin.lastSyncLogPath).toBe("Google Keep/_KeepSidianLogs/2024-01-03.md");
 		});
 
 		it("shows a notice when no logs are available", async () => {
@@ -353,12 +352,8 @@ describe("KeepSidianPlugin", () => {
 
 			await plugin.openLatestSyncLog();
 
-			expect(Notice).toHaveBeenCalledWith(
-				"KeepSidian: no sync logs found."
-			);
-			expect(
-				plugin.app.workspace.openLinkText as jest.Mock
-			).not.toHaveBeenCalled();
+			expect(Notice).toHaveBeenCalledWith("KeepSidian: no sync logs found.");
+			expect(plugin.app.workspace.openLinkText as jest.Mock).not.toHaveBeenCalled();
 		});
 	});
 
@@ -387,13 +382,9 @@ describe("KeepSidianPlugin", () => {
 				autoSyncEnabled: true,
 				autoSyncIntervalHours: 1,
 			});
-			const importSpy = jest
-				.spyOn(plugin, "importNotes")
-				.mockResolvedValue();
+			const importSpy = jest.spyOn(plugin, "importNotes").mockResolvedValue();
 			await plugin.onload();
-			const runTick = (
-				plugin as unknown as { runAutoSyncTick: () => Promise<void> }
-			).runAutoSyncTick;
+			const runTick = (plugin as unknown as { runAutoSyncTick: () => Promise<void> }).runAutoSyncTick;
 			await runTick.call(plugin);
 			await flushMicrotasks();
 			expect(importSpy).toHaveBeenCalledWith(true);
@@ -408,18 +399,10 @@ describe("KeepSidianPlugin", () => {
 				twoWaySyncEnabled: true,
 				twoWaySyncAutoSyncEnabled: true,
 			};
-			plugin.subscriptionService.isSubscriptionActive = jest
-				.fn()
-				.mockResolvedValue(true);
-			const performTwoWaySpy = jest
-				.spyOn(plugin, "performTwoWaySync")
-				.mockResolvedValue();
-			const importSpy = jest
-				.spyOn(plugin, "importNotes")
-				.mockResolvedValue();
-			const openSyncCenterSpy = jest
-				.spyOn(plugin, "openSyncCenter")
-				.mockImplementation(() => {});
+			plugin.subscriptionService.isSubscriptionActive = jest.fn().mockResolvedValue(true);
+			const performTwoWaySpy = jest.spyOn(plugin, "performTwoWaySync").mockResolvedValue();
+			const importSpy = jest.spyOn(plugin, "importNotes").mockResolvedValue();
+			const openSyncCenterSpy = jest.spyOn(plugin, "openSyncCenter").mockImplementation(() => {});
 			plugin.startAutoSync();
 			try {
 				await advanceOneInterval();
@@ -444,35 +427,21 @@ describe("KeepSidianPlugin", () => {
 				twoWaySyncEnabled: false,
 				twoWaySyncAutoSyncEnabled: false,
 			};
-			plugin.subscriptionService.isSubscriptionActive = jest
-				.fn()
-				.mockResolvedValue(true);
-			const logSyncSpy = jest
-				.spyOn(LoggingModule, "logSync")
-				.mockResolvedValue();
-			const noticeSpy = jest
-				.spyOn(plugin, "showTwoWaySafeguardNotice")
-				.mockImplementation(() => {});
-			const importSpy = jest
-				.spyOn(plugin, "importNotes")
-				.mockResolvedValue();
+			plugin.subscriptionService.isSubscriptionActive = jest.fn().mockResolvedValue(true);
+			const logSyncSpy = jest.spyOn(LoggingModule, "logSync").mockResolvedValue();
+			const noticeSpy = jest.spyOn(plugin, "showTwoWaySafeguardNotice").mockImplementation(() => {});
+			const importSpy = jest.spyOn(plugin, "importNotes").mockResolvedValue();
 			plugin.startAutoSync();
 			try {
 				await advanceOneInterval();
-				const runTick = (
-					plugin as unknown as { runAutoSyncTick: () => Promise<void> }
-				).runAutoSyncTick;
+				const runTick = (plugin as unknown as { runAutoSyncTick: () => Promise<void> }).runAutoSyncTick;
 				await runTick.call(plugin);
 				await flushMicrotasks();
 				const gatingMessages = logSyncSpy.mock.calls
 					.map(([, message]) => message)
-					.filter((message) =>
-						message.includes("Auto sync skipped uploads")
-					);
+					.filter((message) => message.includes("Auto sync skipped uploads"));
 				expect(gatingMessages.length).toBeGreaterThanOrEqual(2);
-				expect(gatingMessages[0]).toContain(
-					"Please enable two-way sync in settings first."
-				);
+				expect(gatingMessages[0]).toContain("Please enable two-way sync in settings first.");
 				expect(importSpy).toHaveBeenCalledTimes(2);
 				expect(importSpy).toHaveBeenNthCalledWith(1, true);
 				expect(noticeSpy).toHaveBeenCalledTimes(1);
@@ -485,9 +454,7 @@ describe("KeepSidianPlugin", () => {
 		});
 
 		it("should log sync results to file", async () => {
-			plugin.subscriptionService.isSubscriptionActive = jest
-				.fn()
-				.mockResolvedValue(false);
+			plugin.subscriptionService.isSubscriptionActive = jest.fn().mockResolvedValue(false);
 			plugin.settings = { ...DEFAULT_SETTINGS };
 			setTestCredentials(plugin);
 			plugin.app = {
@@ -499,42 +466,28 @@ describe("KeepSidianPlugin", () => {
 					},
 				},
 			} as unknown as Plugin["app"];
-			const importMock = jest
-				.spyOn(SyncModule, "importGoogleKeepNotes")
-				.mockResolvedValue(0);
-			const previousNormalizePath = (
-				Obsidian as { normalizePath?: (path: string) => string }
-			).normalizePath;
-			(
-				Obsidian as { normalizePath: (path: string) => string }
-			).normalizePath = (p: string) => p;
+			const importMock = jest.spyOn(SyncModule, "importGoogleKeepNotes").mockResolvedValue(0);
+			const previousNormalizePath = (Obsidian as { normalizePath?: (path: string) => string }).normalizePath;
+			(Obsidian as { normalizePath: (path: string) => string }).normalizePath = (p: string) => p;
 			await plugin.importNotes();
 			expect(plugin.app.vault.adapter.write).toHaveBeenCalled();
 			importMock.mockRestore();
 			if (previousNormalizePath) {
-				(
-					Obsidian as { normalizePath: (path: string) => string }
-				).normalizePath = previousNormalizePath;
+				(Obsidian as { normalizePath: (path: string) => string }).normalizePath = previousNormalizePath;
 			} else {
-				delete (
-					Obsidian as { normalizePath?: (path: string) => string }
-				).normalizePath;
+				delete (Obsidian as { normalizePath?: (path: string) => string }).normalizePath;
 			}
 		});
 	});
 
 	describe("path preparation and logging preconditions", () => {
 		it("creates saveLocation and log file before syncing (basic import)", async () => {
-			plugin.subscriptionService.isSubscriptionActive = jest
-				.fn()
-				.mockResolvedValue(false);
-				plugin.settings = { ...DEFAULT_SETTINGS };
-				setTestCredentials(plugin);
-				const saveLocation = plugin.settings.saveLocation;
-				const resolvedSaveLocation = saveLocation.replace(/^\//, "");
-				const logPath = `${resolvedSaveLocation}/_KeepSidianLogs/${new Date()
-					.toISOString()
-					.slice(0, 10)}.md`;
+			plugin.subscriptionService.isSubscriptionActive = jest.fn().mockResolvedValue(false);
+			plugin.settings = { ...DEFAULT_SETTINGS };
+			setTestCredentials(plugin);
+			const saveLocation = plugin.settings.saveLocation;
+			const resolvedSaveLocation = saveLocation.replace(/^\//, "");
+			const logPath = `${resolvedSaveLocation}/_KeepSidianLogs/${new Date().toISOString().slice(0, 10)}.md`;
 
 			const existsMock = jest.fn(async (p: string) => false);
 			const createFolderMock = jest.fn().mockResolvedValue(undefined);
@@ -551,109 +504,79 @@ describe("KeepSidianPlugin", () => {
 				},
 			} as unknown as Plugin["app"];
 
-			jest.spyOn(SyncModule, "importGoogleKeepNotes").mockResolvedValue(
-				0
-			);
+			jest.spyOn(SyncModule, "importGoogleKeepNotes").mockResolvedValue(0);
 			await plugin.importNotes();
 
-				expect(createFolderMock).toHaveBeenCalledWith(resolvedSaveLocation);
-				expect(writeMock).toHaveBeenCalledWith(logPath, expect.any(String));
-			});
+			expect(createFolderMock).toHaveBeenCalledWith(resolvedSaveLocation);
+			expect(writeMock).toHaveBeenCalledWith(logPath, expect.any(String));
+		});
 
 		it("shows error and aborts when saveLocation cannot be created", async () => {
-			plugin.subscriptionService.isSubscriptionActive = jest
-				.fn()
-				.mockResolvedValue(false);
-				plugin.settings = { ...DEFAULT_SETTINGS };
-				setTestCredentials(plugin);
-				const saveLocation = plugin.settings.saveLocation;
-				const resolvedSaveLocation = saveLocation.replace(/^\//, "");
+			plugin.subscriptionService.isSubscriptionActive = jest.fn().mockResolvedValue(false);
+			plugin.settings = { ...DEFAULT_SETTINGS };
+			setTestCredentials(plugin);
+			const saveLocation = plugin.settings.saveLocation;
+			const resolvedSaveLocation = saveLocation.replace(/^\//, "");
 
 			const notice = Notice as unknown as jest.Mock;
 
 			plugin.app = {
 				vault: {
 					adapter: { exists: jest.fn().mockResolvedValue(false) },
-					createFolder: jest
-						.fn()
-						.mockRejectedValue(new Error("perm denied")),
+					createFolder: jest.fn().mockRejectedValue(new Error("perm denied")),
 				},
 			} as unknown as Plugin["app"];
 
-			const importSpy = jest
-				.spyOn(SyncModule, "importGoogleKeepNotes")
-				.mockResolvedValue(0);
+			const importSpy = jest.spyOn(SyncModule, "importGoogleKeepNotes").mockResolvedValue(0);
 			await plugin.importNotes();
 
-				expect(notice).toHaveBeenCalledWith(
-					`KeepSidian: failed to create save location: ${resolvedSaveLocation}`
-				);
+			expect(notice).toHaveBeenCalledWith(`KeepSidian: failed to create save location: ${resolvedSaveLocation}`);
 			expect(importSpy).not.toHaveBeenCalled();
 		});
 
 		it("shows error and aborts when log file cannot be prepared", async () => {
-			plugin.subscriptionService.isSubscriptionActive = jest
-				.fn()
-				.mockResolvedValue(false);
-				plugin.settings = { ...DEFAULT_SETTINGS };
-				setTestCredentials(plugin);
-				const saveLocation = plugin.settings.saveLocation;
-				const resolvedSaveLocation = saveLocation.replace(/^\//, "");
-				const logPath = `${resolvedSaveLocation}/_KeepSidianLogs/${new Date()
-					.toISOString()
-					.slice(0, 10)}.md`;
+			plugin.subscriptionService.isSubscriptionActive = jest.fn().mockResolvedValue(false);
+			plugin.settings = { ...DEFAULT_SETTINGS };
+			setTestCredentials(plugin);
+			const saveLocation = plugin.settings.saveLocation;
+			const resolvedSaveLocation = saveLocation.replace(/^\//, "");
+			const logPath = `${resolvedSaveLocation}/_KeepSidianLogs/${new Date().toISOString().slice(0, 10)}.md`;
 
 			const notice = Notice as unknown as jest.Mock;
 
 			plugin.app = {
 				vault: {
 					adapter: {
-							exists: jest.fn(
-								async (p: string) => p === resolvedSaveLocation
-							),
+						exists: jest.fn(async (p: string) => p === resolvedSaveLocation),
 						read: jest.fn().mockResolvedValue(""),
-						write: jest
-							.fn()
-							.mockRejectedValue(new Error("write failed")),
+						write: jest.fn().mockRejectedValue(new Error("write failed")),
 					},
 					createFolder: jest.fn().mockResolvedValue(undefined),
 				},
 			} as unknown as Plugin["app"];
 
-			const importSpy = jest
-				.spyOn(SyncModule, "importGoogleKeepNotes")
-				.mockResolvedValue(0);
+			const importSpy = jest.spyOn(SyncModule, "importGoogleKeepNotes").mockResolvedValue(0);
 			await plugin.importNotes();
 
-			expect(notice).toHaveBeenCalledWith(
-				`KeepSidian: Failed to create log file: ${logPath}`
-			);
+			expect(notice).toHaveBeenCalledWith(`KeepSidian: Failed to create log file: ${logPath}`);
 			expect(importSpy).not.toHaveBeenCalled();
 		});
 
 		it("shows an error Notice if log append fails during sync, but does not crash", async () => {
-			plugin.subscriptionService.isSubscriptionActive = jest
-				.fn()
-				.mockResolvedValue(false);
+			plugin.subscriptionService.isSubscriptionActive = jest.fn().mockResolvedValue(false);
 			plugin.settings = { ...DEFAULT_SETTINGS };
 			setTestCredentials(plugin);
 			const saveLocation = plugin.settings.saveLocation;
-			const logPath = `${saveLocation}/_KeepSidianLogs/${new Date()
-				.toISOString()
-				.slice(0, 10)}.md`;
+			const logPath = `${saveLocation}/_KeepSidianLogs/${new Date().toISOString().slice(0, 10)}.md`;
 
-			const exists = jest.fn(
-				async (p: string) => p === saveLocation || p === logPath
-			);
+			const exists = jest.fn(async (p: string) => p === saveLocation || p === logPath);
 			const read = jest.fn().mockResolvedValue("");
-			const write = jest
-				.fn()
-				.mockImplementation(async (_p: string, _c: string) => {
-					// Fail only on non-empty writes (append during sync)
-					if (_c && _c.length > 0) {
-						throw new Error("append failed");
-					}
-				});
+			const write = jest.fn().mockImplementation(async (_p: string, _c: string) => {
+				// Fail only on non-empty writes (append during sync)
+				if (_c && _c.length > 0) {
+					throw new Error("append failed");
+				}
+			});
 
 			plugin.app = {
 				vault: {
@@ -662,47 +585,29 @@ describe("KeepSidianPlugin", () => {
 				},
 			} as unknown as Plugin["app"];
 
-			jest.spyOn(SyncModule, "importGoogleKeepNotes").mockResolvedValue(
-				0
-			);
+			jest.spyOn(SyncModule, "importGoogleKeepNotes").mockResolvedValue(0);
 
 			const notice = Notice as unknown as jest.Mock;
-			const previousNormalizePath = (
-				Obsidian as { normalizePath?: (path: string) => string }
-			).normalizePath;
-			(
-				Obsidian as { normalizePath: (path: string) => string }
-			).normalizePath = (p: string) => p;
+			const previousNormalizePath = (Obsidian as { normalizePath?: (path: string) => string }).normalizePath;
+			(Obsidian as { normalizePath: (path: string) => string }).normalizePath = (p: string) => p;
 			await plugin.importNotes();
 			if (previousNormalizePath) {
-				(
-					Obsidian as { normalizePath: (path: string) => string }
-				).normalizePath = previousNormalizePath;
+				(Obsidian as { normalizePath: (path: string) => string }).normalizePath = previousNormalizePath;
 			} else {
-				delete (
-					Obsidian as { normalizePath?: (path: string) => string }
-				).normalizePath;
+				delete (Obsidian as { normalizePath?: (path: string) => string }).normalizePath;
 			}
 
-			expect(notice).toHaveBeenCalledWith(
-				"KeepSidian: failed to write sync log."
-			);
+			expect(notice).toHaveBeenCalledWith("KeepSidian: failed to write sync log.");
 		});
 
 		it("logs started and ended entries for manual sync", async () => {
-			plugin.subscriptionService.isSubscriptionActive = jest
-				.fn()
-				.mockResolvedValue(false);
+			plugin.subscriptionService.isSubscriptionActive = jest.fn().mockResolvedValue(false);
 			plugin.settings = { ...DEFAULT_SETTINGS };
 			setTestCredentials(plugin);
 			const saveLocation = plugin.settings.saveLocation;
-			const logPath = `${saveLocation}/_KeepSidianLogs/${new Date()
-				.toISOString()
-				.slice(0, 10)}.md`;
+			const logPath = `${saveLocation}/_KeepSidianLogs/${new Date().toISOString().slice(0, 10)}.md`;
 
-			const exists = jest.fn(
-				async (p: string) => p === saveLocation || p === logPath
-			);
+			const exists = jest.fn(async (p: string) => p === saveLocation || p === logPath);
 			const read = jest.fn().mockResolvedValue("");
 			const write = jest.fn().mockResolvedValue(undefined);
 
@@ -713,39 +618,25 @@ describe("KeepSidianPlugin", () => {
 				},
 			} as unknown as Plugin["app"];
 
-			jest.spyOn(SyncModule, "importGoogleKeepNotes").mockResolvedValue(
-				0
-			);
+			jest.spyOn(SyncModule, "importGoogleKeepNotes").mockResolvedValue(0);
 			await plugin.importNotes(false);
 
-			const writes = (write).mock.calls.map((c) => c[1]);
-			expect(
-				writes.some((c: string) => c.includes("Manual sync started"))
-			).toBe(true);
-			expect(
-				writes.some((c: string) => c.includes("Manual sync ended"))
-			).toBe(true);
+			const writes = write.mock.calls.map((c) => c[1]);
+			expect(writes.some((c: string) => c.includes("Manual sync started"))).toBe(true);
+			expect(writes.some((c: string) => c.includes("Manual sync ended"))).toBe(true);
 			// Lines are markdown list items
-			const startedLine = writes.find((c: string) =>
-				c.includes("Manual sync started")
-			) as string;
+			const startedLine = writes.find((c: string) => c.includes("Manual sync started")) as string;
 			expect(startedLine.trim().startsWith("- ")).toBe(true);
 		});
 
 		it("logs started and ended entries for auto sync", async () => {
-			plugin.subscriptionService.isSubscriptionActive = jest
-				.fn()
-				.mockResolvedValue(false);
+			plugin.subscriptionService.isSubscriptionActive = jest.fn().mockResolvedValue(false);
 			plugin.settings = { ...DEFAULT_SETTINGS };
 			setTestCredentials(plugin);
 			const saveLocation = plugin.settings.saveLocation;
-			const logPath = `${saveLocation}/_KeepSidianLogs/${new Date()
-				.toISOString()
-				.slice(0, 10)}.md`;
+			const logPath = `${saveLocation}/_KeepSidianLogs/${new Date().toISOString().slice(0, 10)}.md`;
 
-			const exists = jest.fn(
-				async (p: string) => p === saveLocation || p === logPath
-			);
+			const exists = jest.fn(async (p: string) => p === saveLocation || p === logPath);
 			const read = jest.fn().mockResolvedValue("");
 			const write = jest.fn().mockResolvedValue(undefined);
 
@@ -756,18 +647,12 @@ describe("KeepSidianPlugin", () => {
 				},
 			} as unknown as Plugin["app"];
 
-			jest.spyOn(SyncModule, "importGoogleKeepNotes").mockResolvedValue(
-				0
-			);
+			jest.spyOn(SyncModule, "importGoogleKeepNotes").mockResolvedValue(0);
 			await plugin.importNotes(true);
 
-			const writes = (write).mock.calls.map((c) => c[1]);
-			expect(
-				writes.some((c: string) => c.includes("Auto sync started"))
-			).toBe(true);
-			expect(
-				writes.some((c: string) => c.includes("Auto sync ended"))
-			).toBe(true);
+			const writes = write.mock.calls.map((c) => c[1]);
+			expect(writes.some((c: string) => c.includes("Auto sync started"))).toBe(true);
+			expect(writes.some((c: string) => c.includes("Auto sync ended"))).toBe(true);
 		});
 	});
 
@@ -778,14 +663,14 @@ describe("KeepSidianPlugin", () => {
 
 			await plugin.loadSettings();
 
-				expect(plugin.settings).toEqual(
-					expect.objectContaining({
-						...savedSettings,
-						saveLocation: "/Google Keep",
-						saveLocationMode: "custom",
-						noteFileNamePattern: "{title}",
-					})
-				);
+			expect(plugin.settings).toEqual(
+				expect.objectContaining({
+					...savedSettings,
+					saveLocation: "/Google Keep",
+					saveLocationMode: "custom",
+					noteFileNamePattern: "{title}",
+				})
+			);
 		});
 
 		it("uses new defaults for brand-new installs", async () => {
@@ -897,14 +782,8 @@ describe("KeepSidianPlugin", () => {
 			await plugin.saveSettings();
 
 			expect(setSecret).toHaveBeenCalledWith("google-sync-token", "save-time-sync-token");
-			expect(setSecret).toHaveBeenCalledWith(
-				"google-drive-access-token",
-				"save-time-gdrive-token"
-			);
-			expect(setSecret).toHaveBeenCalledWith(
-				"google-drive-refresh-token",
-				"save-time-refresh-token"
-			);
+			expect(setSecret).toHaveBeenCalledWith("google-drive-access-token", "save-time-gdrive-token");
+			expect(setSecret).toHaveBeenCalledWith("google-drive-refresh-token", "save-time-refresh-token");
 			expect(plugin.saveData).toHaveBeenCalledWith(
 				expect.objectContaining({
 					token: "",
@@ -961,17 +840,13 @@ describe("KeepSidianPlugin", () => {
 		it("returns gating reasons when safeguards are incomplete", async () => {
 			const result = await plugin.requireTwoWaySafeguards();
 			expect(result.allowed).toBe(false);
-			expect(result.reasons).toContain(
-				"Please opt-in to two-way sync in settings first."
-			);
+			expect(result.reasons).toContain("Please opt-in to two-way sync in settings first.");
 		});
 
 		it("allows uploads when safeguards and subscription requirements are met", async () => {
 			plugin.settings.twoWaySyncBackupAcknowledged = true;
 			plugin.settings.twoWaySyncEnabled = true;
-			const subscriptionSpy = jest
-				.spyOn(plugin.subscriptionService, "isSubscriptionActive")
-				.mockResolvedValue(true);
+			const subscriptionSpy = jest.spyOn(plugin.subscriptionService, "isSubscriptionActive").mockResolvedValue(true);
 
 			const result = await plugin.requireTwoWaySafeguards();
 			expect(subscriptionSpy).toHaveBeenCalled();
@@ -982,24 +857,16 @@ describe("KeepSidianPlugin", () => {
 		it("routes sync commands through the shared sync center", async () => {
 			registerCommands(plugin);
 			const addCommandMock = plugin.addCommand as jest.Mock;
-			const syncNowCommand = addCommandMock.mock.calls.find(
-				([options]) => options.id === "sync-now"
-			)?.[0];
-			const openCenterCommand = addCommandMock.mock.calls.find(
-				([options]) => options.id === "open-sync-center"
-			)?.[0];
+			const syncNowCommand = addCommandMock.mock.calls.find(([options]) => options.id === "sync-now")?.[0];
+			const openCenterCommand = addCommandMock.mock.calls.find(([options]) => options.id === "open-sync-center")?.[0];
 			const importCommand = addCommandMock.mock.calls.find(
 				([options]) => options.id === "import-google-keep-notes"
 			)?.[0];
-			const pushCommand = addCommandMock.mock.calls.find(
-				([options]) => options.id === "push-google-keep-notes"
-			)?.[0];
+			const pushCommand = addCommandMock.mock.calls.find(([options]) => options.id === "push-google-keep-notes")?.[0];
 			const twoWayCommand = addCommandMock.mock.calls.find(
 				([options]) => options.id === "two-way-sync-google-keep"
 			)?.[0];
-			const openSyncCenterSpy = jest
-				.spyOn(plugin, "openSyncCenter")
-				.mockImplementation(() => {});
+			const openSyncCenterSpy = jest.spyOn(plugin, "openSyncCenter").mockImplementation(() => {});
 
 			await syncNowCommand.callback();
 			await openCenterCommand.callback();
@@ -1031,12 +898,8 @@ describe("KeepSidianPlugin", () => {
 		it("routes the ribbon icon through the idle sync center", async () => {
 			registerRibbonIcon(plugin);
 			const addRibbonIconMock = plugin.addRibbonIcon as jest.Mock;
-			const ribbonHandler = addRibbonIconMock.mock.calls[0]?.[2] as
-				| ((evt: MouseEvent) => Promise<void>)
-				| undefined;
-			const openSyncCenterSpy = jest
-				.spyOn(plugin, "openSyncCenter")
-				.mockImplementation(() => {});
+			const ribbonHandler = addRibbonIconMock.mock.calls[0]?.[2] as ((evt: MouseEvent) => Promise<void>) | undefined;
+			const openSyncCenterSpy = jest.spyOn(plugin, "openSyncCenter").mockImplementation(() => {});
 
 			expect(ribbonHandler).toBeDefined();
 			await ribbonHandler?.(new MouseEvent("click"));
@@ -1050,12 +913,8 @@ describe("KeepSidianPlugin", () => {
 		it("routes the sync-log command through openLatestSyncLog", async () => {
 			registerCommands(plugin);
 			const addCommandMock = plugin.addCommand as jest.Mock;
-			const openLogCommand = addCommandMock.mock.calls.find(
-				([options]) => options.id === "open-sync-log-file"
-			)?.[0];
-			const openLatestSyncLogSpy = jest
-				.spyOn(plugin, "openLatestSyncLog")
-				.mockResolvedValue(undefined);
+			const openLogCommand = addCommandMock.mock.calls.find(([options]) => options.id === "open-sync-log-file")?.[0];
+			const openLatestSyncLogSpy = jest.spyOn(plugin, "openLatestSyncLog").mockResolvedValue(undefined);
 
 			await openLogCommand.callback();
 

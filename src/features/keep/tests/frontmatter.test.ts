@@ -27,4 +27,31 @@ describe("buildFrontmatterWithSyncDate", () => {
 		expect(result).toContain("GoogleKeepArchived: true");
 		expect(result).toContain("KeepSidianLastSyncedDate: 2024-03-03T12:34:56.000Z");
 	});
+
+	it("preserves comments and YAML formatting while refreshing managed metadata", () => {
+		const existingFrontmatter = [
+			"# supporter comment",
+			"Custom:",
+			"  nested: value",
+			'Quoted: "01:02"',
+			"KeepSidianLastSyncedDate: 2025-01-01T00:00:00.000Z",
+		].join("\n");
+
+		const result = buildFrontmatterWithSyncDate(
+			existingFrontmatter,
+			"2026-09-01T12:00:00.000Z",
+			"GoogleKeepColor: BLUE\nIncomingCustom: should-not-replace-user-frontmatter"
+		);
+
+		expect(result).toBe(
+			[
+				"# supporter comment",
+				"Custom:",
+				"  nested: value",
+				'Quoted: "01:02"',
+				"KeepSidianLastSyncedDate: 2026-09-01T12:00:00.000Z",
+				"GoogleKeepColor: BLUE",
+			].join("\n")
+		);
+	});
 });

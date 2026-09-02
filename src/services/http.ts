@@ -28,6 +28,24 @@ const getTextSafely = (response: ResponseLike): string => {
 	return typeof text === "string" ? text : "";
 };
 
+const parseRetryAfterMs = (headers?: Record<string, string>): number | undefined => {
+	const rawValue = Object.entries(headers ?? {}).find(([name]) => name.toLowerCase() === "retry-after")?.[1];
+	if (!rawValue) {
+		return undefined;
+	}
+
+	const seconds = Number(rawValue);
+	if (Number.isFinite(seconds) && seconds >= 0) {
+		return Math.min(seconds * 1_000, 60_000);
+	}
+
+	const retryAt = Date.parse(rawValue);
+	if (Number.isNaN(retryAt)) {
+		return undefined;
+	}
+	return Math.min(Math.max(0, retryAt - Date.now()), 60_000);
+};
+
 const callIfFunction = async <T>(
 	value: unknown,
 	response: ResponseLike
@@ -58,10 +76,7 @@ async function parseJsonDefensively<T>(response: ResponseLike): Promise<T> {
 	}
 }
 
-export async function httpRequest<T = unknown>(
-	url: string,
-	options: HttpRequestOptions = {}
-): Promise<T> {
+export async function httpRequest<T = unknown>(url: string, options: HttpRequestOptions = {}): Promise<T> {
 	const { method = "GET", headers = {}, body } = options;
 	const reqInit: RequestUrlParam = {
 		url,
@@ -83,9 +98,7 @@ export async function httpRequest<T = unknown>(
 		// Try to extract error message from body, but don't fail parsing again here
 		let errMsg = `Server returned status ${status}`;
 		try {
-			const errJson = await parseJsonDefensively<{ error?: unknown; message?: unknown }>(
-				asResponseLike(response)
-			);
+			const errJson = await parseJsonDefensively<{ error?: unknown; message?: unknown }>(asResponseLike(response));
 			const candidateMessage =
 				typeof errJson?.error === "string"
 					? errJson.error
@@ -104,10 +117,7 @@ export async function httpRequest<T = unknown>(
 	return await parseJsonDefensively<T>(asResponseLike(response));
 }
 
-export async function httpGetJson<T = unknown>(
-	url: string,
-	headers?: Record<string, string>
-): Promise<T> {
+export async function httpGetJson<T = unknown>(url: string, headers?: Record<string, string>): Promise<T> {
 	return httpRequest<T>(url, { method: "GET", headers });
 }
 
@@ -121,18 +131,12 @@ export async function httpPostJson<TRes = unknown, TReq = unknown>(
 
 // Returns the raw response without status checking. Useful for endpoints that
 // intentionally use 3xx or non-JSON payloads that the caller will handle.
-export async function httpGetRaw(
-	url: string,
-	headers?: Record<string, string>
-): Promise<RequestUrlResponse> {
+export async function httpGetRaw(url: string, headers?: Record<string, string>): Promise<RequestUrlResponse> {
 	return requestUrl({ url, method: "GET", headers });
 }
 
 // Fetch a binary payload as an ArrayBuffer with status checking.
-export async function httpGetArrayBuffer(
-	url: string,
-	headers?: Record<string, string>
-): Promise<ArrayBuffer> {
+export async function httpGetArrayBuffer(url: string, headers?: Record<string, string>): Promise<ArrayBuffer> {
 	const response = await requestUrl({ url, method: "GET", headers });
 	const responseLike = asResponseLike(response);
 	const statusRaw = responseLike.status;
@@ -157,14 +161,13 @@ export async function httpGetArrayBuffer(
 			} catch {
 				/* empty */
 			}
-			throw new NetworkError(errMsg, status);
+			const networkError = new NetworkError(errMsg, status);
+			networkError.retryAfterMs = parseRetryAfterMs(responseLike.headers);
+			throw networkError;
 		}
 	}
 	const maybe = responseLike.arrayBuffer;
-	const { hasValue, result } = await callIfFunction<ArrayBuffer>(
-		maybe,
-		responseLike
-	);
+	const { hasValue, result } = await callIfFunction<ArrayBuffer>(maybe, responseLike);
 	if (hasValue && result) {
 		return result;
 	}

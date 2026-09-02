@@ -130,14 +130,16 @@ describe("KeepSidian", function () {
 			initialMode?: SyncMode;
 			gateAllowed?: boolean;
 			supportCancel?: boolean;
+			attachmentWarnings?: number;
 		}
 	): Promise<void> => {
 		const runDelayMs = options?.runDelayMs ?? 500;
 		const initialMode = options?.initialMode ?? "import";
 		const gateAllowed = options?.gateAllowed ?? false;
 		const supportCancel = options?.supportCancel ?? false;
+		const attachmentWarnings = options?.attachmentWarnings ?? 0;
 		await browser.executeObsidian(
-			({ app }, preparedPlans, delayMs, requestedMode, allowGate, allowCancel) => {
+			({ app }, preparedPlans, delayMs, requestedMode, allowGate, allowCancel, warningCount) => {
 				type KeepSidianPluginWindow = Window & {
 					app?: {
 						plugins?: {
@@ -148,7 +150,8 @@ describe("KeepSidian", function () {
 									processedNotes: number;
 									totalNotes?: number | null;
 									success: boolean;
-									status?: "success" | "failed" | "canceled";
+									status?: "success" | "warning" | "failed" | "canceled";
+									attachmentWarnings?: number;
 									mode: SyncMode;
 								} | null;
 								settings?: {
@@ -157,11 +160,19 @@ describe("KeepSidian", function () {
 										processedNotes: number;
 										totalNotes?: number | null;
 										success: boolean;
-										status?: "success" | "failed" | "canceled";
+										status?: "success" | "warning" | "failed" | "canceled";
+										attachmentWarnings?: number;
 										mode: SyncMode;
 									} | null;
 								};
 								progressModal?: {
+									close?: () => void;
+									setComplete?: (
+										status: "success" | "warning" | "failed" | "canceled",
+										processed: number,
+										attachmentWarnings?: number
+									) => void;
+									setIdleSummary?: (summary: unknown) => void;
 									options?: {
 										buildSyncPlan?: (mode: SyncMode) => Promise<unknown>;
 										runSyncPlan?: (
@@ -250,6 +261,23 @@ describe("KeepSidian", function () {
 					for (const entry of selectableEntries) {
 						callbacks?.onEntrySettled?.(entry.id, true);
 					}
+					if (warningCount > 0) {
+						const summary = {
+							timestamp: Date.now(),
+							processedNotes: totalNotes,
+							totalNotes,
+							success: true,
+							status: "warning" as const,
+							attachmentWarnings: warningCount,
+							mode: activePlan.mode,
+						};
+						plugin.lastSyncSummary = summary;
+						if (plugin.settings) {
+							plugin.settings.lastSyncSummary = summary;
+						}
+						modal.setComplete?.("warning", totalNotes, warningCount);
+						modal.setIdleSummary?.(summary);
+					}
 					return {};
 				};
 			},
@@ -257,7 +285,8 @@ describe("KeepSidian", function () {
 			runDelayMs,
 			initialMode,
 			gateAllowed,
-			supportCancel
+			supportCancel,
+			attachmentWarnings
 		);
 	};
 
@@ -477,6 +506,37 @@ describe("KeepSidian", function () {
 		expect(await browser.$('//*[contains(normalize-space(.),"Created 1/1")]').isExisting()).toBe(true);
 		expect(await browser.$(buttonByText("Open sync log")).isExisting()).toBe(true);
 		expect(await browser.$(buttonByText("Close")).isExisting()).toBe(true);
+	});
+
+	it("shows a completed download with attachment warnings in the live Sync Center", async function () {
+		if (isAndroid()) {
+			this.skip();
+			return;
+		}
+
+		const seededPlan = createPreparedSyncPlanFixture("import", "import", [
+			createSyncPlanEntryFixture("create", "Create", {
+				id: "warning-1",
+				title: "E2E attachment warning note",
+				path: "Keep/E2E attachment warning note.md",
+			}),
+		]);
+
+		await openSeededSyncCenter(
+			{ import: seededPlan },
+			{ runDelayMs: 200, initialMode: "import", attachmentWarnings: 2 }
+		);
+		const startSyncButton = browser.$(buttonByText("Start sync"));
+		await startSyncButton.waitForExist({ timeout: 20000 });
+		await startSyncButton.click();
+		const executeButton = browser.$(buttonByText("Execute"));
+		await executeButton.waitForExist({ timeout: 20000 });
+		await executeButton.click();
+
+		const warningTitle = browser.$('//*[normalize-space(.)="Download complete with warnings"]');
+		await warningTitle.waitForExist({ timeout: 20000 });
+		expect(await browser.$('//*[contains(normalize-space(.),"2 attachment warnings")]').isExisting()).toBe(true);
+		await browser.saveScreenshot("/tmp/keepsidian-attachment-warning.png");
 	});
 
 	it("guards the review dialog against outside-click dismissal (desktop)", async function () {

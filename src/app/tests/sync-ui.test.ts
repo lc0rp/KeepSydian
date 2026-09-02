@@ -48,9 +48,7 @@ describe("status bar gating", () => {
 	});
 
 	it("opens the sync center when the status bar is clicked", () => {
-		const openSyncCenterSpy = jest
-			.spyOn(plugin, "openSyncCenter")
-			.mockImplementation(() => {});
+		const openSyncCenterSpy = jest.spyOn(plugin, "openSyncCenter").mockImplementation(() => {});
 		const handler = (statusBarItem.addEventListener as jest.Mock).mock.calls.find(
 			([eventName]) => eventName === "click"
 		)?.[1] as (evt: MouseEvent) => void;
@@ -134,5 +132,28 @@ describe("status bar gating", () => {
 			})
 		);
 		expect(plugin.statusTextEl?.textContent).toBe("Last sync canceled");
+	});
+
+	it("records a completed sync with attachment warnings as successful but distinct", () => {
+		const setMessage = jest.fn();
+		const NoticeMock = Notice as unknown as jest.Mock;
+		NoticeMock.mockImplementation(() => ({
+			hide: jest.fn(),
+			setMessage,
+		}));
+		startSyncUI(plugin);
+
+		finishSyncUI(plugin, "warning", 2);
+
+		expect(plugin.lastSyncSummary).toEqual(
+			expect.objectContaining({
+				success: true,
+				status: "warning",
+				attachmentWarnings: 2,
+			})
+		);
+		expect(plugin.statusTextEl?.textContent).toBe("Last sync completed with warnings");
+		expect(setMessage).toHaveBeenCalledWith("Synced Google Keep Notes with 2 attachment warnings.");
+		expect(plugin.progressContainerEl?.classList.contains("complete")).toBe(true);
 	});
 });

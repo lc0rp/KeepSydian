@@ -4,7 +4,7 @@ import { normalizeNote, PreNormalizedNote, extractFrontmatter } from "./domain/n
 import { handleDuplicateNotes } from "./domain/compare";
 import { mergeNoteText } from "./domain/merge";
 // Import via legacy google path so tests can spy on this module
-import { processAttachments } from "../keep/io/attachments";
+import { processAttachments, type AttachmentFailure } from "../keep/io/attachments";
 import type { NoteImportOptions } from "@ui/modals/NoteImportOptionsModal";
 import { CONFLICT_FILE_SUFFIX } from "./constants";
 import { buildFrontmatterWithSyncDate, wrapMarkdown } from "./frontmatter";
@@ -223,6 +223,12 @@ export interface SyncCallbacks {
 	reportProgress?: () => void;
 	reportPlanProgress?: (processed: number, total?: number) => void;
 	onEntrySettled?: (entryId: string, success: boolean) => void;
+	onAttachmentWarning?: (warning: SyncAttachmentWarning) => void;
+}
+
+export interface SyncAttachmentWarning extends AttachmentFailure {
+	noteTitle: string;
+	notePath: string;
 }
 
 interface FetchImportNotesResult {
@@ -713,7 +719,8 @@ export async function processAndSaveNotes(
 							},
 							async (folderPath: string) => {
 								await ensureFolderCached(folderPath);
-							}
+							},
+							(warning: SyncAttachmentWarning) => callbacks?.onAttachmentWarning?.(warning)
 						)
 					);
 					batchMetrics.processed += 1;
@@ -810,7 +817,8 @@ export async function processAndSaveNote(
 	ensureParentFolderForPath: (filePath: string) => Promise<void> = async (filePath: string) =>
 		await ensureParentFolderForFile(plugin.app, filePath),
 	ensureFolderForPath: (folderPath: string) => Promise<void> = async (folderPath: string) =>
-		await ensureFolder(plugin.app, folderPath)
+		await ensureFolder(plugin.app, folderPath),
+	onAttachmentWarning?: (warning: SyncAttachmentWarning) => void
 ): Promise<NoteSaveMetrics> {
 	const metrics: NoteSaveMetrics = {
 		action: "created",
@@ -969,6 +977,7 @@ export async function processAndSaveNote(
 				compareDurationMs = 0,
 				writeDurationMs = 0,
 				fileNames = [],
+				failures = [],
 			} = await processAttachments(
 				plugin.app,
 				normalizedNote.blob_urls,
@@ -983,6 +992,15 @@ export async function processAndSaveNote(
 			metrics.attachmentFetchDurationMs += fetchDurationMs;
 			metrics.attachmentCompareDurationMs += compareDurationMs;
 			metrics.attachmentWriteDurationMs += writeDurationMs;
+			for (const failure of failures) {
+				const statusLabel = typeof failure.status === "number" ? ` (${failure.status})` : "";
+				await logNote(`${noteLink} - attachment warning${statusLabel}: ${failure.message} (${failure.url})`);
+				onAttachmentWarning?.({
+					...failure,
+					noteTitle,
+					notePath: normalizePathSafe(noteFilePath),
+				});
+			}
 			if (plugin.settings.embedImportedImages && fileNames.length > 0) {
 				const existingNoteContent = await plugin.app.vault.adapter.read(noteFilePath);
 				const [existingFrontmatter, existingBody] = extractFrontmatter(existingNoteContent);

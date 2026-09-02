@@ -19,11 +19,18 @@ interface AppLike {
 export interface ProcessAttachmentsResult {
 	downloaded: number;
 	skippedIdentical: number;
+	failures: AttachmentFailure[];
 	totalDurationMs: number;
 	fetchDurationMs: number;
 	compareDurationMs: number;
 	writeDurationMs: number;
 	fileNames: string[];
+}
+
+export interface AttachmentFailure {
+	url: string;
+	message: string;
+	status?: number;
 }
 
 interface AttachmentRequestHeaders {
@@ -33,7 +40,7 @@ interface AttachmentRequestHeaders {
 
 const ATTACHMENT_FETCH_MAX_ATTEMPTS = 3;
 const ATTACHMENT_FETCH_INITIAL_RETRY_DELAY_MS = 750;
-const ATTACHMENT_FETCH_RETRYABLE_STATUSES = new Set([403, 408, 425, 429, 500, 502, 503, 504]);
+const ATTACHMENT_FETCH_RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 function getNowMs(): number {
 	if (typeof performance !== "undefined" && typeof performance.now === "function") {
@@ -165,6 +172,20 @@ function isRetryableAttachmentFetchError(error: unknown): boolean {
 	);
 }
 
+function toAttachmentFailure(url: string, error: unknown): AttachmentFailure {
+	if (error instanceof NetworkError) {
+		return {
+			url,
+			message: error.message,
+			...(typeof error.status === "number" ? { status: error.status } : {}),
+		};
+	}
+	return {
+		url,
+		message: error instanceof Error ? error.message : String(error),
+	};
+}
+
 async function fetchAttachmentBlob(url: string, headers?: Record<string, string>): Promise<ArrayBuffer> {
 	let retryDelayMs = ATTACHMENT_FETCH_INITIAL_RETRY_DELAY_MS;
 	for (let attempt = 1; attempt <= ATTACHMENT_FETCH_MAX_ATTEMPTS; attempt += 1) {
@@ -175,12 +196,14 @@ async function fetchAttachmentBlob(url: string, headers?: Record<string, string>
 			if (!shouldRetry) {
 				throw error;
 			}
+			const serverRetryDelayMs = error instanceof NetworkError ? error.retryAfterMs : undefined;
+			const effectiveRetryDelayMs = Math.max(retryDelayMs, serverRetryDelayMs ?? 0);
 			console.warn(
-				`Retrying attachment download in ${retryDelayMs}ms (attempt ${attempt}/${ATTACHMENT_FETCH_MAX_ATTEMPTS}) for ${url}`,
+				`Retrying attachment download in ${effectiveRetryDelayMs}ms (attempt ${attempt}/${ATTACHMENT_FETCH_MAX_ATTEMPTS}) for ${url}`,
 				error
 			);
-			await sleep(retryDelayMs);
-			retryDelayMs *= 2;
+			await sleep(effectiveRetryDelayMs);
+			retryDelayMs = effectiveRetryDelayMs * 2;
 		}
 	}
 	throw new Error(`Attachment download retry loop exhausted for ${url}`);
@@ -196,6 +219,7 @@ export async function processAttachments(
 	const result: ProcessAttachmentsResult = {
 		downloaded: 0,
 		skippedIdentical: 0,
+		failures: [],
 		totalDurationMs: 0,
 		fetchDurationMs: 0,
 		compareDurationMs: 0,
@@ -268,7 +292,7 @@ export async function processAttachments(
 			result.fileNames.push(resolvedFileName);
 		} catch (error) {
 			console.error(error);
-			throw new Error(`Failed to download blob from ${blob_url}.`);
+			result.failures.push(toAttachmentFailure(blob_url, error));
 		}
 	}
 
