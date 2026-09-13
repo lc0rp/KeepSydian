@@ -24,6 +24,10 @@ export interface KeepSidianPluginSettings {
 	email: string;
 	token: string;
 	syncTokenSecretId: string;
+	supporterKey?: string;
+	supporterKeySecretId: string;
+	supporterKeyConfigured: boolean;
+	supporterKeyIdentity?: string;
 	saveLocation: string;
 	saveLocationMode: SaveLocationMode;
 	noteFileNamePattern: string;
@@ -61,6 +65,10 @@ export const DEFAULT_SETTINGS: KeepSidianPluginSettings = {
 	email: "",
 	token: "",
 	syncTokenSecretId: "google-sync-token",
+	supporterKey: undefined,
+	supporterKeySecretId: "keepsidian-supporter-key",
+	supporterKeyConfigured: false,
+	supporterKeyIdentity: undefined,
 	saveLocation: NEW_INSTALL_SAVE_LOCATION,
 	saveLocationMode: DEFAULT_SAVE_LOCATION_MODE,
 	noteFileNamePattern: DEFAULT_NOTE_FILE_NAME_PATTERN,

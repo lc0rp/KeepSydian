@@ -9,6 +9,8 @@ import { SubscriptionService } from "../../services/subscription";
 import { KeepSidianSettingsTab } from "../../ui/settings/KeepSidianSettingsTab";
 import { registerCommands, registerRibbonIcon } from "../../app/commands";
 import * as LoggingModule from "../../app/logging";
+import { clearSupporterKeyFromSecretStorage } from "../../app/main-secret-storage";
+import { createSupporterKeyIdentity } from "../../services/supporter-key";
 
 describe("KeepSidianPlugin", () => {
 	let plugin: KeepSidianPlugin;
@@ -709,6 +711,133 @@ describe("KeepSidianPlugin", () => {
 	});
 
 	describe("secret storage migration", () => {
+		it("loads a configured supporter key from Secret Storage", async () => {
+			const getSecret = jest.fn((id: string) => (id === "keepsidian-supporter-key" ? "ABCD-EFGH-IJKL-MN12" : null));
+			plugin.app = {
+				workspace: {},
+				vault: {},
+				secretStorage: {
+					setSecret: jest.fn(),
+					getSecret,
+				},
+			} as unknown as Plugin["app"];
+			plugin.loadData = jest.fn().mockResolvedValue({
+				...DEFAULT_SETTINGS,
+				supporterKeyConfigured: true,
+				supporterKeyIdentity: "saved-key-identity",
+			});
+
+			await plugin.loadSettings();
+
+			expect(getSecret).toHaveBeenCalledWith("keepsidian-supporter-key");
+			expect(plugin.settings.supporterKey).toBe("ABCD-EFGH-IJKL-MN12");
+			expect(plugin.settings.supporterKeyConfigured).toBe(true);
+		});
+
+		it("fails closed when a configured supporter key cannot be read", async () => {
+			plugin.app = {
+				workspace: {},
+				vault: {},
+				secretStorage: {
+					setSecret: jest.fn(),
+					getSecret: jest.fn().mockReturnValue(null),
+				},
+			} as unknown as Plugin["app"];
+			plugin.loadData = jest.fn().mockResolvedValue({
+				...DEFAULT_SETTINGS,
+				supporterKeyConfigured: true,
+				supporterKeyIdentity: "saved-key-identity",
+				subscriptionCache: {
+					info: { subscription_status: "active" },
+					timestamp: Date.now(),
+					identity: "supporter-key:saved-key-identity",
+				},
+			});
+
+			await plugin.loadSettings();
+
+			expect(plugin.settings.supporterKey).toBe("");
+			expect(plugin.settings.supporterKeyConfigured).toBe(true);
+			expect(plugin.settings.subscriptionCache).toBeUndefined();
+		});
+
+		it("drops an active cache when the Secret Storage key changed outside the plugin", async () => {
+			const oldKey = "ABCD-EFGH-IJKL-MN12";
+			const newKey = "WXYZ-9876-QRST-5432";
+			const oldIdentity = createSupporterKeyIdentity(oldKey);
+			plugin.app = {
+				workspace: {},
+				vault: {},
+				secretStorage: {
+					setSecret: jest.fn(),
+					getSecret: jest.fn((id: string) => (id === "keepsidian-supporter-key" ? newKey : null)),
+				},
+			} as unknown as Plugin["app"];
+			plugin.loadData = jest.fn().mockResolvedValue({
+				...DEFAULT_SETTINGS,
+				supporterKeyConfigured: true,
+				supporterKeyIdentity: oldIdentity,
+				subscriptionCache: {
+					info: { subscription_status: "active" },
+					timestamp: Date.now(),
+					identity: `supporter-key:${oldIdentity}`,
+				},
+			});
+
+			await plugin.loadSettings();
+
+			expect(plugin.settings.supporterKey).toBe(newKey);
+			expect(plugin.settings.supporterKeyIdentity).toBe(createSupporterKeyIdentity(newKey));
+			expect(plugin.settings.subscriptionCache).toBeUndefined();
+		});
+
+		it("keeps a configured key when clear readback throws", () => {
+			let readCount = 0;
+			const setSecret = jest.fn();
+			plugin.app = {
+				workspace: {},
+				vault: {},
+				secretStorage: {
+					setSecret,
+					getSecret: jest.fn(() => {
+						readCount += 1;
+						if (readCount > 1) {
+							throw new Error("readback unavailable");
+						}
+						return "ABCD-EFGH-IJKL-MN12";
+					}),
+				},
+			} as unknown as Plugin["app"];
+			plugin.settings = {
+				...DEFAULT_SETTINGS,
+				supporterKey: "ABCD-EFGH-IJKL-MN12",
+				supporterKeyConfigured: true,
+			};
+
+			const result = clearSupporterKeyFromSecretStorage(plugin);
+
+			expect(result).toEqual({ success: false, reason: "readback-failed" });
+			expect(setSecret).toHaveBeenNthCalledWith(1, "keepsidian-supporter-key", "");
+			expect(setSecret).toHaveBeenNthCalledWith(2, "keepsidian-supporter-key", "ABCD-EFGH-IJKL-MN12");
+			expect(plugin.settings.supporterKeyConfigured).toBe(true);
+			expect(plugin.settings.supporterKey).toBe("ABCD-EFGH-IJKL-MN12");
+		});
+
+		it("never persists a supporter key when Secret Storage is unavailable", async () => {
+			plugin.settings = {
+				...DEFAULT_SETTINGS,
+				supporterKey: "ABCD-EFGH-IJKL-MN12",
+				supporterKeyConfigured: true,
+				supporterKeyIdentity: "opaque-key-identity",
+			};
+
+			await plugin.saveSettings();
+
+			const persisted = (plugin.saveData as jest.Mock).mock.calls[0]?.[0] as Record<string, unknown>;
+			expect(Object.prototype.hasOwnProperty.call(persisted, "supporterKey")).toBe(false);
+			expect(persisted.supporterKeyIdentity).toBe("opaque-key-identity");
+		});
+
 		it("migrates legacy plaintext sync token into secret storage on load", async () => {
 			const setSecret = jest.fn();
 			const getSecret = jest.fn().mockReturnValue("legacy-sync-token");

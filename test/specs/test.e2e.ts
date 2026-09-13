@@ -32,6 +32,11 @@ describe("KeepSidian", function () {
 
 	const openKeepSidianSettingsTab = async (): Promise<void> => {
 		await completeMobileOnboardingIfNeeded();
+		const feedbackModal = browser.$(".keepsidian-feedback-modal");
+		if (await feedbackModal.isExisting()) {
+			await feedbackModal.$(exactButtonByText("Maybe later")).click();
+			await feedbackModal.waitForExist({ reverse: true, timeout: 20000 });
+		}
 
 		const settingsCommandId = await browser.execute(() => {
 			type ObsidianWindow = Window & {
@@ -56,13 +61,31 @@ describe("KeepSidian", function () {
 		}
 
 		await browser.executeObsidianCommand(settingsCommandId);
-
 		await browser.executeObsidian(({ app }) => {
 			const settingManager = app?.setting;
+			settingManager?.open?.();
 			if (settingManager?.openTabById) {
 				settingManager.openTabById("keepsidian");
+			} else if (settingManager?.openSettingTab) {
+				settingManager.openSettingTab("keepsidian");
 			}
 		});
+		await browser.waitUntil(
+			async () => {
+				const handles = await browser.getWindowHandles();
+				if (handles.length === 1) {
+					return true;
+				}
+				for (const handle of handles) {
+					await browser.switchToWindow(handle);
+					if ((await browser.getTitle()).toLowerCase().includes("settings")) {
+						return true;
+					}
+				}
+				return false;
+			},
+			{ timeout: 20000, interval: 250, timeoutMsg: "Could not find the Obsidian settings window" }
+		);
 
 		const emailSetting = browser.$('//*[contains(@class,"setting-item-name") and normalize-space(.)="Email"]');
 		await emailSetting.waitForExist({ timeout: 20000 });
@@ -339,9 +362,7 @@ describe("KeepSidian", function () {
 		expect(await modal.$$("iframe, script[src], img[src], link[href]")).toBeElementsArrayOfSize(0);
 
 		const feedbackLink = modal.$('a[data-keepsidian-link="feedback-survey"]');
-		expect(await feedbackLink.getAttribute("href")).toBe(
-			"https://forms.gle/pVs8GtohFWmqs5F4A"
-		);
+		expect(await feedbackLink.getAttribute("href")).toBe("https://forms.gle/pVs8GtohFWmqs5F4A");
 		expect(await feedbackLink.getAttribute("target")).toBe("_blank");
 
 		await browser.saveScreenshot("/tmp/keepsidian-feedback-survey.png");
@@ -768,5 +789,158 @@ describe("KeepSidian", function () {
 		await completeTitle.waitForExist({ timeout: 20000 });
 		expect(await browser.$('//*[contains(normalize-space(.),"Uploaded 1/1")]').isExisting()).toBe(true);
 		expect(await browser.$('//*[contains(normalize-space(.),"Already up to date 1/1")]').isExisting()).toBe(true);
+	});
+
+	it("applies, rejects a replacement, and removes a supporter key in settings (desktop)", async function () {
+		if (isAndroid()) {
+			this.skip();
+			return;
+		}
+
+		const acceptedKey = "ABCD-EFGH-IJKL-MN12";
+		await browser.executeObsidian(async ({ app }, validKey) => {
+			type SubscriptionInfoLike = {
+				subscription_status: "active" | "inactive";
+				plan_details: { plan_id: string; features: string[] };
+				metering_info: null;
+				trial_or_promo: null;
+			};
+			type PluginLike = {
+				settings: {
+					email: string;
+					supporterKey?: string;
+					supporterKeyConfigured: boolean;
+					supporterKeyIdentity?: string;
+					subscriptionCache?: unknown;
+				};
+				subscriptionService: {
+					isSubscriptionActive: (forceRefresh?: boolean) => Promise<boolean>;
+					checkSubscription: (forceRefresh?: boolean) => Promise<SubscriptionInfoLike>;
+					validateSupporterKey: (key: string) => Promise<SubscriptionInfoLike>;
+					primeCurrentCache: (info: SubscriptionInfoLike) => Promise<void>;
+				};
+				invalidateSubscriptionIdentity: () => void;
+				saveSettings: () => Promise<void>;
+			};
+
+			const plugin = app.plugins.getPlugin("keepsidian") as PluginLike | undefined;
+			if (!plugin) {
+				throw new Error("KeepSidian plugin is unavailable");
+			}
+			app.secretStorage.setSecret("keepsidian-supporter-key", "");
+			plugin.settings.supporterKey = undefined;
+			plugin.settings.supporterKeyConfigured = false;
+			plugin.settings.supporterKeyIdentity = undefined;
+			plugin.invalidateSubscriptionIdentity();
+
+			const activeInfo: SubscriptionInfoLike = {
+				subscription_status: "active",
+				plan_details: { plan_id: "e2e", features: [] },
+				metering_info: null,
+				trial_or_promo: null,
+			};
+			const inactiveInfo: SubscriptionInfoLike = {
+				...activeInfo,
+				subscription_status: "inactive",
+			};
+			plugin.subscriptionService.isSubscriptionActive = async () => plugin.settings.supporterKeyConfigured;
+			plugin.subscriptionService.checkSubscription = async () =>
+				plugin.settings.supporterKeyConfigured ? activeInfo : inactiveInfo;
+			plugin.subscriptionService.validateSupporterKey = async (key) => (key === validKey ? activeInfo : inactiveInfo);
+			plugin.subscriptionService.primeCurrentCache = async () => undefined;
+			await plugin.saveSettings();
+		}, acceptedKey);
+
+		await openKeepSidianSettingsTab();
+		const syncIntervalSelector =
+			'//*[contains(@class,"setting-item-name") and normalize-space(.)="Sync interval (hours)"]/ancestor::*[contains(@class,"setting-item")]//input';
+		expect(await browser.$(syncIntervalSelector).isEnabled()).toBe(false);
+		const keyEditor = browser.$('[data-keepsidian-supporter-key-editor="true"]');
+		expect(await keyEditor.isDisplayed()).toBe(false);
+		const useKeyButton = browser.$(exactButtonByText("Use key"));
+		await useKeyButton.waitForExist({ timeout: 20000 });
+		await useKeyButton.click();
+
+		const keyInput = browser.$('input[data-keepsidian-supporter-key-input="true"]');
+		await keyInput.waitForDisplayed({ timeout: 20000 });
+		expect(await keyInput.getAttribute("type")).toBe("password");
+		await keyInput.setValue("abcd efgh-ijkl mn12");
+		expect(await keyInput.getValue()).toBe(acceptedKey);
+		await browser.$(exactButtonByText("Apply key")).click();
+
+		const activeStatus = browser.$('//*[contains(normalize-space(.),"Active supporter (Plan: e2e)")]');
+		await activeStatus.waitForExist({ timeout: 20000 });
+		expect(await browser.$(syncIntervalSelector).isEnabled()).toBe(true);
+		const appliedState = await browser.execute(async () => {
+			type AppWindow = Window & {
+				app?: {
+					plugins: { getPlugin: (id: string) => unknown };
+					secretStorage: { getSecret: (id: string) => string | null };
+				};
+			};
+			const app = (window as AppWindow).app ?? (window.opener as AppWindow | null)?.app;
+			if (!app) {
+				throw new Error("Obsidian app is unavailable from the settings window");
+			}
+			const plugin = app.plugins.getPlugin("keepsidian") as
+				| {
+						settings?: { supporterKeyConfigured?: boolean };
+						loadData?: () => Promise<Record<string, unknown>>;
+				  }
+				| undefined;
+			return {
+				storedKey: app.secretStorage.getSecret("keepsidian-supporter-key"),
+				configured: plugin?.settings?.supporterKeyConfigured,
+				persisted: await plugin?.loadData?.(),
+			};
+		});
+		expect(appliedState.storedKey).toBe(acceptedKey);
+		expect(appliedState.configured).toBe(true);
+		expect(appliedState.persisted).not.toHaveProperty("supporterKey");
+
+		await browser.$(exactButtonByText("Replace key")).click();
+		const replacementInput = browser.$('input[data-keepsidian-supporter-key-input="true"]');
+		await replacementInput.waitForDisplayed({ timeout: 20000 });
+		await replacementInput.setValue("WXYZ-9876-QRST-5432");
+		await browser.$(exactButtonByText("Apply key")).click();
+		const rejectedNotice = browser.$(
+			'//*[contains(@class,"notice") and contains(normalize-space(.),"not linked to an active subscription")]'
+		);
+		await rejectedNotice.waitForExist({ timeout: 20000 });
+		const keyAfterRejectedReplacement = await browser.execute(() => {
+			type AppWindow = Window & {
+				app?: { secretStorage: { getSecret: (id: string) => string | null } };
+			};
+			const app = (window as AppWindow).app ?? (window.opener as AppWindow | null)?.app;
+			return app?.secretStorage.getSecret("keepsidian-supporter-key");
+		});
+		expect(keyAfterRejectedReplacement).toBe(acceptedKey);
+
+		await browser.$(exactButtonByText("Remove key")).click();
+		await browser.$(exactButtonByText("Use key")).waitForExist({ timeout: 20000 });
+		expect(await browser.$(syncIntervalSelector).isEnabled()).toBe(false);
+		const removedState = await browser.execute(() => {
+			type AppWindow = Window & {
+				app?: {
+					plugins: { getPlugin: (id: string) => unknown };
+					secretStorage: { getSecret: (id: string) => string | null };
+				};
+			};
+			const app = (window as AppWindow).app ?? (window.opener as AppWindow | null)?.app;
+			if (!app) {
+				throw new Error("Obsidian app is unavailable from the settings window");
+			}
+			const plugin = app.plugins.getPlugin("keepsidian") as
+				| { settings?: { supporterKeyConfigured?: boolean; supporterKey?: string } }
+				| undefined;
+			return {
+				storedKey: app.secretStorage.getSecret("keepsidian-supporter-key"),
+				configured: plugin?.settings?.supporterKeyConfigured,
+				runtimeKey: plugin?.settings?.supporterKey,
+			};
+		});
+		expect(removedState.storedKey ?? "").toBe("");
+		expect(removedState.configured).toBe(false);
+		expect(removedState.runtimeKey).toBeNull();
 	});
 });

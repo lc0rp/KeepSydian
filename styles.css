@@ -71,6 +71,16 @@ If your plugin does not need CSS, delete this file.
 	padding-right: 16px;
 }
 
+.keepsidian-supporter-key-editor[hidden] {
+	display: none;
+}
+
+.keepsidian-supporter-key-input {
+	width: 15em;
+	min-width: min(15em, 100%);
+	max-width: 100%;
+}
+
 .premium-features-list {
 	margin: 12px 0;
 	padding-left: 24px;

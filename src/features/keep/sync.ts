@@ -473,10 +473,20 @@ export async function buildImportSyncPlan(
 	downloadScope?: DownloadScope
 ): Promise<BuiltImportSyncPlan> {
 	const { email, token } = plugin.settings;
+	const supporterKey = plugin.settings.supporterKeyConfigured ? (plugin.settings.supporterKey ?? "") : undefined;
 	const fetchFunction =
 		options !== undefined
 			? (offset: number, limit: number, filters?: SyncFilters, cursor?: string) =>
-					apiFetchNotesWithPremium(email, token, convertOptionsToFeatureFlags(options), offset, limit, filters, cursor)
+					apiFetchNotesWithPremium(
+						email,
+						token,
+						convertOptionsToFeatureFlags(options),
+						offset,
+						limit,
+						filters,
+						cursor,
+						supporterKey
+					)
 			: (offset: number, limit: number, filters?: SyncFilters, cursor?: string) =>
 					apiFetchNotes(email, token, offset, limit, filters, cursor);
 	const fetched = await fetchImportNotesBase(plugin, fetchFunction, callbacks, downloadScope);
@@ -568,10 +578,11 @@ export async function importGoogleKeepNotesWithOptions(
 ): Promise<number> {
 	const featureFlags = convertOptionsToFeatureFlags(options);
 	const { email, token } = plugin.settings;
+	const supporterKey = plugin.settings.supporterKeyConfigured ? (plugin.settings.supporterKey ?? "") : undefined;
 	return await importGoogleKeepNotesBase(
 		plugin,
 		(offset, limit, filters, cursor) =>
-			apiFetchNotesWithPremium(email, token, featureFlags, offset, limit, filters, cursor),
+			apiFetchNotesWithPremium(email, token, featureFlags, offset, limit, filters, cursor, supporterKey),
 		callbacks,
 		downloadScope
 	);

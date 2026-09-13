@@ -1,28 +1,29 @@
 export type TrialOrPromoDetails = null | Record<string, unknown>;
 
 export interface SubscriptionInfo {
-  subscription_status: 'active' | 'inactive' | 'expired';
-  plan_details: {
-    plan_id: string;
-    features: string[];
-  };
-  metering_info: {
-    usage: number;
-    limit: number;
-  };
-  trial_or_promo: TrialOrPromoDetails;
+	subscription_status: "active" | "inactive" | "expired";
+	plan_details: {
+		plan_id: string;
+		features: string[];
+	};
+	metering_info: {
+		usage: number;
+		limit: number;
+	};
+	trial_or_promo: TrialOrPromoDetails;
 }
 
 export interface SubscriptionCache {
-  info: SubscriptionInfo;
-  timestamp: number;
-  email: string;
+	info: SubscriptionInfo;
+	timestamp: number;
+	email?: string;
+	identity?: string;
 }
 
 export interface SubscriptionStatus {
-    isActive: boolean;
-    expiresAt?: Date;
-    plan?: 'basic' | 'premium';
+	isActive: boolean;
+	expiresAt?: Date;
+	plan?: "basic" | "premium";
 }
 
 export type KeepPinnedStatus = "all" | "pinned" | "unpinned";
@@ -63,9 +64,7 @@ export function getEffectiveKeepColorValues(selectedColors: string[]): KeepColor
 
 export function normalizeKeepColorSelection(selectedColors: Iterable<string>): string[] {
 	const allowed = new Set(selectedColors);
-	const normalizedColors = KEEP_COLOR_OPTIONS.map(({ value }) => value).filter((value) =>
-		allowed.has(value)
-	);
+	const normalizedColors = KEEP_COLOR_OPTIONS.map(({ value }) => value).filter((value) => allowed.has(value));
 
 	if (normalizedColors.length === KEEP_COLOR_OPTIONS.length) {
 		return [];
@@ -91,31 +90,31 @@ export function formatKeepColorSummary(selectedColors: string[]): string {
 }
 
 export interface PremiumFeatureSettings {
-    autoSync: boolean;
-    syncIntervalMinutes: number;
-    includeNotesTerms: string[];
-    excludeNotesTerms: string[];
-    includeColors: string[];
-    pinnedStatus: KeepPinnedStatus;
-    archivedStatus: KeepArchivedStatus;
-    updateTitle: boolean;
-    suggestTags: boolean;
-    maxTags: number;
-    tagPrefix: string;
-    limitToExistingTags: boolean;
-} 
+	autoSync: boolean;
+	syncIntervalMinutes: number;
+	includeNotesTerms: string[];
+	excludeNotesTerms: string[];
+	includeColors: string[];
+	pinnedStatus: KeepPinnedStatus;
+	archivedStatus: KeepArchivedStatus;
+	updateTitle: boolean;
+	suggestTags: boolean;
+	maxTags: number;
+	tagPrefix: string;
+	limitToExistingTags: boolean;
+}
 
 export const DEFAULT_PREMIUM_FEATURES: PremiumFeatureSettings = {
-    autoSync: false,
-    syncIntervalMinutes: 5,
-    includeNotesTerms: [],
-    excludeNotesTerms: [],
-    includeColors: [],
-    pinnedStatus: "all",
-    archivedStatus: "active-only",
-    updateTitle: false,
-    suggestTags: false,
-    maxTags: 5,
-    tagPrefix: '',
-    limitToExistingTags: false
-}
+	autoSync: false,
+	syncIntervalMinutes: 5,
+	includeNotesTerms: [],
+	excludeNotesTerms: [],
+	includeColors: [],
+	pinnedStatus: "all",
+	archivedStatus: "active-only",
+	updateTitle: false,
+	suggestTags: false,
+	maxTags: 5,
+	tagPrefix: "",
+	limitToExistingTags: false,
+};

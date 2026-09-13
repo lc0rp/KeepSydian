@@ -98,17 +98,39 @@ describe("pushGoogleKeepNotes", () => {
 		const pushed = await pushGoogleKeepNotes(plugin);
 
 		expect(pushed).toBe(1);
-		expect(apiPushNotes).toHaveBeenCalledWith(email, token, [
-			expect.objectContaining({
-				path: "note.md",
-				content: expect.stringContaining("content"),
-			}),
-		]);
+		expect(apiPushNotes).toHaveBeenCalledWith(
+			email,
+			token,
+			[
+				expect.objectContaining({
+					path: "note.md",
+					content: expect.stringContaining("content"),
+				}),
+			],
+			undefined
+		);
 		expect(adapter.write).toHaveBeenCalledWith(
 			"Keep/note.md",
 			expect.stringContaining("KeepSidianLastSyncedDate: 2024-02-01T00:00:00.000Z")
 		);
 		expect(Notice).toHaveBeenCalledWith("Pushed Google Keep notes.");
+	});
+
+	it("propagates a configured supporter key to upload requests", async () => {
+		jest.useFakeTimers().setSystemTime(new Date("2024-02-01T00:00:00Z"));
+		const { plugin, adapter } = createPlugin();
+		plugin.settings.supporterKeyConfigured = true;
+		plugin.settings.supporterKey = "ABCD-EFGH-IJKL-MN12";
+		adapter.list.mockResolvedValue({ files: ["Keep/note.md"], folders: [] });
+		adapter.read.mockResolvedValue(`---\nKeepSidianLastSyncedDate: 2024-01-01T00:00:00.000Z\n---\ncontent`);
+		adapter.stat.mockResolvedValue({ mtime: new Date("2024-01-05T00:00:00Z").getTime() });
+		(apiPushNotes as jest.Mock).mockResolvedValue({
+			results: [{ path: "note.md", success: true }],
+		});
+
+		await pushGoogleKeepNotes(plugin);
+
+		expect(apiPushNotes).toHaveBeenCalledWith(email, token, expect.any(Array), "ABCD-EFGH-IJKL-MN12");
 	});
 
 	it("skips notes when mtime diff is below a second", async () => {
@@ -193,12 +215,17 @@ describe("pushGoogleKeepNotes", () => {
 
 		expect(pushed).toBe(1);
 		expect(adapter.list).toHaveBeenCalledWith("Keep");
-		expect(apiPushNotes).toHaveBeenCalledWith(email, token, [
-			expect.objectContaining({
-				path: "note.md",
-				content: expect.stringContaining("content"),
-			}),
-		]);
+		expect(apiPushNotes).toHaveBeenCalledWith(
+			email,
+			token,
+			[
+				expect.objectContaining({
+					path: "note.md",
+					content: expect.stringContaining("content"),
+				}),
+			],
+			undefined
+		);
 	});
 
 	it("builds an upload review plan with actionable and skipped rows", async () => {

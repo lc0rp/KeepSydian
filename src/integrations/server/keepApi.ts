@@ -64,12 +64,16 @@ export interface SyncFilters {
 	updated_lt?: string;
 }
 
-function buildSyncQuery(
-	offset: number,
-	limit: number,
-	filters?: SyncFilters,
-	cursor?: string
-): string {
+function withSupporterKey(headers: Record<string, string>, supporterKey?: string): Record<string, string> {
+	return supporterKey === undefined
+		? headers
+		: {
+				...headers,
+				"X-Supporter-Key": supporterKey,
+			};
+}
+
+function buildSyncQuery(offset: number, limit: number, filters?: SyncFilters, cursor?: string): string {
 	const params = new URLSearchParams();
 	params.set("limit", String(limit));
 
@@ -128,15 +132,19 @@ export async function fetchNotesWithPremiumFeatures(
 	offset = 0,
 	limit = 100,
 	filters?: SyncFilters,
-	cursor?: string
+	cursor?: string,
+	supporterKey?: string
 ): Promise<GoogleKeepImportResponse> {
 	const query = buildSyncQuery(offset, limit, filters, cursor);
 	const url = `${KEEPSIDIAN_SERVER_URL}/keep/sync/premium/v2?${query}`;
-	const headers = {
-		"Content-Type": "application/json",
-		"X-User-Email": email,
-		Authorization: `Bearer ${token}`,
-	};
+	const headers = withSupporterKey(
+		{
+			"Content-Type": "application/json",
+			"X-User-Email": email,
+			Authorization: `Bearer ${token}`,
+		},
+		supporterKey
+	);
 	// Validate outgoing feature flags (throws on invalid shape)
 	const validatedFlags = PremiumFeatureFlagsSchema.parse(featureFlags);
 	const raw = await httpPostJson<unknown, { feature_flags: PremiumFeatureFlags }>(
@@ -151,19 +159,19 @@ export async function fetchNotesWithPremiumFeatures(
 export async function pushNotes(
 	email: string,
 	token: string,
-	notes: PushNotePayload[]
+	notes: PushNotePayload[],
+	supporterKey?: string
 ): Promise<PushNotesResponse> {
 	const url = `${KEEPSIDIAN_SERVER_URL}/keep/push`;
-	const headers = {
-		"Content-Type": "application/json",
-		"X-User-Email": email,
-		Authorization: `Bearer ${token}`,
-	};
-	return await httpPostJson<PushNotesResponse, { notes: PushNotePayload[] }>(
-		url,
-		{ notes },
-		headers
+	const headers = withSupporterKey(
+		{
+			"Content-Type": "application/json",
+			"X-User-Email": email,
+			Authorization: `Bearer ${token}`,
+		},
+		supporterKey
 	);
+	return await httpPostJson<PushNotesResponse, { notes: PushNotePayload[] }>(url, { notes }, headers);
 }
 
 // Kept for backward compatibility and tests that use it directly

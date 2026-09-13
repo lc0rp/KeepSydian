@@ -1,18 +1,28 @@
-import { Setting } from "obsidian";
+import { Notice, Setting } from "obsidian";
 import KeepSidianPlugin from "main";
 import { KEEPSIDIAN_SERVER_URL } from "../../config";
 import { formatKeepColorSummary } from "../../types/subscription";
 import { KeepColorPickerModal } from "../modals/KeepColorPickerModal";
+import {
+	clearSupporterKeyFromSecretStorage,
+	isSecretStorageAvailable,
+	storeSupporterKeyInSecretStorage,
+} from "@app/main-secret-storage";
+import { createSupporterKeyIdentity, formatSupporterKeyInput, normalizeSupporterKey } from "@services/supporter-key";
+import { NetworkError } from "@services/errors";
+import type { SubscriptionInfo } from "@types";
 
 export class SubscriptionSettingsTab {
 	private containerEl: HTMLElement;
 	private sectionEl: HTMLDivElement;
 	private plugin: KeepSidianPlugin;
+	private onSupporterIdentityChanged?: () => Promise<void>;
 
-	constructor(containerEl: HTMLElement, plugin: KeepSidianPlugin) {
+	constructor(containerEl: HTMLElement, plugin: KeepSidianPlugin, onSupporterIdentityChanged?: () => Promise<void>) {
 		this.containerEl = containerEl;
 		this.sectionEl = containerEl.createDiv({ cls: "keepsidian-subscription-settings" });
 		this.plugin = plugin;
+		this.onSupporterIdentityChanged = onSupporterIdentityChanged;
 	}
 
 	async display(forceRefresh = false): Promise<void> {
@@ -43,9 +53,7 @@ export class SubscriptionSettingsTab {
 			setting.setDisabled(disabled);
 			const actionableElements = setting.controlEl.querySelectorAll("input, button, select, textarea");
 			for (const element of actionableElements) {
-				(
-					element as HTMLInputElement | HTMLButtonElement | HTMLSelectElement | HTMLTextAreaElement
-				).disabled = disabled;
+				(element as HTMLInputElement | HTMLButtonElement | HTMLSelectElement | HTMLTextAreaElement).disabled = disabled;
 			}
 		};
 		const applySupporterLock = <T extends Setting>(setting: T): T => {
@@ -335,6 +343,8 @@ export class SubscriptionSettingsTab {
 					await this.display(true);
 				})
 			);
+
+		this.displaySupporterKeySetting(containerEl);
 	}
 
 	private async displayActiveSubscriber(): Promise<void> {
@@ -357,7 +367,9 @@ export class SubscriptionSettingsTab {
 		const manageLink = supporterSetting.controlEl.createEl("a", {
 			text: "Open billing portal",
 			attr: {
-				href: SubscriptionSettingsTab.buildManageSubscriptionUrl(this.plugin.settings.email),
+				href: SubscriptionSettingsTab.buildManageSubscriptionUrl(
+					this.plugin.settings.supporterKeyConfigured ? "" : this.plugin.settings.email
+				),
 				target: "_blank",
 				rel: "noopener noreferrer",
 				"data-keepsidian-link": "manage-subscription",
@@ -371,5 +383,154 @@ export class SubscriptionSettingsTab {
 				.setName("Usage")
 				.setDesc(`${subscriptionInfo.metering_info.usage} / ${subscriptionInfo.metering_info.limit} notes synced`);
 		}
+
+		if (this.plugin.settings.supporterKeyConfigured) {
+			this.displaySupporterKeySetting(containerEl);
+		}
+	}
+
+	private displaySupporterKeySetting(containerEl: HTMLElement): void {
+		const hasConfiguredKey = this.plugin.settings.supporterKeyConfigured;
+		const keyIsReadable = Boolean(this.plugin.settings.supporterKey);
+		const keySetting = new Setting(containerEl)
+			.setName("Use a supporter key")
+			.setDesc(
+				hasConfiguredKey
+					? keyIsReadable
+						? "A supporter key is saved securely on this device."
+						: "The saved supporter key could not be read. Re-enter it to restore supporter access."
+					: "Use the key from an existing subscription when your billing and Google emails differ."
+			);
+
+		const editorSetting = new Setting(containerEl)
+			.setName(hasConfiguredKey ? "Replace supporter key" : "Supporter key")
+			.setDesc("Enter the supporter key you received.");
+		editorSetting.settingEl.hidden = true;
+		editorSetting.settingEl.classList.add("keepsidian-supporter-key-editor");
+		editorSetting.settingEl.dataset.keepsidianSupporterKeyEditor = "true";
+
+		let keyDraft = "";
+		editorSetting.addText((text) => {
+			text
+				.setPlaceholder("Supporter key")
+				.setValue("")
+				.onChange((value) => {
+					keyDraft = formatSupporterKeyInput(value);
+					if (text.inputEl.value !== keyDraft) {
+						text.inputEl.value = keyDraft;
+					}
+				});
+			text.inputEl.type = "password";
+			text.inputEl.autocomplete = "off";
+			text.inputEl.spellcheck = false;
+			text.inputEl.dataset.keepsidianSupporterKeyInput = "true";
+			text.inputEl.classList.add("keepsidian-supporter-key-input");
+		});
+
+		editorSetting.addButton((button) =>
+			button
+				.setButtonText("Apply key")
+				.setCta()
+				.onClick(async () => {
+					await this.applySupporterKey(keyDraft);
+				})
+		);
+
+		keySetting.addButton((button) =>
+			button.setButtonText(hasConfiguredKey ? "Replace key" : "Use key").onClick(() => {
+				if (!isSecretStorageAvailable(this.plugin)) {
+					new Notice("Update Obsidian to use a supporter key, then try again.");
+					return;
+				}
+				editorSetting.settingEl.hidden = false;
+				editorSetting.controlEl.querySelector<HTMLInputElement>("input")?.focus();
+			})
+		);
+
+		if (hasConfiguredKey) {
+			keySetting.addButton((button) =>
+				button.setButtonText("Remove key").onClick(async () => {
+					await this.removeSupporterKey();
+				})
+			);
+		}
+	}
+
+	private async applySupporterKey(value: string): Promise<void> {
+		if (!isSecretStorageAvailable(this.plugin)) {
+			new Notice("Update Obsidian to use a supporter key, then try again.");
+			return;
+		}
+
+		const supporterKey = normalizeSupporterKey(value);
+		if (!supporterKey) {
+			new Notice("Enter a 16-character supporter key.");
+			return;
+		}
+
+		let subscriptionInfo: SubscriptionInfo;
+		try {
+			subscriptionInfo = await this.plugin.subscriptionService.validateSupporterKey(supporterKey);
+		} catch (error) {
+			new Notice(this.getSupporterKeyErrorMessage(error));
+			return;
+		}
+		if (subscriptionInfo.subscription_status !== "active") {
+			new Notice("This supporter key is not linked to an active subscription.");
+			return;
+		}
+
+		const storageResult = storeSupporterKeyInSecretStorage(this.plugin, supporterKey);
+		if (!storageResult.success) {
+			new Notice("KeepSidian could not save the supporter key securely. Your existing key was kept.");
+			return;
+		}
+
+		this.plugin.settings.supporterKey = supporterKey;
+		this.plugin.settings.supporterKeyConfigured = true;
+		this.plugin.settings.supporterKeyIdentity = createSupporterKeyIdentity(supporterKey);
+		this.plugin.invalidateSubscriptionIdentity();
+		await this.plugin.saveSettings();
+		await this.plugin.subscriptionService.primeCurrentCache(subscriptionInfo);
+		new Notice("Supporter key saved. Supporter features are now active.");
+		await this.refreshAfterSupporterIdentityChange();
+	}
+
+	private async removeSupporterKey(): Promise<void> {
+		const storageResult = clearSupporterKeyFromSecretStorage(this.plugin);
+		if (!storageResult.success) {
+			new Notice("KeepSidian could not remove the supporter key from secure storage.");
+			return;
+		}
+
+		this.plugin.settings.supporterKey = undefined;
+		this.plugin.settings.supporterKeyConfigured = false;
+		this.plugin.settings.supporterKeyIdentity = undefined;
+		this.plugin.invalidateSubscriptionIdentity();
+		await this.plugin.saveSettings();
+		new Notice("Supporter key removed. KeepSidian will use your Google email for supporter status.");
+		await this.refreshAfterSupporterIdentityChange(true);
+	}
+
+	private async refreshAfterSupporterIdentityChange(forceRefresh = false): Promise<void> {
+		if (this.onSupporterIdentityChanged) {
+			await this.onSupporterIdentityChanged();
+			return;
+		}
+		await this.display(forceRefresh);
+	}
+
+	private getSupporterKeyErrorMessage(error: unknown): string {
+		const status = error instanceof NetworkError ? error.status : undefined;
+		if (status === 403) {
+			return "That supporter key is invalid. Check the key and try again.";
+		}
+		if (status === 429) {
+			return "Too many supporter key attempts. Wait a moment, then try again.";
+		}
+		if (status === 503) {
+			return "Supporter key checks are temporarily unavailable. Please try again later.";
+		}
+		return "KeepSidian could not check that supporter key. Please try again.";
 	}
 }

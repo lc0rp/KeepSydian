@@ -2,12 +2,13 @@
  * @jest-environment jsdom
  */
 import { SubscriptionSettingsTab } from "../SubscriptionSettingsTab";
-import { App } from "obsidian";
+import { App, Notice } from "obsidian";
 import KeepSidianPlugin from "../../../main";
 import { PremiumFeatureSettings } from "../../../types/subscription";
 import { SubscriptionService } from "services/subscription";
 import { KeepSidianSettingsTab } from "../KeepSidianSettingsTab";
 import { DEFAULT_SETTINGS } from "../../../types/keepsidian-plugin-settings";
+import { NetworkError } from "../../../services/errors";
 
 // Mock KEEPSIDIAN_SERVER_URL from config.ts
 jest.mock("../../../config", () => ({
@@ -488,6 +489,13 @@ const mockSubscriptionService = () => {
 		getCache: jest.fn().mockReturnValue(undefined),
 		setCache: jest.fn(),
 		fetchSubscriptionInfo: jest.fn(),
+		validateSupporterKey: jest.fn().mockResolvedValue({
+			subscription_status: "active",
+			plan_details: { plan_id: "premium", features: [] },
+			metering_info: null,
+			trial_or_promo: null,
+		}),
+		primeCurrentCache: jest.fn().mockResolvedValue(undefined),
 		checkSubscription: jest.fn().mockResolvedValue({
 			plan_details: { plan_id: "test_plan" },
 			metering_info: { usage: 10, limit: 100 },
@@ -545,6 +553,7 @@ describe("SubscriptionSettingsTab", () => {
 		};
 		plugin.subscriptionService = mockSubscriptionService();
 		plugin.saveSettings = jest.fn().mockResolvedValue(undefined);
+		plugin.invalidateSubscriptionIdentity = jest.fn();
 
 		const keepSidianSettingsTab = new KeepSidianSettingsTab(app, plugin);
 		containerEl = keepSidianSettingsTab.containerEl;
@@ -730,6 +739,119 @@ describe("SubscriptionSettingsTab", () => {
 			expect(subscriptionSection?.querySelectorAll(".setting-heading")).toHaveLength(1);
 		});
 
+		it("formats, validates, and securely applies an optional supporter key", async () => {
+			const secrets = new Map<string, string>();
+			(plugin.app as unknown as { secretStorage: unknown }).secretStorage = {
+				setSecret: jest.fn((id: string, value: string) => secrets.set(id, value)),
+				getSecret: jest.fn((id: string) => secrets.get(id) ?? null),
+			};
+			(plugin.subscriptionService.isSubscriptionActive as jest.Mock)
+				.mockResolvedValueOnce(false)
+				.mockResolvedValue(true);
+
+			await subscriptionTab.display();
+			const keyEditor = containerEl.querySelector(
+				'[data-keepsidian-supporter-key-editor="true"]'
+			) as HTMLElement;
+			expect(keyEditor.hidden).toBe(true);
+			expect(keyEditor.classList).toContain("keepsidian-supporter-key-editor");
+			const useKeyButton = Array.from(containerEl.querySelectorAll("button")).find(
+				(button) => button.textContent === "Use key"
+			);
+			useKeyButton?.click();
+
+			const input = containerEl.querySelector('input[data-keepsidian-supporter-key-input="true"]') as HTMLInputElement;
+			expect(input).toBeTruthy();
+			expect(input.type).toBe("password");
+			expect(input.closest(".setting-item")?.hasAttribute("hidden")).toBe(false);
+			expect(input.classList).toContain("keepsidian-supporter-key-input");
+			input.value = "abcd efgh-ijkl mn12";
+			input.dispatchEvent(new Event("input", { bubbles: true }));
+			expect(input.value).toBe("ABCD-EFGH-IJKL-MN12");
+
+			const applyButton = Array.from(containerEl.querySelectorAll("button")).find(
+				(button) => button.textContent === "Apply key"
+			);
+			applyButton?.click();
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			await new Promise((resolve) => setTimeout(resolve, 0));
+
+			expect(plugin.subscriptionService.validateSupporterKey).toHaveBeenCalledWith("ABCD-EFGH-IJKL-MN12");
+			expect(secrets.get("keepsidian-supporter-key")).toBe("ABCD-EFGH-IJKL-MN12");
+			expect(plugin.settings.supporterKey).toBe("ABCD-EFGH-IJKL-MN12");
+			expect(plugin.settings.supporterKeyConfigured).toBe(true);
+			expect(plugin.settings.supporterKeyIdentity).toBeTruthy();
+			expect(plugin.invalidateSubscriptionIdentity).toHaveBeenCalled();
+			expect(plugin.subscriptionService.primeCurrentCache).toHaveBeenCalled();
+			expect(Notice).toHaveBeenCalledWith("Supporter key saved. Supporter features are now active.");
+		});
+
+		it("keeps an invalid supporter key out of Secret Storage", async () => {
+			const setSecret = jest.fn();
+			(plugin.app as unknown as { secretStorage: unknown }).secretStorage = {
+				setSecret,
+				getSecret: jest.fn().mockReturnValue(null),
+			};
+			(plugin.subscriptionService.isSubscriptionActive as jest.Mock).mockResolvedValue(false);
+			(plugin.subscriptionService.validateSupporterKey as jest.Mock).mockRejectedValue(
+				new NetworkError("Invalid supporter key", 403)
+			);
+
+			await subscriptionTab.display();
+			Array.from(containerEl.querySelectorAll("button"))
+				.find((button) => button.textContent === "Use key")
+				?.click();
+			const input = containerEl.querySelector('input[data-keepsidian-supporter-key-input="true"]') as HTMLInputElement;
+			input.value = "ABCD-EFGH-IJKL-MN12";
+			input.dispatchEvent(new Event("input", { bubbles: true }));
+			Array.from(containerEl.querySelectorAll("button"))
+				.find((button) => button.textContent === "Apply key")
+				?.click();
+			await new Promise((resolve) => setTimeout(resolve, 0));
+
+			expect(setSecret).not.toHaveBeenCalled();
+			expect(plugin.settings.supporterKeyConfigured).toBe(false);
+			expect(Notice).toHaveBeenCalledWith("That supporter key is invalid. Check the key and try again.");
+		});
+
+		it("removes a saved supporter key and returns to email status checks", async () => {
+			const secrets = new Map<string, string>([["keepsidian-supporter-key", "ABCD-EFGH-IJKL-MN12"]]);
+			(plugin.app as unknown as { secretStorage: unknown }).secretStorage = {
+				setSecret: jest.fn((id: string, value: string) => secrets.set(id, value)),
+				getSecret: jest.fn((id: string) => secrets.get(id) ?? null),
+			};
+			plugin.settings.supporterKey = "ABCD-EFGH-IJKL-MN12";
+			plugin.settings.supporterKeyConfigured = true;
+			plugin.settings.supporterKeyIdentity = "old-key-identity";
+
+			await subscriptionTab.display();
+			Array.from(containerEl.querySelectorAll("button"))
+				.find((button) => button.textContent === "Remove key")
+				?.click();
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			await new Promise((resolve) => setTimeout(resolve, 0));
+
+			expect(secrets.get("keepsidian-supporter-key")).toBe("");
+			expect(plugin.settings.supporterKey).toBeUndefined();
+			expect(plugin.settings.supporterKeyConfigured).toBe(false);
+			expect(plugin.settings.supporterKeyIdentity).toBeUndefined();
+			expect(plugin.subscriptionService.isSubscriptionActive).toHaveBeenLastCalledWith(true);
+			expect(Notice).toHaveBeenCalledWith(
+				"Supporter key removed. KeepSidian will use your Google email for supporter status."
+			);
+		});
+
+		it("explains when supporter key storage is unavailable", async () => {
+			(plugin.subscriptionService.isSubscriptionActive as jest.Mock).mockResolvedValue(false);
+
+			await subscriptionTab.display();
+			Array.from(containerEl.querySelectorAll("button"))
+				.find((button) => button.textContent === "Use key")
+				?.click();
+
+			expect(Notice).toHaveBeenCalledWith("Update Obsidian to use a supporter key, then try again.");
+		});
+
 		it("should render manage subscription link for active users", async () => {
 			(plugin.subscriptionService.isSubscriptionActive as jest.Mock).mockResolvedValue(true);
 			(plugin.subscriptionService.checkSubscription as jest.Mock).mockResolvedValue({
@@ -748,6 +870,18 @@ describe("SubscriptionSettingsTab", () => {
 			);
 			expect(manageLink?.getAttribute("target")).toBe("_blank");
 			expect(manageLink?.getAttribute("rel")).toBe("noopener noreferrer");
+		});
+
+		it("does not prefill the Google email in billing links for supporter-key users", async () => {
+			plugin.settings.supporterKeyConfigured = true;
+			plugin.settings.supporterKey = "ABCD-EFGH-IJKL-MN12";
+			plugin.settings.supporterKeyIdentity = "key-identity";
+			(plugin.subscriptionService.isSubscriptionActive as jest.Mock).mockResolvedValue(true);
+
+			await subscriptionTab.display();
+
+			const manageLink = containerEl.querySelector('a[data-keepsidian-link="manage-subscription"]');
+			expect(manageLink?.getAttribute("href")).toBe("https://keepsidian.com/subscriber/portal");
 		});
 
 		it("opens the color picker modal and updates the summary on save", async () => {

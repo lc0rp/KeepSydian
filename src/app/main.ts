@@ -15,6 +15,7 @@ import { SubscriptionSettingsTab } from "@ui/settings/SubscriptionSettingsTab";
 import { registerRibbonAndCommands } from "@app/commands";
 import {
 	buildPersistedSettings,
+	hydrateSupporterKeyFromSecretStorage,
 	hydrateDriveSecretsFromSecretStorage,
 	hydrateSyncTokenFromSecretStorage,
 	persistSensitiveSettingsToSecretStorage,
@@ -79,6 +80,16 @@ export default class KeepSidianPlugin extends Plugin {
 	private lastAutoSyncGateReasons: string[] | null = null;
 	private feedbackPromptLastShownVersion?: string;
 
+	private getCurrentSubscriptionIdentity(): string | undefined {
+		if (this.settings.supporterKeyConfigured) {
+			return this.settings.supporterKey && this.settings.supporterKeyIdentity
+				? `supporter-key:${this.settings.supporterKeyIdentity}`
+				: undefined;
+		}
+		const email = this.settings.email.trim();
+		return email ? `email:${email}` : undefined;
+	}
+
 	async onload() {
 		await this.loadSettings();
 
@@ -86,8 +97,17 @@ export default class KeepSidianPlugin extends Plugin {
 			() => this.settings.email,
 			() => this.settings.subscriptionCache,
 			async (cache) => {
+				if (cache.identity !== this.getCurrentSubscriptionIdentity()) {
+					return;
+				}
 				this.settings.subscriptionCache = cache;
 				this.refreshAutoSyncSafeguards();
+				await this.saveSettings();
+			},
+			() => (this.settings.supporterKeyConfigured ? (this.settings.supporterKey ?? "") : null),
+			() => this.settings.supporterKeyIdentity,
+			async () => {
+				this.invalidateSubscriptionIdentity();
 				await this.saveSettings();
 			}
 		);
@@ -138,8 +158,10 @@ export default class KeepSidianPlugin extends Plugin {
 		const saved = (await this.loadData()) as (Partial<KeepSidianPluginSettings> & FeedbackPromptData) | null;
 		this.feedbackPromptLastShownVersion = saved?.feedbackPromptLastShownVersion;
 		this.settings = resolveLoadedSettings(saved);
-		const sensitiveSettingsChanged =
-			hydrateSyncTokenFromSecretStorage(this) || hydrateDriveSecretsFromSecretStorage(this);
+		const syncTokenSettingsChanged = hydrateSyncTokenFromSecretStorage(this);
+		const driveSettingsChanged = hydrateDriveSecretsFromSecretStorage(this);
+		const supporterKeySettingsChanged = hydrateSupporterKeyFromSecretStorage(this);
+		const sensitiveSettingsChanged = syncTokenSettingsChanged || driveSettingsChanged || supporterKeySettingsChanged;
 		this.normalizeTwoWaySettings();
 		this.lastSyncSummary = this.settings.lastSyncSummary ?? null;
 		this.lastSyncLogPath = this.settings.lastSyncLogPath ?? null;
@@ -327,6 +349,12 @@ export default class KeepSidianPlugin extends Plugin {
 		this.resetAutoSyncGateState();
 	}
 
+	invalidateSubscriptionIdentity() {
+		this.settings.subscriptionCache = undefined;
+		this.subscriptionActive = null;
+		this.refreshAutoSyncSafeguards();
+	}
+
 	openTwoWaySettings() {
 		const pluginId = this.manifest?.id ?? "keepsidian";
 		const settingManager = (
@@ -429,14 +457,9 @@ export default class KeepSidianPlugin extends Plugin {
 				openTwoWaySettings: () => this.openTwoWaySettings(),
 				getCurrentMode: () => this.currentSyncMode,
 				getCurrentPhaseLabel: () => this.currentSyncPhaseLabel,
-				isSupporterActive: async () =>
-					await this.subscriptionService.isSubscriptionActive(),
+				isSupporterActive: async () => await this.subscriptionService.isSubscriptionActive(),
 				renderImportOptions: async (containerEl, isActive) => {
-					SubscriptionSettingsTab.displayPremiumFeatures(
-						containerEl,
-						this,
-						isActive
-					);
+					SubscriptionSettingsTab.displayPremiumFeatures(containerEl, this, isActive);
 				},
 				onClose: ({ activeRun }) => {
 					if (!activeRun) {

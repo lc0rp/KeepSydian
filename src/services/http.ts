@@ -78,10 +78,12 @@ async function parseJsonDefensively<T>(response: ResponseLike): Promise<T> {
 
 export async function httpRequest<T = unknown>(url: string, options: HttpRequestOptions = {}): Promise<T> {
 	const { method = "GET", headers = {}, body } = options;
+	const hasSupporterKey = Object.keys(headers).some((name) => name.toLowerCase() === "x-supporter-key");
 	const reqInit: RequestUrlParam = {
 		url,
 		method,
 		headers,
+		...(hasSupporterKey ? { throw: false } : {}),
 	};
 
 	if (body !== undefined) {
@@ -92,7 +94,20 @@ export async function httpRequest<T = unknown>(url: string, options: HttpRequest
 		};
 	}
 
-	const response = await requestUrl(reqInit);
+	let response: RequestUrlResponse;
+	try {
+		response = await requestUrl(reqInit);
+	} catch (error) {
+		if (hasSupporterKey) {
+			const status = error instanceof NetworkError ? error.status : undefined;
+			throw new NetworkError("Unable to reach the KeepSidian server", status);
+		}
+		if (error instanceof NetworkError) {
+			throw error;
+		}
+		const message = error instanceof Error ? error.message : "Unable to reach the KeepSidian server";
+		throw new NetworkError(message, undefined, error);
+	}
 	const status = typeof response.status === "number" ? response.status : 0;
 	if (status < 200 || status >= 300) {
 		// Try to extract error message from body, but don't fail parsing again here
@@ -111,7 +126,9 @@ export async function httpRequest<T = unknown>(url: string, options: HttpRequest
 		} catch {
 			/* empty */
 		}
-		throw new NetworkError(errMsg, status);
+		const networkError = new NetworkError(errMsg, status);
+		networkError.retryAfterMs = parseRetryAfterMs(asResponseLike(response).headers);
+		throw networkError;
 	}
 
 	return await parseJsonDefensively<T>(asResponseLike(response));

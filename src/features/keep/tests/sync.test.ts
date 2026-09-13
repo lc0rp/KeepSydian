@@ -263,6 +263,26 @@ describe("Google Keep Import Functions", () => {
 			);
 		});
 
+		it("sends a configured supporter key with premium requests", async () => {
+			mockPlugin.settings.supporterKeyConfigured = true;
+			mockPlugin.settings.supporterKey = "ABCD-EFGH-IJKL-MN12";
+
+			await importGoogleKeepNotesWithOptions(mockPlugin, mockOptions);
+
+			expect(requestUrl).toHaveBeenCalledWith(
+				expect.objectContaining({
+					url: expect.stringContaining("/premium"),
+					method: "POST",
+					throw: false,
+					headers: expect.objectContaining({
+						"X-User-Email": "test@example.com",
+						"X-Supporter-Key": "ABCD-EFGH-IJKL-MN12",
+						Authorization: "Bearer test-token",
+					}),
+				})
+			);
+		});
+
 		it("should handle errors with premium features", async () => {
 			(requestUrl as jest.Mock).mockRejectedValue(new Error("Premium feature error"));
 			await expect(importGoogleKeepNotesWithOptions(mockPlugin, mockOptions)).rejects.toThrow("Premium feature error");

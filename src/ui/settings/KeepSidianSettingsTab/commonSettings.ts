@@ -75,8 +75,12 @@ function createSupportLink(parentEl: HTMLElement, label: string, href: string, i
 	});
 }
 
-export async function addSubscriptionSettings(plugin: KeepSidianPlugin, containerEl: HTMLElement): Promise<void> {
-	const subscriptionTab = new SubscriptionSettingsTab(containerEl, plugin);
+export async function addSubscriptionSettings(
+	plugin: KeepSidianPlugin,
+	containerEl: HTMLElement,
+	onSupporterIdentityChanged?: () => Promise<void>
+): Promise<void> {
+	const subscriptionTab = new SubscriptionSettingsTab(containerEl, plugin, onSupporterIdentityChanged);
 	await subscriptionTab.display();
 }
 

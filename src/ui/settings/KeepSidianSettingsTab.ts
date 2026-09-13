@@ -76,7 +76,11 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 	}
 
 	private async addSubscriptionSettings(containerEl: HTMLElement): Promise<void> {
-		await addSubscriptionSettingsSection(this.plugin, containerEl);
+		await addSubscriptionSettingsSection(this.plugin, containerEl, async () => {
+			const scrollTop = this.containerEl.scrollTop;
+			await this.renderSettings();
+			this.containerEl.scrollTop = scrollTop;
+		});
 	}
 
 	private addEmailSetting(containerEl: HTMLElement): void {

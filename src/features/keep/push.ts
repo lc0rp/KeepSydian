@@ -6,16 +6,8 @@ import { SyncCancellationError, isSyncCancellationError } from "@app/sync-cancel
 import { buildFrontmatterWithSyncDate, wrapMarkdown } from "./frontmatter";
 import { FRONTMATTER_GOOGLE_KEEP_URL_KEY } from "./constants";
 import type { SyncCallbacks } from "./sync";
-import {
-	collectNotesToPush,
-	roundDateToSeconds,
-	type NoteForPush,
-} from "./push/collectNotes";
-import {
-	pushNotes as apiPushNotes,
-	PushNotePayload,
-	PushNoteResult,
-} from "@integrations/server/keepApi";
+import { collectNotesToPush, roundDateToSeconds, type NoteForPush } from "./push/collectNotes";
+import { pushNotes as apiPushNotes, PushNotePayload, PushNoteResult } from "@integrations/server/keepApi";
 import type { SyncPlan, SyncPlanEntry } from "@types";
 
 const SKIPPED_LOG_BATCH_SIZE = 50;
@@ -100,23 +92,15 @@ export async function buildPushSyncPlan(
 ): Promise<BuiltPushSyncPlan> {
 	const { notesToPush, skippedNotes } = await collectNotesToPush(plugin);
 	const entries: SyncPlanEntry[] = [
-		...notesToPush.map((note, index) =>
-			buildPushPlanEntry(note, index, allowPerNoteSelection, selectionLockedReason)
-		),
+		...notesToPush.map((note, index) => buildPushPlanEntry(note, index, allowPerNoteSelection, selectionLockedReason)),
 		...skippedNotes.map((skipped, index) => ({
 			id: `upload-skipped:${index}:${normalizePathSafe(skipped.path)}`,
 			mode: "push" as const,
 			stage: "upload" as const,
 			title: skipped.path.split("/").pop() || skipped.path,
 			path: normalizePathSafe(skipped.path),
-			action:
-				skipped.reason === "up-to-date"
-					? ("skipped-up-to-date" as const)
-					: ("skipped-conflict-copy" as const),
-			label:
-				skipped.reason === "up-to-date"
-					? "Skipped: up to date"
-					: "Skipped: conflict copy",
+			action: skipped.reason === "up-to-date" ? ("skipped-up-to-date" as const) : ("skipped-conflict-copy" as const),
+			label: skipped.reason === "up-to-date" ? "Skipped: up to date" : "Skipped: conflict copy",
 			selectable: false,
 			selected: false,
 			selectionLocked: false,
@@ -165,8 +149,7 @@ export async function pushGoogleKeepNotes(
 			for (const skipped of skippedNotes) {
 				const fileName = skipped.path.split("/").pop() || skipped.path;
 				const link = `[${fileName}](${normalizePathSafe(skipped.path)})`;
-				const message =
-					skipped.reason === "up-to-date" ? "up to date (skipped)" : skipped.reason;
+				const message = skipped.reason === "up-to-date" ? "up to date (skipped)" : skipped.reason;
 				await logSync(plugin, `${link} - ${message}`, {
 					batchKey: "push:skipped",
 					batchSize: SKIPPED_LOG_BATCH_SIZE,
@@ -183,6 +166,7 @@ export async function pushGoogleKeepNotes(
 		callbacks?.setTotalNotes?.(notesToPush.length);
 
 		const { email, token } = plugin.settings;
+		const supporterKey = plugin.settings.supporterKeyConfigured ? (plugin.settings.supporterKey ?? "") : undefined;
 		let successCount = 0;
 
 		for (let index = 0; index < notesToPush.length; index += PUSH_PAYLOAD_BATCH_SIZE) {
@@ -195,7 +179,7 @@ export async function pushGoogleKeepNotes(
 				attachments: note.attachments.length > 0 ? note.attachments : undefined,
 			}));
 
-			const response = await apiPushNotes(email, token, payloadBatch);
+			const response = await apiPushNotes(email, token, payloadBatch, supporterKey);
 			const resultMap = mapResultsByPath(response?.results);
 
 			const batchKey = "push:notes";
@@ -211,12 +195,7 @@ export async function pushGoogleKeepNotes(
 					if (result && result.success === false) {
 						const errorText = result.error || result.message || "failed";
 						await flushLogSync(plugin, { batchKey });
-						await logSync(
-							plugin,
-							`[${note.title}](${normalizePathSafe(
-								note.fullPath
-							)}) - push failed: ${errorText}`
-						);
+						await logSync(plugin, `[${note.title}](${normalizePathSafe(note.fullPath)}) - push failed: ${errorText}`);
 						continue;
 					}
 
@@ -225,9 +204,7 @@ export async function pushGoogleKeepNotes(
 						const normalizedKeepUrl = result.keep_url.trim();
 						if (normalizedKeepUrl) {
 							const keyPrefix = `${FRONTMATTER_GOOGLE_KEEP_URL_KEY}:`;
-							const match = note.frontmatter.match(
-								new RegExp(`^${FRONTMATTER_GOOGLE_KEEP_URL_KEY}:\\s*(.*)$`, "m")
-							);
+							const match = note.frontmatter.match(new RegExp(`^${FRONTMATTER_GOOGLE_KEEP_URL_KEY}:\\s*(.*)$`, "m"));
 							const existingValue = match?.[1]?.trim();
 							if (existingValue !== normalizedKeepUrl) {
 								if (match) {
@@ -244,10 +221,7 @@ export async function pushGoogleKeepNotes(
 						}
 					}
 
-					const frontmatterWithSync = buildFrontmatterWithSyncDate(
-						note.frontmatter,
-						pushTimestamp
-					);
+					const frontmatterWithSync = buildFrontmatterWithSyncDate(note.frontmatter, pushTimestamp);
 					const updatedContent = wrapMarkdown(frontmatterWithSync, note.body);
 					await plugin.app.vault.adapter.write(note.fullPath, updatedContent);
 
@@ -257,7 +231,7 @@ export async function pushGoogleKeepNotes(
 									note.updatedAttachmentNames.length === 1
 										? "1 attachment"
 										: `${note.updatedAttachmentNames.length} attachments`
-							  })`
+								})`
 							: "";
 
 					await logSync(
@@ -268,9 +242,7 @@ export async function pushGoogleKeepNotes(
 					for (const missing of note.missingAttachments) {
 						await logSync(
 							plugin,
-							`[${note.title}](${normalizePathSafe(
-								note.fullPath
-							)}) - missing attachment ${missing}`,
+							`[${note.title}](${normalizePathSafe(note.fullPath)}) - missing attachment ${missing}`,
 							batchOptions
 						);
 					}
@@ -283,9 +255,7 @@ export async function pushGoogleKeepNotes(
 					await flushLogSync(plugin, { batchKey });
 					await logSync(
 						plugin,
-						`[${note.title}](${normalizePathSafe(note.fullPath)}) - error: ${
-							(error as Error).message
-						}`
+						`[${note.title}](${normalizePathSafe(note.fullPath)}) - error: ${(error as Error).message}`
 					);
 				} finally {
 					callbacks?.onEntrySettled?.(
