@@ -33,6 +33,7 @@ jobs:
             exit 1
           fi
           echo "Backend URL live: $url"
+          echo "KEEPSIDIAN_SERVER_URL=${url%/subscribe}" >> "$GITHUB_ENV"
 
       - name: Build plugin
         run: |
