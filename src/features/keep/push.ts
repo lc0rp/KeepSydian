@@ -9,6 +9,8 @@ import type { SyncCallbacks } from "./sync";
 import { collectNotesToPush, roundDateToSeconds, type NoteForPush } from "./push/collectNotes";
 import { pushNotes as apiPushNotes, PushNotePayload, PushNoteResult } from "@integrations/server/keepApi";
 import type { SyncPlan, SyncPlanEntry } from "@types";
+import { safeSyncError } from "@app/sync-attempt";
+import { AppError } from "@services/errors";
 
 const SKIPPED_LOG_BATCH_SIZE = 50;
 const PUSH_PAYLOAD_BATCH_SIZE = 20;
@@ -148,7 +150,9 @@ export async function pushGoogleKeepNotes(
 		if (skippedNotes.length > 0) {
 			for (const skipped of skippedNotes) {
 				const fileName = skipped.path.split("/").pop() || skipped.path;
-				const link = `[${fileName}](${normalizePathSafe(skipped.path)})`;
+				const link = callbacks?.attempt
+					? `Note (attempt ${callbacks.attempt.id})`
+					: `[${fileName}](${normalizePathSafe(skipped.path)})`;
 				const message = skipped.reason === "up-to-date" ? "up to date (skipped)" : skipped.reason;
 				await logSync(plugin, `${link} - ${message}`, {
 					batchKey: "push:skipped",
@@ -168,6 +172,7 @@ export async function pushGoogleKeepNotes(
 		const { email, token } = plugin.settings;
 		const supporterKey = plugin.settings.supporterKeyConfigured ? (plugin.settings.supporterKey ?? "") : undefined;
 		let successCount = 0;
+		let firstFailure: Error | undefined;
 
 		for (let index = 0; index < notesToPush.length; index += PUSH_PAYLOAD_BATCH_SIZE) {
 			throwIfSyncCancelled(plugin);
@@ -187,15 +192,18 @@ export async function pushGoogleKeepNotes(
 			const batchOptions = { batchKey, batchSize };
 			for (const [batchIndex, note] of batch.entries()) {
 				throwIfSyncCancelled(plugin);
+				const noteLabel = callbacks?.attempt
+					? `Note (attempt ${callbacks.attempt.id})`
+					: `[${note.title}](${normalizePathSafe(note.fullPath)})`;
 				let pushSucceeded = false;
 				try {
 					const pushTimestamp = roundDateToSeconds(new Date()).toISOString();
 					const normalizedPath = normalizePathSafe(note.relativePath);
 					const result = resultMap.get(normalizedPath) ?? resultMap.get(note.relativePath);
 					if (result && result.success === false) {
-						const errorText = result.error || result.message || "failed";
+						firstFailure ??= new Error("The server rejected an upload");
 						await flushLogSync(plugin, { batchKey });
-						await logSync(plugin, `[${note.title}](${normalizePathSafe(note.fullPath)}) - push failed: ${errorText}`);
+						await logSync(plugin, `${noteLabel} - push failed: server rejected upload`);
 						continue;
 					}
 
@@ -234,15 +242,11 @@ export async function pushGoogleKeepNotes(
 								})`
 							: "";
 
-					await logSync(
-						plugin,
-						`[${note.title}](${normalizePathSafe(note.fullPath)}) - pushed${attachmentSuffix}`,
-						batchOptions
-					);
+					await logSync(plugin, `${noteLabel} - pushed${attachmentSuffix}`, batchOptions);
 					for (const missing of note.missingAttachments) {
 						await logSync(
 							plugin,
-							`[${note.title}](${normalizePathSafe(note.fullPath)}) - missing attachment ${missing}`,
+							`${noteLabel} - missing attachment${callbacks?.attempt ? "" : ` ${missing}`}`,
 							batchOptions
 						);
 					}
@@ -252,11 +256,9 @@ export async function pushGoogleKeepNotes(
 					if (error instanceof SyncCancellationError) {
 						throw error;
 					}
+					firstFailure ??= error instanceof Error ? error : new AppError("unknown", "Upload failed", error);
 					await flushLogSync(plugin, { batchKey });
-					await logSync(
-						plugin,
-						`[${note.title}](${normalizePathSafe(note.fullPath)}) - error: ${(error as Error).message}`
-					);
+					await logSync(plugin, `${noteLabel} - error: ${JSON.stringify(safeSyncError(error))}`);
 				} finally {
 					callbacks?.onEntrySettled?.(
 						`upload:${index + batchIndex}:${normalizePathSafe(note.fullPath)}`,
@@ -268,6 +270,8 @@ export async function pushGoogleKeepNotes(
 			await flushLogSync(plugin, { batchKey: "push:notes" });
 		}
 
+		if (callbacks?.attempt && firstFailure !== undefined) throw firstFailure;
+		throwIfSyncCancelled(plugin);
 		new Notice("Pushed Google Keep notes.");
 		return successCount;
 	} catch (error: unknown) {

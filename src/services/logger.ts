@@ -1,13 +1,9 @@
 import type { AppLike } from "./paths";
 import { ensureParentFolderForFile } from "./paths";
 
-export async function appendLog(
-	app: AppLike,
-	logPath: string,
-	line: string
-): Promise<void> {
+export async function appendLog(app: AppLike, logPath: string, line: string): Promise<void> {
 	try {
-		if (!app?.vault?.adapter) return;
+		if (!app?.vault?.adapter) throw new Error("Sync log storage unavailable");
 		// Ensure the parent folder exists so write does not fail due to missing directory
 		await ensureParentFolderForFile(app, logPath);
 		if (typeof app.vault.adapter.append === "function") {
@@ -23,11 +19,9 @@ export async function appendLog(
 	} catch (e) {
 		try {
 			const isTest =
-				typeof process !== "undefined" &&
-				(process.env?.NODE_ENV === "test" ||
-					!!process.env?.JEST_WORKER_ID);
+				typeof process !== "undefined" && (process.env?.NODE_ENV === "test" || !!process.env?.JEST_WORKER_ID);
 			if (!isTest) {
-				console.error("Failed to append log:", e);
+				console.error("Failed to append log.");
 			}
 		} catch {
 			/* empty */
