@@ -1,6 +1,7 @@
 import { browser, expect } from "@wdio/globals";
 import { createPreparedSyncPlanFixture, createSyncPlanEntryFixture } from "../../src/test-utils/fixtures/sync-plan";
 import type { SyncMode } from "../../src/types";
+import { focusVaultWindow, routeAppCommandsToVault } from "../helpers/vault-window";
 
 describe("KeepSidian", function () {
 	const buttonByText = (label: string): string =>
@@ -31,6 +32,7 @@ describe("KeepSidian", function () {
 	};
 
 	const openKeepSidianSettingsTab = async (): Promise<void> => {
+		await focusVaultWindow();
 		await completeMobileOnboardingIfNeeded();
 		const feedbackModal = browser.$(".keepsidian-feedback-modal");
 		if (await feedbackModal.isExisting()) {
@@ -232,6 +234,8 @@ describe("KeepSidian", function () {
 					allowed: allowGate,
 					reasons: allowGate ? [] : ["Confirm backups"],
 				});
+				// These fixtures exercise presentation. The dedicated attempt spec uses the real lifecycle.
+				Object.assign(modal.options, { createSyncAttempt: undefined, getLastAttempt: () => undefined });
 				let cancelRequested = false;
 				const setCanceledSummary = (processedNotes: number, totalNotes: number, mode: SyncMode) => {
 					const summary = {
@@ -318,6 +322,12 @@ describe("KeepSidian", function () {
 		// Alternatively if all your tests use the same vault, you can
 		// set the default vault in the wdio.conf.mts.
 		await browser.reloadObsidian({ vault: "./test/vaults/simple" });
+		routeAppCommandsToVault();
+	});
+
+	beforeEach(async () => {
+		await focusVaultWindow();
+		await browser.executeObsidian(({ app }) => app.setting.close());
 	});
 
 	it("loads the plugin", async () => {

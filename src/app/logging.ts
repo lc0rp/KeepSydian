@@ -7,6 +7,8 @@ import { resolveLogBaseFolder } from "@services/note-path-resolver";
 interface LogSyncOptions {
 	batchKey?: string;
 	batchSize?: number;
+	/** Report failed persistence to lifecycle callers; legacy callers remain best-effort. */
+	strict?: boolean;
 }
 
 interface FlushOptions {
@@ -16,6 +18,7 @@ interface FlushOptions {
 type LogQueue = Map<string, string[]>;
 
 const logQueues = new WeakMap<KeepSidianPlugin, LogQueue>();
+const logWrites = new WeakMap<KeepSidianPlugin, Promise<void>>();
 
 function getQueue(plugin: KeepSidianPlugin, key: string): string[] {
 	let pluginQueues = logQueues.get(plugin);
@@ -44,37 +47,47 @@ function formatLogLine(message: string): string {
 	return `${line}\n`;
 }
 
-async function writeLogEntries(plugin: KeepSidianPlugin, entries: string[]) {
+async function writeLogEntries(plugin: KeepSidianPlugin, entries: string[], strict = false): Promise<void> {
+	const previous = logWrites.get(plugin) ?? Promise.resolve();
+	const pending = previous.catch(() => undefined).then(() => writeLogEntriesNow(plugin, entries, strict));
+	logWrites.set(plugin, pending);
+	try {
+		await pending;
+	} finally {
+		if (logWrites.get(plugin) === pending) logWrites.delete(plugin);
+	}
+}
+
+async function writeLogEntriesNow(plugin: KeepSidianPlugin, entries: string[], strict: boolean) {
 	if (entries.length === 0) {
 		return;
 	}
 
 	const logPath = await prepareSyncLog(plugin);
-	if (!logPath) return;
+	if (!logPath) {
+		if (strict) throw new Error("Sync log unavailable");
+		return;
+	}
 
 	try {
 		const payload = entries.map((entry) => formatLogLine(entry)).join("");
 		await appendLog(plugin.app, logPath, payload);
 	} catch (e) {
+		if (strict) throw e;
 		try {
 			const isTest =
-				typeof process !== "undefined" &&
-				(process.env?.NODE_ENV === "test" ||
-					!!process.env?.JEST_WORKER_ID);
+				typeof process !== "undefined" && (process.env?.NODE_ENV === "test" || !!process.env?.JEST_WORKER_ID);
 			if (!isTest) {
-				console.error("Failed to write sync log:", e);
+				console.error("Failed to write sync log.");
 			}
-				new Notice("KeepSidian: failed to write sync log.");
+			new Notice("KeepSidian: failed to write sync log.");
 		} catch {
 			/* empty */
 		}
 	}
 }
 
-async function flushQueue(
-	plugin: KeepSidianPlugin,
-	queue: string[]
-): Promise<void> {
+async function flushQueue(plugin: KeepSidianPlugin, queue: string[]): Promise<void> {
 	if (queue.length === 0) {
 		return;
 	}
@@ -86,15 +99,11 @@ async function flushQueue(
  * Prepare today's sync log file. Shows a Notice on failure and returns null.
  * Returns the normalized log file path on success.
  */
-export async function prepareSyncLog(
-	plugin: KeepSidianPlugin
-): Promise<string | null> {
+export async function prepareSyncLog(plugin: KeepSidianPlugin): Promise<string | null> {
 	const currentDate = new Date().toISOString();
 	const syncLogFile = `${currentDate.slice(0, 10)}.md`;
 	const logBaseFolder = resolveLogBaseFolder(plugin.app, plugin.settings);
-	const logPath = normalizePathSafe(
-		`${logBaseFolder}/_KeepSidianLogs/${syncLogFile}`
-	);
+	const logPath = normalizePathSafe(`${logBaseFolder}/_KeepSidianLogs/${syncLogFile}`);
 
 	try {
 		await ensureFile(plugin.app, logPath);
@@ -108,15 +117,11 @@ export async function prepareSyncLog(
 	}
 }
 
-export async function logSync(
-	plugin: KeepSidianPlugin,
-	message: string,
-	options: LogSyncOptions = {}
-): Promise<void> {
+export async function logSync(plugin: KeepSidianPlugin, message: string, options: LogSyncOptions = {}): Promise<void> {
 	const { batchKey = "default", batchSize } = options;
 
 	if (!batchSize) {
-		await writeLogEntries(plugin, [message]);
+		await writeLogEntries(plugin, [message], options.strict);
 		return;
 	}
 
@@ -128,10 +133,7 @@ export async function logSync(
 	}
 }
 
-export async function flushLogSync(
-	plugin: KeepSidianPlugin,
-	options: FlushOptions = {}
-): Promise<void> {
+export async function flushLogSync(plugin: KeepSidianPlugin, options: FlushOptions = {}): Promise<void> {
 	const { batchKey } = options;
 	const pluginQueues = logQueues.get(plugin);
 	if (!pluginQueues) {
