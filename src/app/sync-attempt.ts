@@ -178,7 +178,7 @@ export class SyncAttempt {
 			: errorKind === "parse"
 				? "Invalid server response."
 				: "The operation could not be completed.";
-		return `${reason} Attempt ${this.id}.${this.unavailable ? " Sync log unavailable; check vault storage permissions." : " See View log for details."}`;
+		return `${reason} Attempt ${this.id}.${this.unavailable ? " Sync log unavailable; check vault storage permissions." : " Open the sync log for details."}`;
 	}
 
 	private fallback(): void {

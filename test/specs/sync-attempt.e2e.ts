@@ -164,7 +164,7 @@ describe("Sync attempt observability in installed Obsidian", function () {
 				}),
 			]);
 			await browser.saveScreenshot(`test-results/sync-attempt-${scenario}.png`);
-			await button("View log").click();
+			await button("Open sync log").click();
 			await browser.waitUntil(
 				async () =>
 					(await browser.executeObsidian(({ app }) => app.workspace.getActiveFile()?.path)) === result.attempt.logPath,
