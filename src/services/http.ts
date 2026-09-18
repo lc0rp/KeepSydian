@@ -83,7 +83,8 @@ export async function httpRequest<T = unknown>(url: string, options: HttpRequest
 		url,
 		method,
 		headers,
-		...(hasSupporterKey ? { throw: false } : {}),
+		// Keep numeric HTTP status available for retries and attempt diagnostics.
+		throw: false,
 	};
 
 	if (body !== undefined) {

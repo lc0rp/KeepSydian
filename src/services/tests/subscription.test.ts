@@ -122,6 +122,7 @@ describe("SubscriptionService", () => {
 				url: expect.stringContaining("/subscriber/info"),
 				method: "GET",
 				headers: { "X-User-Email": mockEmail },
+				throw: false,
 			});
 			expect(mockSetCache).toHaveBeenCalledWith(
 				expect.objectContaining({
