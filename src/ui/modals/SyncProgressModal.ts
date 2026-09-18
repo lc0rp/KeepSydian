@@ -15,6 +15,9 @@ import type {
 	SyncPlanRunCallbacks,
 } from "@app/main-sync-flows";
 import { formatModalSummary } from "@app/sync-status";
+import { formatAttemptSummary } from "@app/sync-attempt";
+import type { SyncAttempt } from "@app/sync-attempt";
+import type { LastSyncAttempt } from "../../types/sync-attempt";
 
 interface CreateElOptions {
 	text?: string;
@@ -32,6 +35,8 @@ interface TwoWayGateState {
 }
 
 interface SyncProgressModalOptions {
+	createSyncAttempt?: (mode: SyncMode) => SyncAttempt;
+	getLastAttempt?: () => LastSyncAttempt | undefined;
 	buildSyncPlan: (
 		mode: SyncMode,
 		callbacks?: SyncPlanBuildCallbacks,
@@ -307,7 +312,7 @@ function getFriendlySyncCenterError(error: unknown, context: "review" | "run"): 
 
 	return {
 		title: context === "review" ? "Couldn’t prepare the sync review" : "Couldn’t finish the sync",
-		message: rawMessage || "An unexpected error occurred.",
+		message: "The operation could not be completed. Open the sync log for details.",
 	};
 }
 
@@ -380,6 +385,8 @@ export class SyncProgressModal extends Modal {
 	} | null = null;
 	private summary: LastSyncSummary | null = null;
 	private preparedPlan: PreparedSyncPlan | null = null;
+	private activeAttempt: SyncAttempt | null = null;
+	private reviewGeneration = 0;
 	private executionSnapshot: ExecutionSnapshot | null = null;
 	private showExecutionResult = false;
 	private reviewFilterKey: ChipKey = "notes";
@@ -472,6 +479,11 @@ export class SyncProgressModal extends Modal {
 			void this.refreshUI();
 			return;
 		}
+		// Closing a review abandons it. Closing an active run retains the existing cancel/background behavior.
+		this.reviewGeneration += 1;
+		this.isGeneratingReview = false;
+		void this.activeAttempt?.finish("abandoned");
+		this.preparedPlan = null;
 		this.unbindChromeCloseButton();
 		this.unbindBackdropDismissGuard();
 		this.dismissPrompt = null;
@@ -584,9 +596,12 @@ export class SyncProgressModal extends Modal {
 	}
 
 	setSelectedMode(mode: SyncMode) {
-		if (this.selectedMode === mode) {
+		if (this.selectedMode === mode || this.isSyncing) {
 			return;
 		}
+		this.reviewGeneration += 1;
+		this.isGeneratingReview = false;
+		void this.activeAttempt?.finish("abandoned");
 		this.selectedMode = mode;
 		this.preparedPlan = null;
 		this.executionSnapshot = null;
@@ -650,6 +665,10 @@ export class SyncProgressModal extends Modal {
 		}
 		this.selectedMode = mode;
 		this.isGeneratingReview = true;
+		const generation = ++this.reviewGeneration;
+		const previousAttempt = this.activeAttempt;
+		let attempt = this.options.createSyncAttempt?.(mode) ?? null;
+		this.activeAttempt = attempt;
 		this.preparedPlan = null;
 		this.executionSnapshot = null;
 		this.showExecutionResult = false;
@@ -659,17 +678,31 @@ export class SyncProgressModal extends Modal {
 		this.reviewFilterKey = "notes";
 		this.modalAlert = null;
 		this.dismissPrompt = null;
-		await this.refreshUI();
 		try {
+			if (attempt) await attempt.start();
+			if (previousAttempt) await previousAttempt.finish("abandoned");
+			await this.refreshUI();
+			if (generation !== this.reviewGeneration) return;
 			const downloadScope = modeUsesDownload(mode) ? this.getDownloadScope() : undefined;
 			const preparedPlan = await this.options.buildSyncPlan(
 				mode,
 				{
+					attempt: attempt ?? undefined,
+					onAttempt: (context) => {
+						attempt = context;
+						if (generation !== this.reviewGeneration) {
+							void context.finish("abandoned");
+							return;
+						}
+						this.activeAttempt = context;
+					},
 					setTotalNotes: (total) => {
+						if (generation !== this.reviewGeneration) return;
 						this.planBuildTotal = total;
 						void this.refreshUI();
 					},
 					reportPlanProgress: (processed, total) => {
+						if (generation !== this.reviewGeneration) return;
 						this.planBuildProcessed = processed;
 						if (typeof total === "number" && total > 0) {
 							this.planBuildTotal = total;
@@ -679,16 +712,33 @@ export class SyncProgressModal extends Modal {
 				},
 				downloadScope
 			);
-			if (preparedPlan) {
+			if (generation !== this.reviewGeneration) return;
+			if (preparedPlan && !attempt?.finished) {
 				preparedPlan.plan.title = getPlanTitle(preparedPlan.plan);
 				this.preparedPlan = preparedPlan;
+				this.activeAttempt = preparedPlan.attempt ?? attempt;
 			}
 		} catch (error) {
-			this.modalAlert = getFriendlySyncCenterError(error, "review");
+			if (attempt) await attempt.fail(error);
+			if (generation === this.reviewGeneration) this.showAttemptError(error, "review", attempt);
 		} finally {
-			this.isGeneratingReview = false;
-			await this.refreshUI();
+			if (generation === this.reviewGeneration) {
+				this.isGeneratingReview = false;
+				await this.refreshUI();
+			}
 		}
+	}
+
+	private showAttemptError(error: unknown, context: "review" | "run", attempt = this.activeAttempt) {
+		this.modalAlert = attempt
+			? {
+					title:
+						context === "review"
+							? `${modeLabel(this.selectedMode)} preparation failed`
+							: `${modeLabel(this.selectedMode)} failed`,
+					message: attempt.errorMessage(error),
+				}
+			: getFriendlySyncCenterError(error, context);
 	}
 
 	private async runReviewedPlan() {
@@ -714,15 +764,18 @@ export class SyncProgressModal extends Modal {
 			if (result.nextPlan) {
 				result.nextPlan.plan.title = getPlanTitle(result.nextPlan.plan);
 				this.preparedPlan = result.nextPlan;
+				this.activeAttempt = result.nextPlan.attempt ?? this.activeAttempt;
 				this.executionSnapshot = null;
 				this.showExecutionResult = false;
 				this.reviewFilterKey = "notes";
 				return;
 			}
+			if (result.failed) this.showAttemptError(undefined, "run");
 			this.preparedPlan = null;
 			this.showExecutionResult = !result.canceled;
 		} catch (error) {
-			this.modalAlert = getFriendlySyncCenterError(error, "run");
+			await this.activeAttempt?.fail(error);
+			this.showAttemptError(error, "run");
 			this.showExecutionResult = false;
 		} finally {
 			this.isSyncing = false;
@@ -1049,6 +1102,10 @@ export class SyncProgressModal extends Modal {
 						: `${phaseLabel}: ${this.processed}/${this.total}`;
 				}
 				return this.isCanceling ? `Canceling... ${this.processed}` : `${phaseLabel}: ${this.processed}`;
+			}
+			const lastAttempt = this.options.getLastAttempt?.();
+			if (lastAttempt && (!this.summary || lastAttempt.updatedAt >= this.summary.timestamp)) {
+				return formatAttemptSummary(lastAttempt);
 			}
 			if (this.summary) {
 				return formatModalSummary(this.summary);
@@ -1409,6 +1466,7 @@ export class SyncProgressModal extends Modal {
 
 		if (surface === "review") {
 			const backButton = this.createActionButton(this.planActionsEl, "◀︎ Back", async () => {
+				await this.activeAttempt?.finish("abandoned");
 				this.preparedPlan = null;
 				this.executionSnapshot = null;
 				this.showExecutionResult = false;
@@ -1469,34 +1527,57 @@ export class SyncProgressModal extends Modal {
 	}
 
 	private async refreshCurrentReview() {
+		if (this.isGeneratingReview || this.isSyncing) return;
 		if (!this.preparedPlan) {
 			await this.beginReview();
 			return;
 		}
 
 		if (this.preparedPlan.mode === "two-way" && this.preparedPlan.stage === "upload") {
-			const refreshedPlan = await this.options.buildSyncPlan("push");
-			if (!refreshedPlan) {
-				return;
-			}
-			refreshedPlan.mode = "two-way";
-			refreshedPlan.plan = {
-				...refreshedPlan.plan,
-				mode: "two-way",
-				title: getPlanTitle({
+			const original = this.preparedPlan;
+			const generation = ++this.reviewGeneration;
+			this.isGeneratingReview = true;
+			try {
+				const refreshedPlan = original.attempt
+					? await this.options.buildSyncPlan("push", { attempt: original.attempt })
+					: await this.options.buildSyncPlan("push");
+				if (generation !== this.reviewGeneration) return;
+				if (!refreshedPlan) {
+					this.preparedPlan = null;
+					return;
+				}
+				refreshedPlan.attempt = original.attempt;
+				refreshedPlan.completionDate = original.completionDate;
+				refreshedPlan.attachmentWarnings = original.attachmentWarnings;
+				refreshedPlan.mode = "two-way";
+				refreshedPlan.plan = {
 					...refreshedPlan.plan,
 					mode: "two-way",
-				}),
-				entries: refreshedPlan.plan.entries.map((entry) => ({
-					...entry,
-					mode: "two-way",
-				})),
-			};
-			this.preparedPlan = refreshedPlan;
-			this.executionSnapshot = null;
-			this.showExecutionResult = false;
-			this.reviewFilterKey = "notes";
-			await this.refreshUI();
+					title: getPlanTitle({
+						...refreshedPlan.plan,
+						mode: "two-way",
+					}),
+					entries: refreshedPlan.plan.entries.map((entry) => ({
+						...entry,
+						mode: "two-way",
+					})),
+				};
+				this.preparedPlan = refreshedPlan;
+				this.executionSnapshot = null;
+				this.showExecutionResult = false;
+				this.reviewFilterKey = "notes";
+			} catch (error) {
+				await original.attempt?.fail(error);
+				if (generation === this.reviewGeneration) {
+					this.preparedPlan = null;
+					this.showAttemptError(error, "review", original.attempt);
+				}
+			} finally {
+				if (generation === this.reviewGeneration) {
+					this.isGeneratingReview = false;
+					await this.refreshUI();
+				}
+			}
 			return;
 		}
 

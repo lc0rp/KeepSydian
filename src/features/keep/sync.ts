@@ -34,6 +34,7 @@ import {
 } from "./domain/noteLookup";
 import { appendPerfTrace } from "@app/perf-trace";
 import { stripManagedImageEmbeds, withManagedImageEmbeds } from "./domain/attachmentEmbeds";
+import { safeSyncError, type SyncAttempt } from "@app/sync-attempt";
 
 const LAST_SUCCESSFUL_SYNC_DATE_KEY = "KeepSidianLastSuccessfulSyncDate";
 const NOTE_LOG_BATCH_KEY = "sync:notes";
@@ -174,7 +175,7 @@ export function getLastSuccessfulSyncDate(plugin: KeepSidianPlugin): string | un
 	return undefined;
 }
 
-function persistLastSuccessfulSyncDate(plugin: KeepSidianPlugin, isoString: string): void {
+export function persistLastSuccessfulSyncDate(plugin: KeepSidianPlugin, isoString: string): void {
 	plugin.settings.keepSidianLastSuccessfulSyncDate = isoString;
 	setVaultConfig(plugin, LAST_SUCCESSFUL_SYNC_DATE_KEY, isoString);
 }
@@ -219,6 +220,8 @@ export function buildDownloadSyncFilters(
 }
 
 export interface SyncCallbacks {
+	attempt?: SyncAttempt;
+	deferCheckpoint?: (date: string) => void;
 	setTotalNotes?: (total: number) => void;
 	reportProgress?: () => void;
 	reportPlanProgress?: (processed: number, total?: number) => void;
@@ -285,7 +288,8 @@ async function fetchImportPageWithRetry(
 	offset: number,
 	limit: number,
 	filters?: SyncFilters,
-	cursor?: string
+	cursor?: string,
+	attemptContext?: SyncAttempt
 ): Promise<GoogleKeepImportResponse> {
 	let retryDelayMs = FETCH_NOTES_INITIAL_RETRY_DELAY_MS;
 
@@ -296,6 +300,7 @@ async function fetchImportPageWithRetry(
 			if (!isRetryableFetchError(error) || attempt === FETCH_NOTES_MAX_ATTEMPTS) {
 				throw error;
 			}
+			await attemptContext?.pageEvent("retry", { retryCount: attempt });
 			logErrorIfNotTest(
 				`Rate limited while fetching notes at offset ${offset}; retrying in ${retryDelayMs}ms (attempt ${attempt}/${FETCH_NOTES_MAX_ATTEMPTS})`
 			);
@@ -315,72 +320,60 @@ async function fetchImportNotesBase(
 		filters?: SyncFilters,
 		cursor?: string
 	) => Promise<GoogleKeepImportResponse>,
-	callbacks?: Pick<SyncCallbacks, "setTotalNotes" | "reportPlanProgress">,
+	callbacks?: Pick<SyncCallbacks, "setTotalNotes" | "reportPlanProgress" | "attempt">,
 	downloadScope?: DownloadScope
 ): Promise<FetchImportNotesResult> {
-	try {
-		let offset = 0;
-		const limit = FETCH_NOTES_PAGE_LIMIT;
-		let cursor: string | undefined;
-		let usingCursorPagination = false;
-		let hasError = false;
-		let foundError: Error | null = null;
-		let hasReportedTotal = false;
-		const fetchedNotes: PreNormalizedNote[] = [];
-
-		const syncFilters = buildDownloadSyncFilters(plugin, downloadScope);
-
-		let completionDate: string | undefined;
-
-		while (!hasError) {
+	const attempt = callbacks?.attempt;
+	await attempt?.transition("fetch");
+	let offset = 0;
+	let pageOrdinal = 1;
+	const limit = FETCH_NOTES_PAGE_LIMIT;
+	let cursor: string | undefined;
+	let usingCursorPagination = false;
+	let hasReportedTotal = false;
+	const fetchedNotes: PreNormalizedNote[] = [];
+	const syncFilters = buildDownloadSyncFilters(plugin, downloadScope);
+	attempt?.setCutoff(syncFilters?.changed_gt);
+	let completionDate: string | undefined;
+	while (true) {
+		throwIfSyncCancelled(plugin);
+		if (attempt?.finished) throw new SyncCancellationError();
+		await attempt?.pageEvent("page-start", {
+			pageOrdinal,
+			paginationMode: usingCursorPagination ? "cursor" : "offset",
+			offset,
+			requestedLimit: limit,
+			fetchedCount: fetchedNotes.length,
+			retryCount: 0,
+		});
+		const response = await fetchImportPageWithRetry(fetchFunction, offset, limit, syncFilters, cursor, attempt);
+		completionDate = new Date().toISOString();
+		await attempt?.pageEvent("page-fetched", {
+			fetchedCount: fetchedNotes.length + (response.notes?.length ?? 0),
+			total: response.total_notes,
+		});
+		if (typeof response.total_notes === "number" && callbacks?.setTotalNotes && !hasReportedTotal) {
 			try {
-				const response = await fetchImportPageWithRetry(fetchFunction, offset, limit, syncFilters, cursor);
-				completionDate = new Date().toISOString();
-				if (typeof response.total_notes === "number" && callbacks?.setTotalNotes && !hasReportedTotal) {
-					try {
-						callbacks.setTotalNotes(response.total_notes);
-						hasReportedTotal = true;
-					} catch {
-						/* empty */
-					}
-				}
-				if (!response.notes || response.notes.length === 0) {
-					break;
-				}
-				fetchedNotes.push(...response.notes);
-				callbacks?.reportPlanProgress?.(
-					fetchedNotes.length,
-					typeof response.total_notes === "number" ? response.total_notes : undefined
-				);
-				if (response.next_cursor) {
-					cursor = response.next_cursor;
-					usingCursorPagination = true;
-				} else if (usingCursorPagination) {
-					break;
-				} else {
-					offset += limit;
-				}
-			} catch (error) {
-				const normalizedError = error instanceof Error ? error : new Error(String(error));
-				logErrorIfNotTest(`Error fetching notes at offset ${offset}:`, normalizedError);
-				hasError = true;
-				foundError = normalizedError;
+				callbacks.setTotalNotes(response.total_notes);
+				hasReportedTotal = true;
+			} catch {
+				/* Progress presentation must not interrupt the download. */
 			}
 		}
-
-		if (foundError) {
-			throw foundError;
+		if (!response.notes || response.notes.length === 0) break;
+		fetchedNotes.push(...response.notes);
+		callbacks?.reportPlanProgress?.(fetchedNotes.length, response.total_notes);
+		if (response.next_cursor) {
+			cursor = response.next_cursor;
+			usingCursorPagination = true;
+		} else if (usingCursorPagination) {
+			break;
+		} else {
+			offset += limit;
 		}
-
-		return {
-			notes: fetchedNotes,
-			completionDate,
-		};
-	} catch (error) {
-		const normalizedError = error instanceof Error ? error : new Error(String(error));
-		logErrorIfNotTest(normalizedError);
-		throw normalizedError;
+		pageOrdinal += 1;
 	}
+	return { notes: fetchedNotes, completionDate };
 }
 
 function buildImportPlanEntry(
@@ -469,7 +462,7 @@ export async function buildImportSyncPlan(
 	options?: NoteImportOptions,
 	allowPerNoteSelection = true,
 	selectionLockedReason?: string,
-	callbacks?: Pick<SyncCallbacks, "setTotalNotes" | "reportPlanProgress">,
+	callbacks?: Pick<SyncCallbacks, "setTotalNotes" | "reportPlanProgress" | "attempt">,
 	downloadScope?: DownloadScope
 ): Promise<BuiltImportSyncPlan> {
 	const { email, token } = plugin.settings;
@@ -490,6 +483,7 @@ export async function buildImportSyncPlan(
 			: (offset: number, limit: number, filters?: SyncFilters, cursor?: string) =>
 					apiFetchNotes(email, token, offset, limit, filters, cursor);
 	const fetched = await fetchImportNotesBase(plugin, fetchFunction, callbacks, downloadScope);
+	await callbacks?.attempt?.transition("plan");
 	const existingKeepNoteIndex = await buildExistingKeepNoteIndex(plugin.app, plugin.settings.saveLocation);
 	const entries = await Promise.all(
 		fetched.notes.map((note, index) =>
@@ -528,8 +522,10 @@ export async function importSelectedGoogleKeepNotes(
 	noteEntryIds?: string[]
 ): Promise<number> {
 	await processAndSaveNotes(plugin, notes, callbacks, noteEntryIds);
+	throwIfSyncCancelled(plugin);
 	if (completionDate) {
-		persistLastSuccessfulSyncDate(plugin, completionDate);
+		if (callbacks?.deferCheckpoint) callbacks.deferCheckpoint(completionDate);
+		else persistLastSuccessfulSyncDate(plugin, completionDate);
 	}
 	new Notice("Imported Google Keep notes.");
 	return notes.length;
@@ -548,6 +544,7 @@ async function importGoogleKeepNotesBase(
 ): Promise<number> {
 	try {
 		const fetched = await fetchImportNotesBase(plugin, fetchFunction, callbacks, downloadScope);
+		await callbacks?.attempt?.transition("execution");
 		const imported = await importSelectedGoogleKeepNotes(plugin, fetched.notes, callbacks, fetched.completionDate);
 		return imported;
 	} catch (error) {
@@ -731,7 +728,8 @@ export async function processAndSaveNotes(
 							async (folderPath: string) => {
 								await ensureFolderCached(folderPath);
 							},
-							(warning: SyncAttachmentWarning) => callbacks?.onAttachmentWarning?.(warning)
+							(warning: SyncAttachmentWarning) => callbacks?.onAttachmentWarning?.(warning),
+							callbacks?.attempt
 						)
 					);
 					batchMetrics.processed += 1;
@@ -744,11 +742,11 @@ export async function processAndSaveNotes(
 
 					if (metrics.totalDurationMs >= NOTE_PERF_SLOW_THRESHOLD_MS) {
 						logInfoIfNotTest(
-							`[KeepSidian perf] "${normalizedNote.title}" action=${metrics.action} total=${formatDurationMs(metrics.totalDurationMs)} duplicate=${formatDurationMs(metrics.duplicateDecisionDurationMs)} ensure_parent=${formatDurationMs(metrics.ensureParentFolderDurationMs)} write=${formatDurationMs(metrics.writeNoteDurationMs)} attachments=${formatDurationMs(metrics.attachmentDurationMs)} log=${formatDurationMs(metrics.logDurationMs)}`
+							`[KeepSidian perf] action=${metrics.action} total=${formatDurationMs(metrics.totalDurationMs)} duplicate=${formatDurationMs(metrics.duplicateDecisionDurationMs)} ensure_parent=${formatDurationMs(metrics.ensureParentFolderDurationMs)} write=${formatDurationMs(metrics.writeNoteDurationMs)} attachments=${formatDurationMs(metrics.attachmentDurationMs)} log=${formatDurationMs(metrics.logDurationMs)}`
 						);
 					}
 					await appendPerfTrace(plugin, "note-save-complete", {
-						title: normalizedNote.title,
+						noteOrdinal: index + 1,
 						action: metrics.action,
 						totalDurationMs: metrics.totalDurationMs,
 						folderEnsureDurationMs,
@@ -785,8 +783,8 @@ export async function processAndSaveNotes(
 					}
 				} catch (error: unknown) {
 					await appendPerfTrace(plugin, "note-save-failed", {
-						title: normalizedNote.title,
-						error: error instanceof Error ? error.message : String(error),
+						noteOrdinal: index + 1,
+						...safeSyncError(error),
 					});
 					if (!fatalError) {
 						fatalError = error;
@@ -829,7 +827,8 @@ export async function processAndSaveNote(
 		await ensureParentFolderForFile(plugin.app, filePath),
 	ensureFolderForPath: (folderPath: string) => Promise<void> = async (folderPath: string) =>
 		await ensureFolder(plugin.app, folderPath),
-	onAttachmentWarning?: (warning: SyncAttachmentWarning) => void
+	onAttachmentWarning?: (warning: SyncAttachmentWarning) => void,
+	attempt?: SyncAttempt
 ): Promise<NoteSaveMetrics> {
 	const metrics: NoteSaveMetrics = {
 		action: "created",
@@ -882,7 +881,11 @@ export async function processAndSaveNote(
 	};
 	const logNote = async (message: string): Promise<void> => {
 		metrics.logDurationMs += await measureAsyncDuration(async () => {
-			await logSync(plugin, message, NOTE_LOG_BATCH_OPTIONS);
+			await logSync(
+				plugin,
+				attempt ? `Note ${metrics.action} (attempt ${attempt.id}).` : message,
+				NOTE_LOG_BATCH_OPTIONS
+			);
 		});
 	};
 
@@ -1036,9 +1039,11 @@ export async function processAndSaveNote(
 		if (err instanceof SyncCancellationError) {
 			throw err;
 		}
-		const errorMessage = err instanceof Error ? err.message : String(err);
 		await flushLogSync(plugin, { batchKey: NOTE_LOG_BATCH_KEY });
-		await logSync(plugin, `${noteLink} - error: ${errorMessage}`);
+		await logSync(
+			plugin,
+			`${attempt ? `Note (attempt ${attempt.id})` : noteLink} - error: ${JSON.stringify(safeSyncError(err))}`
+		);
 		throw err;
 	} finally {
 		metrics.totalDurationMs = getNowMs() - startedAt;

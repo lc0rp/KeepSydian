@@ -599,7 +599,7 @@ describe("KeepSidianPlugin", () => {
 				delete (Obsidian as { normalizePath?: (path: string) => string }).normalizePath;
 			}
 
-			expect(notice).toHaveBeenCalledWith("KeepSidian: failed to write sync log.");
+			expect(notice).toHaveBeenCalledWith(expect.stringContaining("sync log or attempt history unavailable. Attempt"));
 		});
 
 		it("logs started and ended entries for manual sync", async () => {

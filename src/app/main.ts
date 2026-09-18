@@ -9,6 +9,7 @@ import { FeedbackSurveyModal } from "@ui/modals/FeedbackSurveyModal";
 import { initializeStatusBar } from "@app/sync-ui";
 import { logSync } from "@app/logging";
 import { SyncCancellationError } from "@app/sync-cancel";
+import { SyncAttempt } from "@app/sync-attempt";
 import { getLastSuccessfulSyncDate } from "@features/keep/sync";
 import { KeepSidianSettingsTab } from "@ui/settings/KeepSidianSettingsTab";
 import { SubscriptionSettingsTab } from "@ui/settings/SubscriptionSettingsTab";
@@ -417,18 +418,27 @@ export default class KeepSidianPlugin extends Plugin {
 	private ensureSyncCenterModal(): SyncProgressModal {
 		if (!this.progressModal) {
 			this.progressModal = new SyncProgressModal(this.app, {
+				createSyncAttempt: (mode) => new SyncAttempt(this, mode),
+				getLastAttempt: () => this.settings.lastSyncAttempt,
 				buildSyncPlan: async (mode, callbacks, downloadScope) => {
-					if (!this.ensureCredentials()) {
-						return null;
-					}
-					return await buildManualSyncPlan(this, mode, callbacks, downloadScope);
+					return await buildManualSyncPlan(
+						this,
+						mode,
+						{
+							...callbacks,
+							validateCredentials: () => this.ensureCredentials(),
+						},
+						downloadScope
+					);
 				},
 				runSyncPlan: async (preparedPlan, callbacks) => {
 					if (this.isSyncing) {
-						return {};
+						await preparedPlan.attempt?.finish("canceled");
+						return { canceled: true };
 					}
 					if (!this.ensureCredentials()) {
-						return {};
+						await preparedPlan.attempt?.finish("canceled");
+						return { canceled: true };
 					}
 					const syncRequest: ActiveSyncRequest = { cancelRequested: false };
 					this.activeSyncRequest = syncRequest;
@@ -498,14 +508,17 @@ export default class KeepSidianPlugin extends Plugin {
 			return;
 		}
 
-		if (!this.ensureCredentials()) {
-			await logSync(this, `${auto ? "Auto" : "Manual"} sync aborted - missing credentials.`);
-			return;
-		}
-
 		this.isSyncing = true;
+		const attempt = new SyncAttempt(this, "import", undefined, auto ? "scheduled" : "legacy");
 		try {
-			await runImportNotesFlow(this, auto, getErrorMessage, options);
+			await attempt.start();
+			if (!this.ensureCredentials()) {
+				await attempt.finish("canceled");
+				return;
+			}
+			await runImportNotesFlow(this, auto, getErrorMessage, options, attempt);
+		} catch (error) {
+			await attempt.fail(error);
 		} finally {
 			this.isSyncing = false;
 		}
@@ -516,14 +529,17 @@ export default class KeepSidianPlugin extends Plugin {
 			return;
 		}
 
-		if (!this.ensureCredentials()) {
-			await logSync(this, "Push sync aborted - missing credentials.");
-			return;
-		}
-
 		this.isSyncing = true;
+		const attempt = new SyncAttempt(this, "push", undefined, "legacy");
 		try {
-			await runPushNotesFlow(this, getErrorMessage);
+			await attempt.start();
+			if (!this.ensureCredentials()) {
+				await attempt.finish("canceled");
+				return;
+			}
+			await runPushNotesFlow(this, getErrorMessage, attempt);
+		} catch (error) {
+			await attempt.fail(error);
 		} finally {
 			this.isSyncing = false;
 		}
@@ -534,14 +550,17 @@ export default class KeepSidianPlugin extends Plugin {
 			return;
 		}
 
-		if (!this.ensureCredentials()) {
-			await logSync(this, "Two-way sync aborted - missing credentials.");
-			return;
-		}
-
 		this.isSyncing = true;
+		const attempt = new SyncAttempt(this, "two-way", undefined, "legacy");
 		try {
-			await runTwoWaySyncFlow(this, getErrorMessage, () => this.resetAutoSyncGateState());
+			await attempt.start();
+			if (!this.ensureCredentials()) {
+				await attempt.finish("canceled");
+				return;
+			}
+			await runTwoWaySyncFlow(this, getErrorMessage, () => this.resetAutoSyncGateState(), attempt);
+		} catch (error) {
+			await attempt.fail(error);
 		} finally {
 			this.isSyncing = false;
 		}

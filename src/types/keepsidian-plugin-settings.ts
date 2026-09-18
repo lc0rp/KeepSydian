@@ -1,5 +1,6 @@
 import { DEFAULT_PREMIUM_FEATURES, PremiumFeatureSettings, SubscriptionCache } from "./subscription";
 import type { TokenHelperManifest } from "./token-helper";
+import type { LastSyncAttempt } from "./sync-attempt";
 
 export type SyncMode = "import" | "push" | "two-way";
 export type SaveLocationMode = "custom" | "daily-notes";
@@ -54,6 +55,7 @@ export interface KeepSidianPluginSettings {
 	autoSyncIntervalHours: number;
 	lastSyncSummary: LastSyncSummary | null;
 	lastSyncLogPath?: string | null;
+	lastSyncAttempt?: LastSyncAttempt;
 	keepSidianLastSuccessfulSyncDate?: string | null;
 	frontmatterPascalCaseFixApplied?: boolean;
 	twoWaySyncBackupAcknowledged: boolean;

@@ -1,5 +1,6 @@
 import { Notice, ProgressBarComponent } from "obsidian";
 import type KeepSidianPlugin from "@app/main";
+import { formatAttemptSummary } from "@app/sync-attempt";
 import { formatStatusBarText, formatStatusBarTooltip } from "@app/sync-status";
 import type { LastSyncSummary, SyncRunStatus } from "@types";
 import { HIDDEN_CLASS } from "@app/ui-constants";
@@ -124,6 +125,17 @@ export function initializeStatusBar(plugin: KeepSidianPlugin) {
 export function updateStatusBarSummary(plugin: KeepSidianPlugin) {
 	ensureStatusBarElements(plugin);
 	const summary = getSummary(plugin);
+	const attempt = plugin.settings.lastSyncAttempt;
+	if (
+		attempt &&
+		(!summary ||
+			attempt.updatedAt > summary.timestamp ||
+			(attempt.updatedAt === summary.timestamp && attempt.outcome !== "success"))
+	) {
+		setStatusBarText(plugin, `Last attempt ${attempt.outcome ?? "incomplete"}`);
+		setStatusBarTooltip(plugin, formatAttemptSummary(attempt));
+		return;
+	}
 	setStatusBarText(plugin, formatStatusBarText(summary));
 	setStatusBarTooltip(plugin, formatStatusBarTooltip(summary));
 }
@@ -233,7 +245,9 @@ export function finishSyncUI(plugin: KeepSidianPlugin, status: SyncRunStatus | b
 	}
 	plugin.progressModal?.setComplete(normalizedStatus, plugin.processedNotes, attachmentWarnings);
 	plugin.progressModal?.setIdleSummary(summary);
-	void plugin.saveSettings();
+	void Promise.resolve(plugin.saveSettings()).catch(() => {
+		new Notice("KeepSidian: unable to save sync history. Check vault storage permissions.");
+	});
 }
 
 export function setTotalNotes(plugin: KeepSidianPlugin, total: number) {

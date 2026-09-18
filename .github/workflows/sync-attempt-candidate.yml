@@ -4,21 +4,23 @@ on:
     branches: [fix/sync-attempt-observability]
 permissions:
   contents: write
+defaults:
+  run:
+    shell: bash
 jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Apply checksum-verified implementation
+      - name: Apply loopback verification update
         run: |
           set -euo pipefail
-          cat .github/sync-attempt-transfer/part* | base64 -d | gzip -d > /tmp/sync-attempt.patch
-          echo 'c02a43920fd975aa8238b99bc85b693eb06df2cdd034d1c7559c8ce88263bc6b  /tmp/sync-attempt.patch' | sha256sum -c
-          git apply --index /tmp/sync-attempt.patch
+          echo 'dcdda8df343cf8415f2ff074b2044fff1e26c51c928c56c453eb6e14585b6f6e  .github/sync-attempt-loopback.patch' | sha256sum -c
+          git apply --index .github/sync-attempt-loopback.patch
           git config user.name 'KeepSidian validation'
           git config user.email 'noreply@users.noreply.github.com'
-          git commit -m 'fix: persist sync attempts across preparation and execution'
+          git commit -m 'test: verify sync failures through real Obsidian HTTP'
           git push origin HEAD:refs/heads/validation/sync-attempt-${{ github.run_id }}
           mkdir -p test-results
           git rev-parse HEAD > test-results/candidate-commit.txt
