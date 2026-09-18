@@ -1,0 +1,22 @@
+--- a/src/app/sync-attempt.ts
++++ b/src/app/sync-attempt.ts
+@@ -178,7 +178,7 @@
+ 			: errorKind === "parse"
+ 				? "Invalid server response."
+ 				: "The operation could not be completed.";
+-		return `${reason} Attempt ${this.id}.${this.unavailable ? " Sync log unavailable; check vault storage permissions." : " See View log for details."}`;
++		return `${reason} Attempt ${this.id}.${this.unavailable ? " Sync log unavailable; check vault storage permissions." : " Open the sync log for details."}`;
+ 	}
+ 
+ 	private fallback(): void {
+--- a/test/specs/sync-attempt.e2e.ts
++++ b/test/specs/sync-attempt.e2e.ts
+@@ -164,7 +164,7 @@
+ 				}),
+ 			]);
+ 			await browser.saveScreenshot(`test-results/sync-attempt-${scenario}.png`);
+-			await button("View log").click();
++			await button("Open sync log").click();
+ 			await browser.waitUntil(
+ 				async () =>
+ 					(await browser.executeObsidian(({ app }) => app.workspace.getActiveFile()?.path)) === result.attempt.logPath,

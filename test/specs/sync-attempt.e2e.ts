@@ -1,9 +1,14 @@
 import { mkdir } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
+import { build } from "esbuild";
 import { browser, expect } from "@wdio/globals";
 import type KeepSidianPlugin from "../../src/app/main";
 import type { LastSyncAttempt } from "../../src/types/sync-attempt";
 
 describe("Sync attempt observability in installed Obsidian", function () {
+	let server: Server | undefined;
+	let activeScenario = "";
+	let page = 0;
 	const checkpoint = "2024-01-01T00:00:00.000Z";
 	const button = (label: string) => browser.$(`//button[normalize-space(.)="${label}"]`);
 
@@ -16,10 +21,64 @@ describe("Sync attempt observability in installed Obsidian", function () {
 		await browser.reloadObsidian({ vault: "./test/vaults/simple" });
 		await browser.$(".keepsidian-feedback-modal").waitForExist({ timeout: 20000 });
 		await button("Maybe later").click();
+		// A real loopback server exercises Obsidian requestUrl, including non-2xx handling.
+		// Only the isolated WDIO vault receives a bundle configured for this server.
+		server = createServer((request, response) => {
+			if (!request.url?.startsWith("/keep/sync/")) {
+				response.writeHead(404).end();
+				return;
+			}
+			page += 1;
+			const firstPage = activeScenario === "later-cursor" && page === 1;
+			const json = firstPage
+				? {
+						notes: [{ title: "private-note-title", text: "private-note-body" }],
+						total_notes: 501,
+						next_cursor: "private-cursor-value",
+					}
+				: { error: "observability-secret-token observability@example.invalid private-note-body" };
+			response.writeHead(firstPage ? 200 : 504, { "Content-Type": "application/json" });
+			response.end(JSON.stringify(json));
+		});
+		await new Promise<void>((resolve, reject) => {
+			server!.once("error", reject);
+			server!.listen(0, "127.0.0.1", resolve);
+		});
+		const address = server.address();
+		if (!address || typeof address === "string") throw new Error("No loopback server address");
+		const bundle = await build({
+			entryPoints: ["src/main.ts"],
+			bundle: true,
+			write: false,
+			platform: "node",
+			format: "cjs",
+			target: "es2018",
+			tsconfig: "tsconfig.json",
+			external: ["obsidian", "electron", "@codemirror/*", "@lezer/*"],
+			define: {
+				"process.env.KEEPSIDIAN_SERVER_URL": JSON.stringify(`http://127.0.0.1:${address.port}`),
+			},
+		});
+		await browser.executeObsidian(async ({ app }, source) => {
+			const plugin = app.plugins.getPlugin("keepsidian") as KeepSidianPlugin;
+			const dir = plugin.manifest.dir;
+			if (!dir) throw new Error("Isolated plugin directory unavailable");
+			await app.plugins.disablePlugin("keepsidian");
+			await app.vault.adapter.write(`${dir}/main.js`, source);
+			await app.plugins.enablePlugin("keepsidian");
+		}, bundle.outputFiles[0].text);
 	});
 
-	afterEach(async () => {
-		await browser.executeObsidian(({ app, obsidian }) => {
+	after(async () => {
+		if (server)
+			await new Promise<void>((resolve, reject) => server!.close((error) => (error ? reject(error) : resolve())));
+	});
+
+	afterEach(async function () {
+		if (this.currentTest?.state === "failed") {
+			await browser.saveScreenshot(`test-results/sync-attempt-${activeScenario}-failed.png`);
+		}
+		await browser.executeObsidian(({ app }) => {
 			const state = window as Window & { __attemptRestore?: () => void };
 			state.__attemptRestore?.();
 			delete state.__attemptRestore;
@@ -30,8 +89,10 @@ describe("Sync attempt observability in installed Obsidian", function () {
 
 	for (const scenario of ["first-debug-off", "first-debug-on", "later-cursor"] as const) {
 		it(`records ${scenario} HTTP 504, opens its log, and retains the download checkpoint`, async () => {
+			activeScenario = scenario;
+			page = 0;
 			await browser.executeObsidian(
-				async ({ app, obsidian }, testScenario, savedCheckpoint) => {
+				async ({ app }, testScenario, savedCheckpoint) => {
 					const plugin = app.plugins.getPlugin("keepsidian") as KeepSidianPlugin;
 					plugin.stopAutoSync();
 					plugin.progressModal?.close();
@@ -48,39 +109,9 @@ describe("Sync attempt observability in installed Obsidian", function () {
 						lastSyncSummary: null,
 					});
 					plugin.lastSyncSummary = null;
-					const originalRequest = obsidian.requestUrl;
 					const originalSubscription = plugin.subscriptionService.isSubscriptionActive;
 					plugin.subscriptionService.isSubscriptionActive = async () => false;
-					let page = 0;
-					// Intercept transport only: real HTTP wrapper, pagination, lifecycle, disk and modal run unchanged.
-					Object.defineProperty(obsidian, "requestUrl", {
-						configurable: true,
-						writable: true,
-						value: async () => {
-							page += 1;
-							const firstPage = testScenario === "later-cursor" && page === 1;
-							const json = firstPage
-								? {
-										notes: [{ title: "private-note-title", text: "private-note-body" }],
-										total_notes: 501,
-										next_cursor: "private-cursor-value",
-									}
-								: { error: "observability-secret-token observability@example.invalid private-note-body" };
-							return {
-								status: firstPage ? 200 : 504,
-								json,
-								text: JSON.stringify(json),
-								headers: {},
-								arrayBuffer: new ArrayBuffer(0),
-							};
-						},
-					});
 					(window as Window & { __attemptRestore?: () => void }).__attemptRestore = () => {
-						Object.defineProperty(obsidian, "requestUrl", {
-							configurable: true,
-							writable: true,
-							value: originalRequest,
-						});
 						plugin.subscriptionService.isSubscriptionActive = originalSubscription;
 					};
 					plugin.openSyncCenter({ mode: "import" });

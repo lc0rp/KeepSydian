@@ -37,4 +37,16 @@ describe("httpRequest supporter key handling", () => {
 		});
 		expect(JSON.stringify(caught)).not.toContain("ABCD-EFGH-IJKL-MN12");
 	});
+	it("retains HTTP status for ordinary sync requests without a supporter key", async () => {
+		(requestUrl as jest.Mock).mockResolvedValueOnce({
+			status: 504,
+			json: { error: "Upstream timeout" },
+			headers: {},
+		});
+		await expect(httpGetJson("https://example.invalid/keep/sync/v2")).rejects.toMatchObject({
+			status: 504,
+			kind: "network",
+		});
+		expect(requestUrl).toHaveBeenCalledWith(expect.objectContaining({ throw: false }));
+	});
 });

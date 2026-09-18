@@ -13,14 +13,14 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Apply loopback verification update
+      - name: Apply UI label verification update
         run: |
           set -euo pipefail
-          echo 'dcdda8df343cf8415f2ff074b2044fff1e26c51c928c56c453eb6e14585b6f6e  .github/sync-attempt-loopback.patch' | sha256sum -c
-          git apply --index .github/sync-attempt-loopback.patch
+          echo '442a6e57b327978e62955dbf5f68a72b64fdf99d254cc425f18042efa78b55d2  .github/sync-attempt-ui.patch' | sha256sum -c
+          git apply --index .github/sync-attempt-ui.patch
           git config user.name 'KeepSidian validation'
           git config user.email 'noreply@users.noreply.github.com'
-          git commit -m 'test: verify sync failures through real Obsidian HTTP'
+          git commit -m 'test: verify the existing open sync log action'
           git push origin HEAD:refs/heads/validation/sync-attempt-${{ github.run_id }}
           mkdir -p test-results
           git rev-parse HEAD > test-results/candidate-commit.txt
