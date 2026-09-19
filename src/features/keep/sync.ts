@@ -25,6 +25,7 @@ import { SyncCancellationError } from "@app/sync-cancel";
 import {
 	fetchNotes as apiFetchNotes,
 	fetchNotesWithPremiumFeatures as apiFetchNotesWithPremium,
+	getReplayEpoch,
 } from "@integrations/server/keepApi";
 import { findExistingKeepNotePath } from "./domain/noteLookup";
 import {
@@ -35,14 +36,36 @@ import {
 import { appendPerfTrace } from "@app/perf-trace";
 import { stripManagedImageEmbeds, withManagedImageEmbeds } from "./domain/attachmentEmbeds";
 import { safeSyncError, type SyncAttempt } from "@app/sync-attempt";
+import { retryDownload, isTransientDownloadError } from "./download-retry";
+import { KEEPSIDIAN_SERVER_URL } from "../../config";
 
 const LAST_SUCCESSFUL_SYNC_DATE_KEY = "KeepSidianLastSuccessfulSyncDate";
 const NOTE_LOG_BATCH_KEY = "sync:notes";
 const NOTE_LOG_BATCH_SIZE = 50;
 const FETCH_NOTES_PAGE_LIMIT = 100;
-const FETCH_NOTES_MAX_ATTEMPTS = 3;
-const FETCH_NOTES_INITIAL_RETRY_DELAY_MS = 2_000;
-const FETCH_NOTES_RETRYABLE_STATUSES = new Set([429, 503]);
+interface Preparation {
+	identity: string;
+	created: number;
+	operationId?: string;
+	originalAttemptId?: string;
+	notes: PreNormalizedNote[];
+	offset: number;
+	cursor?: string;
+	filters?: SyncFilters;
+	page: number;
+	usingCursor: boolean;
+	active: boolean;
+}
+const preparations = new WeakMap<KeepSidianPlugin, Preparation>();
+export class RecoverablePreparationError extends NetworkError {
+	constructor(cause: NetworkError) {
+		super(
+			"Download paused. Start sync again with the same options to resume your original date range. Nothing has been imported.",
+			cause.status,
+			cause
+		);
+	}
+}
 const NOTE_SAVE_CONCURRENCY = 4;
 const NOTE_PERF_LOG_INTERVAL = 25;
 const NOTE_PERF_SLOW_THRESHOLD_MS = 1_500;
@@ -270,14 +293,6 @@ function logInfoIfNotTest(...args: unknown[]) {
 	}
 }
 
-function isRetryableFetchError(error: unknown): error is NetworkError {
-	return error instanceof NetworkError && FETCH_NOTES_RETRYABLE_STATUSES.has(error.status ?? -1);
-}
-
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
 async function fetchImportPageWithRetry(
 	fetchFunction: (
 		offset: number,
@@ -289,27 +304,18 @@ async function fetchImportPageWithRetry(
 	limit: number,
 	filters?: SyncFilters,
 	cursor?: string,
-	attemptContext?: SyncAttempt
+	attemptContext?: SyncAttempt,
+	checkCancelled: () => void = () => {},
+	enabled = true
 ): Promise<GoogleKeepImportResponse> {
-	let retryDelayMs = FETCH_NOTES_INITIAL_RETRY_DELAY_MS;
-
-	for (let attempt = 1; attempt <= FETCH_NOTES_MAX_ATTEMPTS; attempt++) {
-		try {
-			return await fetchFunction(offset, limit, filters, cursor);
-		} catch (error) {
-			if (!isRetryableFetchError(error) || attempt === FETCH_NOTES_MAX_ATTEMPTS) {
-				throw error;
-			}
-			await attemptContext?.pageEvent("retry", { retryCount: attempt });
-			logErrorIfNotTest(
-				`Rate limited while fetching notes at offset ${offset}; retrying in ${retryDelayMs}ms (attempt ${attempt}/${FETCH_NOTES_MAX_ATTEMPTS})`
-			);
-			await sleep(retryDelayMs);
-			retryDelayMs *= 2;
-		}
-	}
-
-	throw new Error("Retry loop exited unexpectedly");
+	return retryDownload(() => fetchFunction(offset, limit, filters, cursor), {
+		enabled,
+		checkCancelled,
+		onRetry: async (retryCount) => {
+			await attemptContext?.pageEvent("retry", { retryCount });
+			new Notice("Download interrupted. Retrying the same page…", 2500);
+		},
+	});
 }
 
 async function fetchImportNotesBase(
@@ -321,18 +327,20 @@ async function fetchImportNotesBase(
 		cursor?: string
 	) => Promise<GoogleKeepImportResponse>,
 	callbacks?: Pick<SyncCallbacks, "setTotalNotes" | "reportPlanProgress" | "attempt">,
-	downloadScope?: DownloadScope
+	downloadScope?: DownloadScope,
+	preparation?: Preparation,
+	retryEnabled = true
 ): Promise<FetchImportNotesResult> {
 	const attempt = callbacks?.attempt;
 	await attempt?.transition("fetch");
-	let offset = 0;
-	let pageOrdinal = 1;
+	let offset = preparation?.offset ?? 0;
+	let pageOrdinal = preparation?.page ?? 1;
 	const limit = FETCH_NOTES_PAGE_LIMIT;
-	let cursor: string | undefined;
-	let usingCursorPagination = false;
+	let cursor: string | undefined = preparation?.cursor;
+	let usingCursorPagination = preparation?.usingCursor ?? false;
 	let hasReportedTotal = false;
-	const fetchedNotes: PreNormalizedNote[] = [];
-	const syncFilters = buildDownloadSyncFilters(plugin, downloadScope);
+	const fetchedNotes: PreNormalizedNote[] = preparation?.notes ?? [];
+	const syncFilters = preparation ? preparation.filters : buildDownloadSyncFilters(plugin, downloadScope);
 	attempt?.setCutoff(syncFilters?.changed_gt);
 	let completionDate: string | undefined;
 	while (true) {
@@ -346,12 +354,20 @@ async function fetchImportNotesBase(
 			fetchedCount: fetchedNotes.length,
 			retryCount: 0,
 		});
-		const response = await fetchImportPageWithRetry(fetchFunction, offset, limit, syncFilters, cursor, attempt);
+		const response = await fetchImportPageWithRetry(
+			fetchFunction,
+			offset,
+			limit,
+			syncFilters,
+			cursor,
+			attempt,
+			() => {
+				throwIfSyncCancelled(plugin);
+				if (attempt?.finished) throw new SyncCancellationError();
+			},
+			retryEnabled
+		);
 		completionDate = new Date().toISOString();
-		await attempt?.pageEvent("page-fetched", {
-			fetchedCount: fetchedNotes.length + (response.notes?.length ?? 0),
-			total: response.total_notes,
-		});
 		if (typeof response.total_notes === "number" && callbacks?.setTotalNotes && !hasReportedTotal) {
 			try {
 				callbacks.setTotalNotes(response.total_notes);
@@ -361,7 +377,18 @@ async function fetchImportNotesBase(
 			}
 		}
 		if (!response.notes || response.notes.length === 0) break;
-		fetchedNotes.push(...response.notes);
+		const stableId = (note: PreNormalizedNote) =>
+			note.id ?? /GoogleKeepUrl:\s*([^\s]+)/.exec(note.text ?? note.frontmatter ?? "")?.[1];
+		const ids = new Set(fetchedNotes.map(stableId).filter(Boolean));
+		for (const note of response.notes) {
+			const id = stableId(note);
+			if (id && ids.has(id)) continue;
+			if (id) ids.add(id);
+			fetchedNotes.push(note);
+		}
+		await attempt?.pageEvent("page-fetched", { fetchedCount: fetchedNotes.length, total: response.total_notes });
+		if (preparation && JSON.stringify(fetchedNotes).length * 2 > 16 * 1024 * 1024)
+			throw new Error("Preparation storage limit reached. Select a narrower date range.");
 		callbacks?.reportPlanProgress?.(fetchedNotes.length, response.total_notes);
 		if (response.next_cursor) {
 			cursor = response.next_cursor;
@@ -372,6 +399,8 @@ async function fetchImportNotesBase(
 			offset += limit;
 		}
 		pageOrdinal += 1;
+		if (preparation)
+			Object.assign(preparation, { offset, cursor, page: pageOrdinal, usingCursor: usingCursorPagination });
 	}
 	return { notes: fetchedNotes, completionDate };
 }
@@ -467,6 +496,50 @@ export async function buildImportSyncPlan(
 ): Promise<BuiltImportSyncPlan> {
 	const { email, token } = plugin.settings;
 	const supporterKey = plugin.settings.supporterKeyConfigured ? (plugin.settings.supporterKey ?? "") : undefined;
+	const identity = JSON.stringify([
+		email,
+		token,
+		supporterKey,
+		KEEPSIDIAN_SERVER_URL,
+		options,
+		downloadScope,
+		callbacks?.attempt?.mode,
+	]);
+	let preparation = preparations.get(plugin);
+	if (preparation?.active) throw new Error("A download preparation is already running.");
+	if (preparation && (preparation.identity !== identity || Date.now() - preparation.created >= 14 * 60_000)) {
+		preparations.delete(plugin);
+		preparation = undefined;
+		new Notice("Previous preparation expired or its options changed. Restarting the selected date range.");
+	}
+	if (!preparation) {
+		// Free GET preparation is already replay-safe and needs no premium probe.
+		const epoch = options === undefined ? undefined : await getReplayEpoch(email, token);
+		preparation = {
+			identity,
+			created: Date.now(),
+			operationId: epoch ? `${epoch}:${Date.now()}:${Math.random().toString(36).slice(2)}` : undefined,
+			originalAttemptId: callbacks?.attempt?.id,
+			notes: [],
+			offset: 0,
+			page: 1,
+			usingCursor: false,
+			filters: buildDownloadSyncFilters(plugin, downloadScope),
+			active: false,
+		};
+		preparations.set(plugin, preparation);
+		const retained = preparation;
+		window.setTimeout(() => {
+			if (preparations.get(plugin) === retained && !retained.active) preparations.delete(plugin);
+		}, 14 * 60_000);
+	} else {
+		callbacks?.attempt?.setResumedFrom(preparation.originalAttemptId);
+		new Notice(
+			`Resuming download with ${preparation.notes.length} notes already fetched. Your original date range is preserved.`
+		);
+	}
+	preparation.active = true;
+	const operationId = preparation.operationId;
 	const fetchFunction =
 		options !== undefined
 			? (offset: number, limit: number, filters?: SyncFilters, cursor?: string) =>
@@ -478,11 +551,36 @@ export async function buildImportSyncPlan(
 						limit,
 						filters,
 						cursor,
-						supporterKey
+						supporterKey,
+						operationId
 					)
 			: (offset: number, limit: number, filters?: SyncFilters, cursor?: string) =>
-					apiFetchNotes(email, token, offset, limit, filters, cursor);
-	const fetched = await fetchImportNotesBase(plugin, fetchFunction, callbacks, downloadScope);
+					apiFetchNotes(email, token, offset, limit, filters, cursor, operationId);
+	let fetched: FetchImportNotesResult;
+	try {
+		fetched = await fetchImportNotesBase(
+			plugin,
+			fetchFunction,
+			callbacks,
+			downloadScope,
+			preparation,
+			options === undefined || !!operationId
+		);
+		preparations.delete(plugin);
+	} catch (error) {
+		if (isTransientDownloadError(error) && (options === undefined || !!operationId)) {
+			throw new RecoverablePreparationError(error);
+		}
+		preparations.delete(plugin);
+		if (error instanceof NetworkError && error.code === "sync_session_expired")
+			new Notice(
+				"Preparation expired on the server. Start sync again to restart your selected date range. No notes were imported."
+			);
+		throw error;
+	} finally {
+		preparation.active = false;
+		if (Date.now() - preparation.created >= 14 * 60_000) preparations.delete(plugin);
+	}
 	await callbacks?.attempt?.transition("plan");
 	const existingKeepNoteIndex = await buildExistingKeepNoteIndex(plugin.app, plugin.settings.saveLocation);
 	const entries = await Promise.all(
@@ -540,10 +638,18 @@ async function importGoogleKeepNotesBase(
 		cursor?: string
 	) => Promise<GoogleKeepImportResponse>,
 	callbacks?: SyncCallbacks,
-	downloadScope?: DownloadScope
+	downloadScope?: DownloadScope,
+	retryEnabled = true
 ): Promise<number> {
 	try {
-		const fetched = await fetchImportNotesBase(plugin, fetchFunction, callbacks, downloadScope);
+		const fetched = await fetchImportNotesBase(
+			plugin,
+			fetchFunction,
+			callbacks,
+			downloadScope,
+			undefined,
+			retryEnabled
+		);
 		await callbacks?.attempt?.transition("execution");
 		const imported = await importSelectedGoogleKeepNotes(plugin, fetched.notes, callbacks, fetched.completionDate);
 		return imported;
@@ -581,7 +687,8 @@ export async function importGoogleKeepNotesWithOptions(
 		(offset, limit, filters, cursor) =>
 			apiFetchNotesWithPremium(email, token, featureFlags, offset, limit, filters, cursor, supporterKey),
 		callbacks,
-		downloadScope
+		downloadScope,
+		false
 	);
 }
 

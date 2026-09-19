@@ -376,6 +376,7 @@ export class SyncProgressModal extends Modal {
 	private isSyncing = false;
 	private isCanceling = false;
 	private isGeneratingReview = false;
+	private preparationPaused = false;
 	private processed = 0;
 	private total: number | undefined;
 	private lastResult: {
@@ -603,6 +604,7 @@ export class SyncProgressModal extends Modal {
 		this.isGeneratingReview = false;
 		void this.activeAttempt?.finish("abandoned");
 		this.selectedMode = mode;
+		this.preparationPaused = false;
 		this.preparedPlan = null;
 		this.executionSnapshot = null;
 		this.showExecutionResult = false;
@@ -617,6 +619,7 @@ export class SyncProgressModal extends Modal {
 	}
 
 	private setDownloadScopeKind(kind: DownloadScopeKind) {
+		this.preparationPaused = false;
 		if (this.downloadScopeKind === kind) {
 			return;
 		}
@@ -730,6 +733,28 @@ export class SyncProgressModal extends Modal {
 	}
 
 	private showAttemptError(error: unknown, context: "review" | "run", attempt = this.activeAttempt) {
+		this.preparationPaused = false;
+		if (
+			context === "review" &&
+			error &&
+			typeof error === "object" &&
+			"code" in error &&
+			error.code === "sync_session_expired"
+		) {
+			this.modalAlert = {
+				title: "Download preparation expired",
+				message: "Start sync again to restart the selected date range. No notes were imported.",
+			};
+			return;
+		}
+		if (context === "review" && error instanceof Error && error.message.startsWith("Download paused.")) {
+			this.preparationPaused = true;
+			this.modalAlert = {
+				title: "Download paused",
+				message: `${error.message}${attempt ? ` ${attempt.errorMessage(error)}` : ""}`,
+			};
+			return;
+		}
 		this.modalAlert = attempt
 			? {
 					title:
@@ -1227,7 +1252,9 @@ export class SyncProgressModal extends Modal {
 
 		const startButton = this.createActionButton(
 			actionsEl,
-			getSetupPrimaryButtonLabel(this.isGeneratingReview, this.planBuildProcessed, this.planBuildTotal),
+			this.preparationPaused && !this.isGeneratingReview
+				? "Resume download"
+				: getSetupPrimaryButtonLabel(this.isGeneratingReview, this.planBuildProcessed, this.planBuildTotal),
 			async () => {
 				await this.beginReview();
 			}

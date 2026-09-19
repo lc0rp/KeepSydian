@@ -99,22 +99,36 @@ export async function httpRequest<T = unknown>(url: string, options: HttpRequest
 	try {
 		response = await requestUrl(reqInit);
 	} catch (error) {
-		if (hasSupporterKey) {
-			const status = error instanceof NetworkError ? error.status : undefined;
-			throw new NetworkError("Unable to reach the KeepSidian server", status);
-		}
 		if (error instanceof NetworkError) {
+			if (hasSupporterKey) {
+				const safe = new NetworkError("Unable to reach the KeepSidian server", error.status);
+				safe.retryAfterMs = error.retryAfterMs;
+				safe.transportFailure = error.transportFailure;
+				throw safe;
+			}
 			throw error;
 		}
-		const message = error instanceof Error ? error.message : "Unable to reach the KeepSidian server";
-		throw new NetworkError(message, undefined, error);
+		const candidate = error as { status?: unknown; code?: unknown; message?: unknown } | null;
+		const status = typeof candidate?.status === "number" ? candidate.status : undefined;
+		const message =
+			!hasSupporterKey && error instanceof Error ? error.message : "Unable to reach the KeepSidian server";
+		const normalized = new NetworkError(message, status);
+		normalized.transportFailure =
+			["ECONNRESET", "ETIMEDOUT", "ENETUNREACH", "ECONNREFUSED"].includes(String(candidate?.code)) ||
+			(typeof candidate?.message === "string" &&
+				/net::ERR_(CONNECTION_RESET|CONNECTION_CLOSED|TIMED_OUT|INTERNET_DISCONNECTED)/.test(candidate.message));
+		throw normalized;
 	}
 	const status = typeof response.status === "number" ? response.status : 0;
 	if (status < 200 || status >= 300) {
 		// Try to extract error message from body, but don't fail parsing again here
 		let errMsg = `Server returned status ${status}`;
+		let errorCode: string | undefined;
 		try {
-			const errJson = await parseJsonDefensively<{ error?: unknown; message?: unknown }>(asResponseLike(response));
+			const errJson = await parseJsonDefensively<{ error?: unknown; message?: unknown; code?: unknown }>(
+				asResponseLike(response)
+			);
+			if (typeof errJson?.code === "string" && /^sync_[a-z_]+$/.test(errJson.code)) errorCode = errJson.code;
 			const candidateMessage =
 				typeof errJson?.error === "string"
 					? errJson.error
@@ -128,6 +142,7 @@ export async function httpRequest<T = unknown>(url: string, options: HttpRequest
 			/* empty */
 		}
 		const networkError = new NetworkError(errMsg, status);
+		networkError.code = errorCode;
 		networkError.retryAfterMs = parseRetryAfterMs(asResponseLike(response).headers);
 		throw networkError;
 	}

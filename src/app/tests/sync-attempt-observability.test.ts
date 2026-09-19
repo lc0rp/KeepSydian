@@ -19,6 +19,9 @@ import { SyncProgressModal } from "@ui/modals/SyncProgressModal";
 import { Notice } from "obsidian";
 import { createPreparedSyncPlanFixture } from "@test-utils/fixtures/sync-plan";
 import type { NoteForPush } from "@features/keep/push/collectNotes";
+import * as retryPolicy from "@features/keep/download-retry";
+
+const runRetryPolicy = retryPolicy.retryDownload;
 
 jest.mock("@app/sync-ui");
 
@@ -31,6 +34,18 @@ describe("persistent sync attempt preparation", () => {
 
 	beforeEach(() => {
 		jest.restoreAllMocks();
+		jest.spyOn(api, "getReplayEpoch").mockResolvedValue(undefined);
+		jest.spyOn(retryPolicy, "retryDownload").mockImplementation((fetch, options) => {
+			let elapsed = 0;
+			return runRetryPolicy(fetch, {
+				...options,
+				now: () => elapsed,
+				random: () => 0.5,
+				sleep: async (ms) => {
+					elapsed += ms;
+				},
+			});
+		});
 		files = new Map();
 		folders = new Set();
 		const mock = createMockPlugin();
@@ -92,12 +107,13 @@ describe("persistent sync attempt preparation", () => {
 		});
 
 	it.each([false, true])(
-		"persists a first-page 504 with debug=%s before rethrowing the original error",
+		"persists an exhausted first-page 504 with debug=%s and retains its original cause",
 		async (debug) => {
 			plugin.settings.oauthDebugMode = debug;
 			const error = new NetworkError("dummy-token dummy@example.com", 504, new Error("dummy-supporter-key"));
 			jest.spyOn(api, "fetchNotes").mockRejectedValue(error);
-			await expect(buildManualSyncPlan(plugin, "import")).rejects.toBe(error);
+			await expect(buildManualSyncPlan(plugin, "import")).rejects.toMatchObject({ status: 504, cause: error });
+			expect(api.fetchNotes).toHaveBeenCalledTimes(3);
 			const terminal = records().filter((record) => record.event === "outcome");
 			expect(terminal).toHaveLength(1);
 			expect(terminal[0]).toMatchObject({
@@ -126,8 +142,11 @@ describe("persistent sync attempt preparation", () => {
 					total_notes: 501,
 					...(pagination === "cursor" ? { next_cursor: "private-cursor" } : {}),
 				})
-				.mockRejectedValueOnce(error);
-			await expect(buildManualSyncPlan(plugin, "import", undefined, { kind: "all" })).rejects.toBe(error);
+				.mockRejectedValue(error);
+			await expect(buildManualSyncPlan(plugin, "import", undefined, { kind: "all" })).rejects.toMatchObject({
+				status: 504,
+				cause: error,
+			});
 			expect(records().find((record) => record.event === "outcome")).toMatchObject({
 				pageOrdinal: 2,
 				paginationMode: pagination,
@@ -147,6 +166,28 @@ describe("persistent sync attempt preparation", () => {
 			phase: "subscription",
 			outcome: "failed",
 		});
+	});
+
+	it("resumes the failed cursor with the original cutoff and links attempts without writing notes", async () => {
+		const fetch = jest
+			.spyOn(api, "fetchNotes")
+			.mockResolvedValueOnce({ notes: [{ id: "first", title: "First" }], total_notes: 2, next_cursor: "next-page" })
+			.mockRejectedValue(new NetworkError("temporary", 504));
+		await expect(buildManualSyncPlan(plugin, "import")).rejects.toBeInstanceOf(imports.RecoverablePreparationError);
+		const originalAttempt = plugin.settings.lastSyncAttempt?.id;
+		expect(fetch).toHaveBeenCalledTimes(4);
+		plugin.settings.keepSidianLastSuccessfulSyncDate = "2025-01-01T00:00:00.000Z";
+		fetch.mockReset().mockResolvedValue({ notes: [{ id: "second", title: "Second" }], total_notes: 2 });
+		const plan = await buildManualSyncPlan(plugin, "import");
+		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(fetch.mock.calls[0][4]).toEqual({ changed_gt: checkpoint });
+		expect(fetch.mock.calls[0][5]).toBe("next-page");
+		expect(plan?.importNotes?.map((note) => note.id)).toEqual(["first", "second"]);
+		expect(records().some((record) => record.resumedFrom === originalAttempt && record.event === "review-ready")).toBe(
+			true
+		);
+		expect(plugin.settings.keepSidianLastSuccessfulSyncDate).toBe("2025-01-01T00:00:00.000Z");
+		expect([...files.keys()].every((path) => path.includes("_KeepSidianLogs"))).toBe(true);
 	});
 
 	it("persists the new failed log navigation across a restart", async () => {
@@ -249,17 +290,15 @@ describe("persistent sync attempt preparation", () => {
 			]);
 			prepared.pushNotes = [note];
 			prepared.completionDate = "2024-03-01T00:00:00.000Z";
-			jest
-				.spyOn(api, "pushNotes")
-				.mockResolvedValue({
-					results: [
-						{
-							path: note.relativePath,
-							success: failure !== "rejected",
-							error: "dummy-supporter-key private-note-body",
-						},
-					],
-				});
+			jest.spyOn(api, "pushNotes").mockResolvedValue({
+				results: [
+					{
+						path: note.relativePath,
+						success: failure !== "rejected",
+						error: "dummy-supporter-key private-note-body",
+					},
+				],
+			});
 			if (failure === "disk-error") {
 				jest.spyOn(plugin.app.vault.adapter, "write").mockImplementation(async (path, text) => {
 					if (path === note.fullPath) throw new Error("private-note-body dummy-supporter-key");
@@ -296,7 +335,7 @@ describe("persistent sync attempt preparation", () => {
 			files.set(path, text);
 		});
 		jest.spyOn(plugin, "saveSettings").mockRejectedValue(new Error("dummy-settings-secret"));
-		await expect(buildManualSyncPlan(plugin, "import")).rejects.toBe(original);
+		await expect(buildManualSyncPlan(plugin, "import")).rejects.toMatchObject({ status: 504, cause: original });
 		expect(plugin.settings.lastSyncAttempt).toMatchObject({ outcome: "failed", httpStatus: 504, logUnavailable: true });
 		expect(JSON.stringify(warn.mock.calls)).not.toMatch(/dummy-original|dummy-storage-secret|dummy-settings-secret/);
 		expect(Notice).toHaveBeenCalledWith(expect.stringContaining("sync log or attempt history unavailable"));
@@ -365,7 +404,8 @@ describe("persistent sync attempt preparation", () => {
 		const modal = createModal();
 		await modal.beginReview();
 		expect(outcomes()).toHaveLength(1);
-		expect(modal.contentEl.textContent).toContain("Download preparation failed");
+		expect(modal.contentEl.textContent).toContain("Download paused");
+		expect(modal.contentEl.textContent).toContain("Resume download");
 		expect(modal.contentEl.textContent).toContain("HTTP 504");
 		expect(modal.contentEl.textContent).toContain(plugin.settings.lastSyncAttempt?.id);
 		expect(modal.contentEl.textContent).not.toContain("dummy-secret");

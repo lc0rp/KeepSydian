@@ -81,6 +81,10 @@ export class SyncAttempt {
 	private cutoff?: string;
 	private features: Record<string, boolean> = {};
 	private status?: number;
+	private resumedFrom?: string;
+	setResumedFrom(id?: string): void {
+		this.resumedFrom = id;
+	}
 
 	constructor(
 		private readonly plugin: KeepSidianPlugin,
@@ -199,6 +203,7 @@ export class SyncAttempt {
 		const fetchedCount = this.page.fetchedCount ?? 0;
 		const metadata = {
 			attemptId: this.id,
+			resumedFrom: this.resumedFrom,
 			mode: this.mode,
 			source: this.source,
 			event,

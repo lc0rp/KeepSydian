@@ -230,7 +230,7 @@ describe("Google Keep Import Functions", () => {
 
 			try {
 				const importPromise = importGoogleKeepNotes(mockPlugin);
-				await jest.runOnlyPendingTimersAsync();
+				await jest.advanceTimersByTimeAsync(3_000);
 				await expect(importPromise).resolves.toBe(0);
 				expect(requestUrl).toHaveBeenCalledTimes(2);
 			} finally {

@@ -14,6 +14,8 @@ export class AppError extends Error {
 export class NetworkError extends AppError {
 	status?: number;
 	retryAfterMs?: number;
+	code?: string;
+	transportFailure = false;
 	constructor(message: string, status?: number, cause?: unknown) {
 		super("network", message, cause);
 		this.status = status;

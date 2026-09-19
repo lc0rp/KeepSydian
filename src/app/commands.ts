@@ -1,13 +1,10 @@
 import type KeepSidianPlugin from "@app/main";
+import { registerRecoveryUatCommands } from "@services/recovery-uat";
 
 export function registerRibbonIcon(plugin: KeepSidianPlugin) {
-		plugin.addRibbonIcon(
-			"folder-sync",
-			"KeepSidian: sync now",
-		async (_evt: MouseEvent) => {
-			plugin.openSyncCenter();
-		}
-	);
+	plugin.addRibbonIcon("folder-sync", "KeepSidian: sync now", async (_evt: MouseEvent) => {
+		plugin.openSyncCenter();
+	});
 }
 
 export function registerCommands(plugin: KeepSidianPlugin) {
@@ -61,4 +58,5 @@ export function registerCommands(plugin: KeepSidianPlugin) {
 export function registerRibbonAndCommands(plugin: KeepSidianPlugin) {
 	registerRibbonIcon(plugin);
 	registerCommands(plugin);
+	registerRecoveryUatCommands(plugin);
 }

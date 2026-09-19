@@ -157,6 +157,9 @@ const context = await esbuild.context({
 	plugins: [tsconfigPathsPlugin({ tsconfigPath: path.resolve(rootDir, "tsconfig.json") })],
 	define: {
 		"process.env.KEEPSIDIAN_SERVER_URL": JSON.stringify(resolvedServerUrl),
+		"process.env.KEEPSIDIAN_RECOVERY_UAT": JSON.stringify(
+			process.env.KEEPSIDIAN_RECOVERY_UAT === "true" ? "true" : "false"
+		),
 	},
 });
 

@@ -4,6 +4,7 @@ import { httpGetJson, httpPostJson } from "@services/http";
 import type { PreNormalizedNote } from "@features/keep/domain/note";
 import { GoogleKeepImportResponseSchema, PremiumFeatureFlagsSchema } from "@schemas/keep";
 import type { KeepArchivedStatus, KeepPinnedStatus } from "../../types/subscription";
+import { recoveryUatHeaders, recoveryUatResponse } from "@services/recovery-uat";
 
 export interface GoogleKeepImportResponse {
 	notes: Array<PreNormalizedNote>;
@@ -111,18 +112,21 @@ export async function fetchNotes(
 	offset = 0,
 	limit = 100,
 	filters?: SyncFilters,
-	cursor?: string
+	cursor?: string,
+	operationId?: string
 ): Promise<GoogleKeepImportResponse> {
 	const query = buildSyncQuery(offset, limit, filters, cursor);
 	const url = `${KEEPSIDIAN_SERVER_URL}/keep/sync/v2?${query}`;
 	const headers = {
+		...recoveryUatHeaders(cursor),
+		...(operationId ? { "X-Sync-Operation": operationId } : {}),
 		"Content-Type": "application/json",
 		"X-User-Email": email,
 		Authorization: `Bearer ${token}`,
 	};
 	const raw = await httpGetJson<unknown>(url, headers);
 	// Runtime validation with Zod
-	return GoogleKeepImportResponseSchema.parse(raw) as GoogleKeepImportResponse;
+	return recoveryUatResponse(GoogleKeepImportResponseSchema.parse(raw) as GoogleKeepImportResponse, offset, cursor);
 }
 
 export async function fetchNotesWithPremiumFeatures(
@@ -133,12 +137,15 @@ export async function fetchNotesWithPremiumFeatures(
 	limit = 100,
 	filters?: SyncFilters,
 	cursor?: string,
-	supporterKey?: string
+	supporterKey?: string,
+	operationId?: string
 ): Promise<GoogleKeepImportResponse> {
 	const query = buildSyncQuery(offset, limit, filters, cursor);
 	const url = `${KEEPSIDIAN_SERVER_URL}/keep/sync/premium/v2?${query}`;
 	const headers = withSupporterKey(
 		{
+			...recoveryUatHeaders(cursor),
+			...(operationId ? { "X-Sync-Operation": operationId } : {}),
 			"Content-Type": "application/json",
 			"X-User-Email": email,
 			Authorization: `Bearer ${token}`,
@@ -153,7 +160,19 @@ export async function fetchNotesWithPremiumFeatures(
 		headers
 	);
 	// Runtime validation with Zod
-	return GoogleKeepImportResponseSchema.parse(raw) as GoogleKeepImportResponse;
+	return recoveryUatResponse(GoogleKeepImportResponseSchema.parse(raw) as GoogleKeepImportResponse, offset, cursor);
+}
+
+export async function getReplayEpoch(email: string, token: string): Promise<string | undefined> {
+	try {
+		const response = await httpGetJson<{ replay_version?: number; replay_epoch?: string }>(
+			`${KEEPSIDIAN_SERVER_URL}/keep/sync/capabilities`,
+			{ "X-User-Email": email, Authorization: `Bearer ${token}` }
+		);
+		return response.replay_version === 1 ? response.replay_epoch : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 export async function pushNotes(

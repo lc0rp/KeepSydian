@@ -23,6 +23,7 @@ interface NormalizedNote {
 }
 
 interface PreNormalizedNote {
+	id?: string;
 	title: string;
 	text?: string;
 	created?: string;
@@ -77,8 +78,7 @@ function normalizeNote(note: PreNormalizedNote): NormalizedNote {
 		textWithoutFrontmatter: note.text || "",
 	};
 
-	const [frontmatter, textWithoutFrontmatter, frontmatterDict] =
-		extractFrontmatter(normalizedNote.text);
+	const [frontmatter, textWithoutFrontmatter, frontmatterDict] = extractFrontmatter(normalizedNote.text);
 	normalizedNote.frontmatter = frontmatter;
 	normalizedNote.textWithoutFrontmatter = textWithoutFrontmatter;
 	normalizedNote.frontmatterDict = frontmatterDict;
@@ -86,21 +86,15 @@ function normalizeNote(note: PreNormalizedNote): NormalizedNote {
 	return normalizedNote;
 }
 
-function extractFrontmatter(
-	text: string
-): [string, string, FrontmatterDict] {
+function extractFrontmatter(text: string): [string, string, FrontmatterDict] {
 	// Frontmatter is between --- and --- at the start of the text if it exists
 	let frontmatter = "";
 	let frontmatterDict: FrontmatterDict = {};
 	let textWithoutFrontmatter = text;
-	const frontmatterMatch = text.match(
-		/^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?/
-	);
+	const frontmatterMatch = text.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?/);
 	if (frontmatterMatch) {
 		frontmatter = frontmatterMatch[1].trim();
-		textWithoutFrontmatter = text
-			.slice(frontmatterMatch[0].length)
-			.trim();
+		textWithoutFrontmatter = text.slice(frontmatterMatch[0].length).trim();
 	}
 
 	if (frontmatter) {
@@ -125,10 +119,7 @@ function parseFrontmatter(frontmatter: string): FrontmatterDict {
 			frontmatterDict[key] = value;
 
 			// Keep pascal-case alias for compatibility with existing call sites.
-			const pascalKey = key.replace(
-				/(^|-)([a-z])/g,
-				(_match: string, _p1: string, p2: string) => p2.toUpperCase()
-			);
+			const pascalKey = key.replace(/(^|-)([a-z])/g, (_match: string, _p1: string, p2: string) => p2.toUpperCase());
 			if (!(pascalKey in frontmatterDict)) {
 				frontmatterDict[pascalKey] = value;
 			}
@@ -140,10 +131,7 @@ function parseFrontmatter(frontmatter: string): FrontmatterDict {
 	}
 }
 
-function getFrontmatterStringValue(
-	frontmatterDict: FrontmatterDict,
-	key: string
-): string | undefined {
+function getFrontmatterStringValue(frontmatterDict: FrontmatterDict, key: string): string | undefined {
 	const value = frontmatterDict[key];
 	if (typeof value === "string") {
 		return value;
