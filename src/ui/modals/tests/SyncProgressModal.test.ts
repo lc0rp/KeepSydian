@@ -84,6 +84,14 @@ describe("SyncProgressModal", () => {
 		);
 	}
 
+	function getTopStartButton(modal: SyncProgressModal): HTMLButtonElement {
+		const button = modal.contentEl.querySelector<HTMLButtonElement>(
+			".keepsidian-modal-actions .keepsidian-modal-action--primary"
+		);
+		expect(button).toBeTruthy();
+		return button as HTMLButtonElement;
+	}
+
 	function getFooterStartButton(modal: SyncProgressModal): HTMLButtonElement | null {
 		return modal.contentEl.querySelector<HTMLButtonElement>(
 			".keepsidian-sync-center-footer .keepsidian-modal-action--sync-footer-primary"
@@ -292,12 +300,17 @@ describe("SyncProgressModal", () => {
 		expect(startButtons.map((button) => button.textContent?.trim())).toEqual(["Start sync", "Start sync"]);
 		expect(startButtons.every((button) => !button.disabled)).toBe(true);
 
-		(getFooterStartButton(modal) as HTMLButtonElement).click();
+		const footerStartButton = getFooterStartButton(modal) as HTMLButtonElement;
+		getTopStartButton(modal).click();
+		footerStartButton.click();
 		await flushUI();
 
 		expect(modalOptions.buildSyncPlan).toHaveBeenCalledTimes(1);
 		startButtons = getSetupPrimaryButtons(modal);
-		expect(startButtons.map((button) => button.textContent?.trim())).toEqual(["Preparing plan...", "Preparing plan..."]);
+		expect(startButtons.map((button) => button.textContent?.trim())).toEqual([
+			"Preparing plan...",
+			"Preparing plan...",
+		]);
 		expect(startButtons.every((button) => button.disabled)).toBe(true);
 
 		buildCallbacks?.setTotalNotes?.(2);
@@ -318,26 +331,71 @@ describe("SyncProgressModal", () => {
 	});
 
 	test("uses the footer Start sync action for the selected mode and download scope", async () => {
+		for (const location of ["top", "footer"] as const) {
+			modalOptions.buildSyncPlan.mockClear();
+			const modal = new SyncProgressModal(app, modalOptions);
+			modal.onOpen();
+			getButton(modal, "Customize sync").click();
+			await flushUI();
+			getButton(modal, "All dates").click();
+			await flushUI();
+			getButton(modal, "Two-way sync").click();
+			await flushUI();
+
+			const startButton =
+				location === "footer" ? (getFooterStartButton(modal) as HTMLButtonElement) : getTopStartButton(modal);
+			startButton.click();
+			await flushUI();
+
+			expect(modalOptions.buildSyncPlan).toHaveBeenCalledTimes(1);
+			expect(modalOptions.buildSyncPlan).toHaveBeenCalledWith(
+				"two-way",
+				expect.objectContaining({
+					setTotalNotes: expect.any(Function),
+					reportPlanProgress: expect.any(Function),
+				}),
+				{ kind: "all" }
+			);
+		}
+	});
+
+	test("Close sync center closes from expanded setup", async () => {
 		const modal = new SyncProgressModal(app, modalOptions);
 		modal.onOpen();
 		getButton(modal, "Customize sync").click();
 		await flushUI();
-		getButton(modal, "All dates").click();
+
+		const closeButton = findButton(modal, "Close sync center");
+		expect(closeButton).toBeTruthy();
+		const closeSpy = jest.spyOn(modal, "close");
+		closeButton?.click();
 		await flushUI();
-		getButton(modal, "Two-way sync").click();
+
+		expect(closeSpy).toHaveBeenCalledTimes(1);
+	});
+
+	test("removes the footer action through review, running, and result surfaces", async () => {
+		const deferred = createDeferredResult();
+		modalOptions.runSyncPlan.mockImplementationOnce(async () => await deferred.promise);
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Customize sync").click();
 		await flushUI();
 
 		(getFooterStartButton(modal) as HTMLButtonElement).click();
 		await flushUI();
+		expect(modal.contentEl.textContent).toContain("Review download plan");
+		expect(getFooterStartButton(modal)).toBeNull();
 
-		expect(modalOptions.buildSyncPlan).toHaveBeenCalledWith(
-			"two-way",
-			expect.objectContaining({
-				setTotalNotes: expect.any(Function),
-				reportPlanProgress: expect.any(Function),
-			}),
-			{ kind: "all" }
-		);
+		getButton(modal, "Execute").click();
+		await flushUI();
+		expect(modal.contentEl.textContent).toContain("Running download plan");
+		expect(getFooterStartButton(modal)).toBeNull();
+
+		deferred.resolve({});
+		await flushUI();
+		expect(modal.contentEl.textContent).toContain("Download complete");
+		expect(getFooterStartButton(modal)).toBeNull();
 	});
 
 	test("restores Resume download on both setup actions after a paused preparation", async () => {

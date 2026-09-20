@@ -1,4 +1,6 @@
 import { browser, expect } from "@wdio/globals";
+import { mkdirSync } from "node:fs";
+import { resolve } from "node:path";
 import { createPreparedSyncPlanFixture, createSyncPlanEntryFixture } from "../../src/test-utils/fixtures/sync-plan";
 import type { SyncMode } from "../../src/types";
 import { focusVaultWindow, routeAppCommandsToVault } from "../helpers/vault-window";
@@ -236,6 +238,10 @@ describe("KeepSidian", function () {
 				});
 				// These fixtures exercise presentation. The dedicated attempt spec uses the real lifecycle.
 				Object.assign(modal.options, { createSyncAttempt: undefined, getLastAttempt: () => undefined });
+				Object.assign(modal.options, {
+					isSupporterActive: async () => true,
+					renderImportOptions: async () => undefined,
+				});
 				let cancelRequested = false;
 				const setCanceledSummary = (processedNotes: number, totalNotes: number, mode: SyncMode) => {
 					const summary = {
@@ -619,55 +625,45 @@ describe("KeepSidian", function () {
 		]);
 
 		await openSeededSyncCenter({ import: seededPlan }, { runDelayMs: 700, initialMode: "import" });
-		const customizeSyncButton = browser.$(buttonByText("Customize sync"));
+		let customizeSyncButton = browser.$(buttonByText("Customize sync"));
 		await customizeSyncButton.waitForExist({ timeout: 20000 });
 		expect((await browser.$$(exactButtonByText("Start sync"))).length).toBe(1);
 		await customizeSyncButton.click();
 
 		const footer = browser.$(".keepsidian-sync-center-footer");
 		await footer.waitForExist({ timeout: 20000 });
+		const footerStart = footer.$(".keepsidian-modal-action--sync-footer-primary");
+		const footerClose = footer.$(".keepsidian-modal-close");
+		await footerStart.waitForDisplayed({ timeout: 20000 });
+		await footerClose.waitForDisplayed({ timeout: 20000 });
 		expect((await browser.$$(exactButtonByText("Start sync"))).length).toBe(2);
 
-		const layout = await browser.execute(() => {
-			const footerEl = document.querySelector<HTMLElement>(".keepsidian-sync-center-footer");
-			const startEl = footerEl?.querySelector<HTMLElement>(
-				".keepsidian-modal-action--sync-footer-primary"
-			);
-			const closeEl = footerEl?.querySelector<HTMLElement>(".keepsidian-modal-close");
-			if (!footerEl || !startEl || !closeEl) {
-				return null;
-			}
-			const startRect = startEl.getBoundingClientRect();
-			const closeRect = closeEl.getBoundingClientRect();
-			const footerStyle = getComputedStyle(footerEl);
-			return {
-				footerMarginTop: footerStyle.marginTop,
-				startMarginTop: getComputedStyle(startEl).marginTop,
-				closeMarginTop: getComputedStyle(closeEl).marginTop,
-				topDifference: Math.abs(startRect.top - closeRect.top),
-				heightDifference: Math.abs(startRect.height - closeRect.height),
-			};
-		});
-		expect(layout).not.toBeNull();
-		expect(layout?.footerMarginTop).toBe("12px");
-		expect(layout?.startMarginTop).toBe("0px");
-		expect(layout?.closeMarginTop).toBe("0px");
-		expect(layout?.topDifference).toBeLessThanOrEqual(1);
-		expect(layout?.heightDifference).toBeLessThanOrEqual(1);
-		await browser.saveScreenshot("test-results/sync-center-footer-expanded.png");
-
-		const originalWindowSize = await browser.getWindowSize();
-		try {
-			await browser.setWindowSize(Math.min(originalWindowSize.width, 640), originalWindowSize.height);
-			const narrowLayout = await browser.execute(() => {
+		const readFooterLayout = async () =>
+			await browser.execute(() => {
 				const footerEl = document.querySelector<HTMLElement>(".keepsidian-sync-center-footer");
+				const startEl = footerEl?.querySelector<HTMLElement>(".keepsidian-modal-action--sync-footer-primary");
+				const closeEl = footerEl?.querySelector<HTMLElement>(".keepsidian-modal-close");
 				const modalEl = document.querySelector<HTMLElement>(".keepsidian-modal");
-				if (!footerEl || !modalEl) {
+				if (!footerEl || !startEl || !closeEl || !modalEl) {
 					return null;
 				}
+				const startRect = startEl.getBoundingClientRect();
+				const closeRect = closeEl.getBoundingClientRect();
+				const footerRect = footerEl.getBoundingClientRect();
 				const modalRect = modalEl.getBoundingClientRect();
+				const footerStyle = getComputedStyle(footerEl);
 				const buttons = Array.from(footerEl.querySelectorAll<HTMLElement>("button"));
 				return {
+					viewportWidth: window.innerWidth,
+					footerWidth: footerRect.width,
+					modalWidth: modalRect.width,
+					footerMarginTop: footerStyle.marginTop,
+					startMarginTop: getComputedStyle(startEl).marginTop,
+					closeMarginTop: getComputedStyle(closeEl).marginTop,
+					startHeight: startRect.height,
+					closeHeight: closeRect.height,
+					topDifference: Math.abs(startRect.top - closeRect.top),
+					heightDifference: Math.abs(startRect.height - closeRect.height),
 					footerOverflow: footerEl.scrollWidth > footerEl.clientWidth + 1,
 					modalOverflow: modalEl.scrollWidth > modalEl.clientWidth + 1,
 					buttonOverflow: buttons.some((button) => {
@@ -676,7 +672,71 @@ describe("KeepSidian", function () {
 					}),
 				};
 			});
+
+		await browser.waitUntil(
+			async () => {
+				const currentLayout = await readFooterLayout();
+				return Boolean(
+					currentLayout &&
+					currentLayout.footerWidth > 0 &&
+					currentLayout.startHeight > 0 &&
+					currentLayout.closeHeight > 0
+				);
+			},
+			{ timeout: 20000, interval: 250, timeoutMsg: "Expanded Sync Center footer did not settle" }
+		);
+		const layout = await readFooterLayout();
+		expect(layout).not.toBeNull();
+		expect(layout?.footerMarginTop).toBe("12px");
+		expect(layout?.startMarginTop).toBe("0px");
+		expect(layout?.closeMarginTop).toBe("0px");
+		expect(layout?.topDifference).toBeLessThanOrEqual(1);
+		expect(layout?.heightDifference).toBeLessThanOrEqual(1);
+		const primaryState = await browser.execute(() => {
+			const topEl = document.querySelector<HTMLElement>(".keepsidian-modal-actions .keepsidian-modal-action--primary");
+			const footerEl = document.querySelector<HTMLElement>(
+				".keepsidian-sync-center-footer .keepsidian-modal-action--sync-footer-primary"
+			);
+			return {
+				topCta: topEl?.classList.contains("mod-cta") ?? false,
+				topPrimary: topEl?.classList.contains("keepsidian-modal-action--primary") ?? false,
+				footerCta: footerEl?.classList.contains("mod-cta") ?? false,
+				footerPrimary: footerEl?.classList.contains("keepsidian-modal-action--primary") ?? false,
+			};
+		});
+		expect(primaryState).toEqual({ topCta: true, topPrimary: true, footerCta: true, footerPrimary: true });
+		mkdirSync(resolve("test-results"), { recursive: true });
+		await browser.saveScreenshot("test-results/sync-center-footer-expanded.png");
+
+		customizeSyncButton = browser.$(buttonByText("Customize sync"));
+		await customizeSyncButton.click();
+		await footerStart.waitForExist({ reverse: true, timeout: 20000 });
+		expect((await browser.$$(exactButtonByText("Start sync"))).length).toBe(1);
+		await browser.saveScreenshot("test-results/sync-center-footer-collapsed.png");
+
+		customizeSyncButton = browser.$(buttonByText("Customize sync"));
+		await customizeSyncButton.click();
+		await footerStart.waitForDisplayed({ timeout: 20000 });
+		await footerClose.waitForDisplayed({ timeout: 20000 });
+
+		const originalWindowSize = await browser.getWindowSize();
+		try {
+			const narrowWidth = Math.max(320, Math.min(500, originalWindowSize.width - 160));
+			if (narrowWidth >= originalWindowSize.width) {
+				throw new Error(`Cannot establish a narrower viewport from ${originalWindowSize.width}px`);
+			}
+			await browser.setWindowSize(narrowWidth, originalWindowSize.height);
+			await browser.waitUntil(
+				async () => {
+					const currentLayout = await readFooterLayout();
+					return Boolean(currentLayout && layout && currentLayout.footerWidth < layout.footerWidth);
+				},
+				{ timeout: 20000, interval: 250, timeoutMsg: "Footer did not narrow with the viewport" }
+			);
+			const narrowLayout = await readFooterLayout();
 			expect(narrowLayout).not.toBeNull();
+			expect(narrowLayout?.viewportWidth).toBeLessThan(layout?.viewportWidth ?? Number.POSITIVE_INFINITY);
+			expect(narrowLayout?.footerWidth).toBeLessThan(layout?.footerWidth ?? Number.POSITIVE_INFINITY);
 			expect(narrowLayout?.footerOverflow).toBe(false);
 			expect(narrowLayout?.modalOverflow).toBe(false);
 			expect(narrowLayout?.buttonOverflow).toBe(false);
@@ -687,7 +747,9 @@ describe("KeepSidian", function () {
 
 		await browser.$(".keepsidian-sync-center-footer .keepsidian-modal-action--sync-footer-primary").click();
 		await browser.$('//*[normalize-space(.)="Review download plan"]').waitForExist({ timeout: 20000 });
-		expect(await browser.$(".keepsidian-sync-center-footer .keepsidian-modal-action--sync-footer-primary").isExisting()).toBe(false);
+		expect(
+			await browser.$(".keepsidian-sync-center-footer .keepsidian-modal-action--sync-footer-primary").isExisting()
+		).toBe(false);
 	});
 
 	it("shows a completed download with attachment warnings in the live Sync Center", async function () {
