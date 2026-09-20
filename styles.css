@@ -1137,12 +1137,14 @@ If your plugin does not need CSS, delete this file.
 	display: flex;
 	flex-wrap: wrap;
 	gap: 8px;
+	margin-top: 12px;
 }
 
 .keepsidian-sync-center-footer .keepsidian-modal-close,
 .keepsidian-sync-center-footer .keepsidian-modal-action--sync-footer-primary {
 	flex: 1 1 0;
 	width: auto;
+	margin-top: 0;
 }
 
 .keepsidian-modal-inline-action {

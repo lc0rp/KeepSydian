@@ -604,6 +604,92 @@ describe("KeepSidian", function () {
 		expect(await browser.$(buttonByText("Close sync center")).isExisting()).toBe(true);
 	});
 
+	it("aligns expanded Sync Center footer actions and preserves narrow-layout usability", async function () {
+		if (isAndroid()) {
+			this.skip();
+			return;
+		}
+
+		const seededPlan = createPreparedSyncPlanFixture("import", "import", [
+			createSyncPlanEntryFixture("create", "Create", {
+				id: "footer-layout-1",
+				title: "Footer layout note",
+				path: "Keep/Footer layout note.md",
+			}),
+		]);
+
+		await openSeededSyncCenter({ import: seededPlan }, { runDelayMs: 700, initialMode: "import" });
+		const customizeSyncButton = browser.$(buttonByText("Customize sync"));
+		await customizeSyncButton.waitForExist({ timeout: 20000 });
+		expect((await browser.$$(exactButtonByText("Start sync"))).length).toBe(1);
+		await customizeSyncButton.click();
+
+		const footer = browser.$(".keepsidian-sync-center-footer");
+		await footer.waitForExist({ timeout: 20000 });
+		expect((await browser.$$(exactButtonByText("Start sync"))).length).toBe(2);
+
+		const layout = await browser.execute(() => {
+			const footerEl = document.querySelector<HTMLElement>(".keepsidian-sync-center-footer");
+			const startEl = footerEl?.querySelector<HTMLElement>(
+				".keepsidian-modal-action--sync-footer-primary"
+			);
+			const closeEl = footerEl?.querySelector<HTMLElement>(".keepsidian-modal-close");
+			if (!footerEl || !startEl || !closeEl) {
+				return null;
+			}
+			const startRect = startEl.getBoundingClientRect();
+			const closeRect = closeEl.getBoundingClientRect();
+			const footerStyle = getComputedStyle(footerEl);
+			return {
+				footerMarginTop: footerStyle.marginTop,
+				startMarginTop: getComputedStyle(startEl).marginTop,
+				closeMarginTop: getComputedStyle(closeEl).marginTop,
+				topDifference: Math.abs(startRect.top - closeRect.top),
+				heightDifference: Math.abs(startRect.height - closeRect.height),
+			};
+		});
+		expect(layout).not.toBeNull();
+		expect(layout?.footerMarginTop).toBe("12px");
+		expect(layout?.startMarginTop).toBe("0px");
+		expect(layout?.closeMarginTop).toBe("0px");
+		expect(layout?.topDifference).toBeLessThanOrEqual(1);
+		expect(layout?.heightDifference).toBeLessThanOrEqual(1);
+		await browser.saveScreenshot("test-results/sync-center-footer-expanded.png");
+
+		const originalWindowSize = await browser.getWindowSize();
+		try {
+			await browser.setWindowSize(Math.min(originalWindowSize.width, 640), originalWindowSize.height);
+			const narrowLayout = await browser.execute(() => {
+				const footerEl = document.querySelector<HTMLElement>(".keepsidian-sync-center-footer");
+				const modalEl = document.querySelector<HTMLElement>(".keepsidian-modal");
+				if (!footerEl || !modalEl) {
+					return null;
+				}
+				const modalRect = modalEl.getBoundingClientRect();
+				const buttons = Array.from(footerEl.querySelectorAll<HTMLElement>("button"));
+				return {
+					footerOverflow: footerEl.scrollWidth > footerEl.clientWidth + 1,
+					modalOverflow: modalEl.scrollWidth > modalEl.clientWidth + 1,
+					buttonOverflow: buttons.some((button) => {
+						const rect = button.getBoundingClientRect();
+						return rect.left < modalRect.left - 1 || rect.right > modalRect.right + 1;
+					}),
+				};
+			});
+			expect(narrowLayout).not.toBeNull();
+			expect(narrowLayout?.footerOverflow).toBe(false);
+			expect(narrowLayout?.modalOverflow).toBe(false);
+			expect(narrowLayout?.buttonOverflow).toBe(false);
+			await browser.saveScreenshot("test-results/sync-center-footer-narrow.png");
+		} finally {
+			await browser.setWindowSize(originalWindowSize.width, originalWindowSize.height);
+		}
+
+		await browser.$(".keepsidian-sync-center-footer .keepsidian-modal-action--sync-footer-primary").click();
+		await browser.$('//*[normalize-space(.)="Review download plan"]').waitForExist({ timeout: 20000 });
+		expect(await browser.$(".keepsidian-sync-center-footer .keepsidian-modal-action--sync-footer-primary").isExisting()).toBe(false);
+	});
+
 	it("shows a completed download with attachment warnings in the live Sync Center", async function () {
 		if (isAndroid()) {
 			this.skip();

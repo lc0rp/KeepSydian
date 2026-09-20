@@ -74,6 +74,22 @@ describe("SyncProgressModal", () => {
 			null) as HTMLButtonElement | null;
 	}
 
+	function getSetupPrimaryButtons(modal: SyncProgressModal): HTMLButtonElement[] {
+		return Array.from(modal.contentEl.querySelectorAll<HTMLButtonElement>(".keepsidian-modal-action--primary"));
+	}
+
+	function getSetupStartButtons(modal: SyncProgressModal): HTMLButtonElement[] {
+		return getSetupPrimaryButtons(modal).filter(
+			(button) => button.textContent?.replace(/\s+/g, " ").trim() === "Start sync"
+		);
+	}
+
+	function getFooterStartButton(modal: SyncProgressModal): HTMLButtonElement | null {
+		return modal.contentEl.querySelector<HTMLButtonElement>(
+			".keepsidian-sync-center-footer .keepsidian-modal-action--sync-footer-primary"
+		);
+	}
+
 	function getRowTitles(modal: SyncProgressModal): string[] {
 		return Array.from(modal.contentEl.querySelectorAll(".keepsidian-sync-plan-row-title")).map(
 			(element) => element.textContent?.trim() ?? ""
@@ -215,37 +231,26 @@ describe("SyncProgressModal", () => {
 		modal.onOpen();
 		await flushUI();
 
-		const startSyncButtons = () =>
-			Array.from(modal.contentEl.querySelectorAll("button")).filter(
-				(button) => button.textContent?.replace(/\s+/g, " ").trim() === "Start sync"
-			);
-
 		expect(findButton(modal, "Close sync center")).toBeTruthy();
-		expect(startSyncButtons()).toHaveLength(1);
+		expect(getSetupStartButtons(modal)).toHaveLength(1);
 
 		getButton(modal, "Customize sync").click();
 		await flushUI();
 
-		expect(startSyncButtons()).toHaveLength(2);
-		const footerStartButton = modal.contentEl.querySelector(
-			".keepsidian-sync-center-footer .keepsidian-modal-action--sync-footer-primary"
-		) as HTMLButtonElement | null;
+		expect(getSetupStartButtons(modal)).toHaveLength(2);
+		const footerStartButton = getFooterStartButton(modal);
 		expect(footerStartButton).toBeTruthy();
 		expect(footerStartButton).toHaveClass("mod-cta", "keepsidian-modal-action--primary");
 
 		getButton(modal, "Customize sync").click();
 		await flushUI();
 
-		expect(startSyncButtons()).toHaveLength(1);
-		expect(
-			modal.contentEl.querySelector(".keepsidian-sync-center-footer .keepsidian-modal-action--sync-footer-primary")
-		).toBeNull();
+		expect(getSetupStartButtons(modal)).toHaveLength(1);
+		expect(getFooterStartButton(modal)).toBeNull();
 
 		getButton(modal, "Customize sync").click();
 		await flushUI();
-		const expandedFooterStartButton = modal.contentEl.querySelector(
-			".keepsidian-sync-center-footer .keepsidian-modal-action--sync-footer-primary"
-		) as HTMLButtonElement;
+		const expandedFooterStartButton = getFooterStartButton(modal) as HTMLButtonElement;
 		expandedFooterStartButton.click();
 		await flushUI();
 
@@ -258,6 +263,101 @@ describe("SyncProgressModal", () => {
 			{ kind: "last-sync" }
 		);
 		expect(modal.contentEl.textContent).toContain("Review download plan");
+		expect(getFooterStartButton(modal)).toBeNull();
+	});
+
+	test("keeps top and footer Start sync controls in lockstep while preparing", async () => {
+		let resolvePlan: (plan: PreparedSyncPlan) => void = () => undefined;
+		let buildCallbacks:
+			| {
+					setTotalNotes?: (total: number) => void;
+					reportPlanProgress?: (processed: number, total?: number) => void;
+			  }
+			| undefined;
+		const buildPromise = new Promise<PreparedSyncPlan>((resolve) => {
+			resolvePlan = resolve;
+		});
+		modalOptions.buildSyncPlan.mockImplementationOnce(async (_mode, callbacks) => {
+			buildCallbacks = callbacks;
+			return await buildPromise;
+		});
+
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Customize sync").click();
+		await flushUI();
+
+		let startButtons = getSetupStartButtons(modal);
+		expect(startButtons).toHaveLength(2);
+		expect(startButtons.map((button) => button.textContent?.trim())).toEqual(["Start sync", "Start sync"]);
+		expect(startButtons.every((button) => !button.disabled)).toBe(true);
+
+		(getFooterStartButton(modal) as HTMLButtonElement).click();
+		await flushUI();
+
+		expect(modalOptions.buildSyncPlan).toHaveBeenCalledTimes(1);
+		startButtons = getSetupPrimaryButtons(modal);
+		expect(startButtons.map((button) => button.textContent?.trim())).toEqual(["Preparing plan...", "Preparing plan..."]);
+		expect(startButtons.every((button) => button.disabled)).toBe(true);
+
+		buildCallbacks?.setTotalNotes?.(2);
+		buildCallbacks?.reportPlanProgress?.(2, 2);
+		await flushUI();
+		startButtons = getSetupPrimaryButtons(modal);
+		expect(startButtons.map((button) => button.textContent?.trim())).toEqual([
+			"Downloaded, please wait ...",
+			"Downloaded, please wait ...",
+		]);
+		expect(startButtons.every((button) => button.disabled)).toBe(true);
+
+		resolvePlan(modalOptions.preparedPlan);
+		await flushUI();
+
+		expect(modal.contentEl.textContent).toContain("Review download plan");
+		expect(getFooterStartButton(modal)).toBeNull();
+	});
+
+	test("uses the footer Start sync action for the selected mode and download scope", async () => {
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Customize sync").click();
+		await flushUI();
+		getButton(modal, "All dates").click();
+		await flushUI();
+		getButton(modal, "Two-way sync").click();
+		await flushUI();
+
+		(getFooterStartButton(modal) as HTMLButtonElement).click();
+		await flushUI();
+
+		expect(modalOptions.buildSyncPlan).toHaveBeenCalledWith(
+			"two-way",
+			expect.objectContaining({
+				setTotalNotes: expect.any(Function),
+				reportPlanProgress: expect.any(Function),
+			}),
+			{ kind: "all" }
+		);
+	});
+
+	test("restores Resume download on both setup actions after a paused preparation", async () => {
+		modalOptions.buildSyncPlan.mockRejectedValueOnce(new Error("Download paused. Try again."));
+		modalOptions.isSupporterActive.mockResolvedValue(false);
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		await flushUI();
+		getButton(modal, "Customize sync").click();
+		await flushUI();
+
+		(getFooterStartButton(modal) as HTMLButtonElement).click();
+		await flushUI();
+
+		const startButtons = getSetupPrimaryButtons(modal).filter(
+			(button) => button.textContent?.replace(/\s+/g, " ").trim() === "Resume download"
+		);
+		expect(startButtons).toHaveLength(2);
+		expect(startButtons.every((button) => !button.disabled)).toBe(true);
+		expect(modal.contentEl.textContent).toContain("Download paused");
 	});
 
 	test("invalid or future custom dates block review generation", async () => {

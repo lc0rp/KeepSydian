@@ -1253,20 +1253,7 @@ export class SyncProgressModal extends Modal {
 		clearElement(this.bodyEl);
 		const actionsEl = createChild(this.bodyEl, "div");
 		actionsEl.classList.add("keepsidian-modal-actions");
-		const setupPrimaryButtonLabel =
-			this.preparationPaused && !this.isGeneratingReview
-				? "Resume download"
-				: getSetupPrimaryButtonLabel(this.isGeneratingReview, this.planBuildProcessed, this.planBuildTotal);
-
-		const startButton = this.createActionButton(
-			actionsEl,
-			setupPrimaryButtonLabel,
-			async () => {
-				await this.beginReview();
-			}
-		);
-		startButton.classList.add("mod-cta", "keepsidian-modal-action--primary");
-		startButton.disabled = this.isGeneratingReview || this.isSyncing;
+		this.createSetupStartButton(actionsEl);
 
 		const openLogButton = this.createActionButton(actionsEl, "Open sync log", async () => {
 			await this.options.onOpenSyncLog();
@@ -1370,16 +1357,26 @@ export class SyncProgressModal extends Modal {
 			return;
 		}
 		if (this.showSyncOptions) {
-			const footerStartButton = this.createActionButton(this.footerEl, setupPrimaryButtonLabel, async () => {
-				await this.beginReview();
-			});
-			footerStartButton.classList.add("mod-cta", "keepsidian-modal-action--primary", "keepsidian-modal-action--sync-footer-primary");
-			footerStartButton.disabled = this.isGeneratingReview || this.isSyncing;
+			const footerStartButton = this.createSetupStartButton(this.footerEl);
+			footerStartButton.classList.add("keepsidian-modal-action--sync-footer-primary");
 		}
 		const closeButton = this.createActionButton(this.footerEl, "Close sync center", async () => {
 			this.close();
 		});
 		closeButton.classList.add("keepsidian-modal-close");
+	}
+
+	private createSetupStartButton(containerEl: HTMLElement): HTMLButtonElement {
+		const label =
+			this.preparationPaused && !this.isGeneratingReview
+				? "Resume download"
+				: getSetupPrimaryButtonLabel(this.isGeneratingReview, this.planBuildProcessed, this.planBuildTotal);
+		const button = this.createActionButton(containerEl, label, async () => {
+			await this.beginReview();
+		});
+		button.classList.add("mod-cta", "keepsidian-modal-action--primary");
+		button.disabled = this.isGeneratingReview || this.isSyncing;
+		return button;
 	}
 
 	private renderDownloadScopeSection(containerEl: HTMLElement) {
