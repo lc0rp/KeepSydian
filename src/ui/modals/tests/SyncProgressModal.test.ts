@@ -210,6 +210,56 @@ describe("SyncProgressModal", () => {
 		expect(modal.contentEl.textContent).not.toContain("Premium options active: true");
 	});
 
+	test("shows the footer Start sync action only while sync customization is expanded", async () => {
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		await flushUI();
+
+		const startSyncButtons = () =>
+			Array.from(modal.contentEl.querySelectorAll("button")).filter(
+				(button) => button.textContent?.replace(/\s+/g, " ").trim() === "Start sync"
+			);
+
+		expect(findButton(modal, "Close sync center")).toBeTruthy();
+		expect(startSyncButtons()).toHaveLength(1);
+
+		getButton(modal, "Customize sync").click();
+		await flushUI();
+
+		expect(startSyncButtons()).toHaveLength(2);
+		const footerStartButton = modal.contentEl.querySelector(
+			".keepsidian-sync-center-footer .keepsidian-modal-action--sync-footer-primary"
+		) as HTMLButtonElement | null;
+		expect(footerStartButton).toBeTruthy();
+		expect(footerStartButton).toHaveClass("mod-cta", "keepsidian-modal-action--primary");
+
+		getButton(modal, "Customize sync").click();
+		await flushUI();
+
+		expect(startSyncButtons()).toHaveLength(1);
+		expect(
+			modal.contentEl.querySelector(".keepsidian-sync-center-footer .keepsidian-modal-action--sync-footer-primary")
+		).toBeNull();
+
+		getButton(modal, "Customize sync").click();
+		await flushUI();
+		const expandedFooterStartButton = modal.contentEl.querySelector(
+			".keepsidian-sync-center-footer .keepsidian-modal-action--sync-footer-primary"
+		) as HTMLButtonElement;
+		expandedFooterStartButton.click();
+		await flushUI();
+
+		expect(modalOptions.buildSyncPlan).toHaveBeenCalledWith(
+			"import",
+			expect.objectContaining({
+				setTotalNotes: expect.any(Function),
+				reportPlanProgress: expect.any(Function),
+			}),
+			{ kind: "last-sync" }
+		);
+		expect(modal.contentEl.textContent).toContain("Review download plan");
+	});
+
 	test("invalid or future custom dates block review generation", async () => {
 		const modal = new SyncProgressModal(app, modalOptions);
 		modal.onOpen();

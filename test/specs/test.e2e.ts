@@ -601,7 +601,7 @@ describe("KeepSidian", function () {
 		await completeTitle.waitForExist({ timeout: 20000 });
 		expect(await browser.$('//*[contains(normalize-space(.),"Created 1/1")]').isExisting()).toBe(true);
 		expect(await browser.$(buttonByText("Open sync log")).isExisting()).toBe(true);
-		expect(await browser.$(buttonByText("Close")).isExisting()).toBe(true);
+		expect(await browser.$(buttonByText("Close sync center")).isExisting()).toBe(true);
 	});
 
 	it("shows a completed download with attachment warnings in the live Sync Center", async function () {

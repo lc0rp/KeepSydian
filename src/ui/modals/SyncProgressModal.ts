@@ -1246,15 +1246,21 @@ export class SyncProgressModal extends Modal {
 		if (!this.bodyEl) {
 			return;
 		}
+		if (this.footerEl) {
+			clearElement(this.footerEl);
+			this.footerEl.className = "keepsidian-sync-center-footer";
+		}
 		clearElement(this.bodyEl);
 		const actionsEl = createChild(this.bodyEl, "div");
 		actionsEl.classList.add("keepsidian-modal-actions");
+		const setupPrimaryButtonLabel =
+			this.preparationPaused && !this.isGeneratingReview
+				? "Resume download"
+				: getSetupPrimaryButtonLabel(this.isGeneratingReview, this.planBuildProcessed, this.planBuildTotal);
 
 		const startButton = this.createActionButton(
 			actionsEl,
-			this.preparationPaused && !this.isGeneratingReview
-				? "Resume download"
-				: getSetupPrimaryButtonLabel(this.isGeneratingReview, this.planBuildProcessed, this.planBuildTotal),
+			setupPrimaryButtonLabel,
 			async () => {
 				await this.beginReview();
 			}
@@ -1360,10 +1366,20 @@ export class SyncProgressModal extends Modal {
 			}
 		}
 
-		const closeButton = createChild(this.bodyEl, "button", { text: "Close" });
-		closeButton.type = "button";
+		if (!this.footerEl) {
+			return;
+		}
+		if (this.showSyncOptions) {
+			const footerStartButton = this.createActionButton(this.footerEl, setupPrimaryButtonLabel, async () => {
+				await this.beginReview();
+			});
+			footerStartButton.classList.add("mod-cta", "keepsidian-modal-action--primary", "keepsidian-modal-action--sync-footer-primary");
+			footerStartButton.disabled = this.isGeneratingReview || this.isSyncing;
+		}
+		const closeButton = this.createActionButton(this.footerEl, "Close sync center", async () => {
+			this.close();
+		});
 		closeButton.classList.add("keepsidian-modal-close");
-		closeButton.addEventListener("click", () => this.close());
 	}
 
 	private renderDownloadScopeSection(containerEl: HTMLElement) {
@@ -1538,6 +1554,7 @@ export class SyncProgressModal extends Modal {
 
 		if (this.footerEl) {
 			clearElement(this.footerEl);
+			this.footerEl.className = "";
 		}
 
 		if (surface === "result" && this.footerEl) {
@@ -1546,7 +1563,7 @@ export class SyncProgressModal extends Modal {
 				await this.options.onOpenSyncLog();
 			});
 			openLogButton.classList.add("keepsidian-modal-action--open-log");
-			const closeButton = this.createActionButton(this.footerEl, "Close", async () => {
+			const closeButton = this.createActionButton(this.footerEl, "Close sync center", async () => {
 				this.close();
 			});
 			closeButton.classList.add("mod-cta", "keepsidian-modal-action--primary");
