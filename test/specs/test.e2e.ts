@@ -687,6 +687,7 @@ describe("KeepSidian", function () {
 		);
 		const layout = await readFooterLayout();
 		expect(layout).not.toBeNull();
+		console.info("Sync Center expanded footer geometry", layout);
 		expect(layout?.footerMarginTop).toBe("12px");
 		expect(layout?.startMarginTop).toBe("0px");
 		expect(layout?.closeMarginTop).toBe("0px");
@@ -719,13 +720,50 @@ describe("KeepSidian", function () {
 		await footerStart.waitForDisplayed({ timeout: 20000 });
 		await footerClose.waitForDisplayed({ timeout: 20000 });
 
-		const originalWindowSize = await browser.getWindowSize();
+		const readWindowSize = async () =>
+			await browser.execute(() => {
+				const currentWindow = (
+					window as typeof window & {
+						electron?: {
+							remote?: {
+								getCurrentWindow?: () => { getSize: () => [number, number] };
+							};
+						};
+					}
+				).electron?.remote?.getCurrentWindow?.();
+				if (!currentWindow) {
+					throw new Error("Electron window API is unavailable");
+				}
+				const [width, height] = currentWindow.getSize();
+				return { width, height };
+			});
+		const resizeWindow = async (width: number, height: number) =>
+			await browser.execute(
+				(nextWidth, nextHeight) => {
+					const currentWindow = (
+						window as typeof window & {
+							electron?: {
+								remote?: {
+									getCurrentWindow?: () => { setSize: (width: number, height: number) => void };
+								};
+							};
+						}
+					).electron?.remote?.getCurrentWindow?.();
+					if (!currentWindow) {
+						throw new Error("Electron window API is unavailable");
+					}
+					currentWindow.setSize(nextWidth, nextHeight);
+				},
+				width,
+				height
+			);
+		const originalWindowSize = await readWindowSize();
 		try {
 			const narrowWidth = Math.max(320, Math.min(500, originalWindowSize.width - 160));
 			if (narrowWidth >= originalWindowSize.width) {
 				throw new Error(`Cannot establish a narrower viewport from ${originalWindowSize.width}px`);
 			}
-			await browser.setWindowSize(narrowWidth, originalWindowSize.height);
+			await resizeWindow(narrowWidth, originalWindowSize.height);
 			await browser.waitUntil(
 				async () => {
 					const currentLayout = await readFooterLayout();
@@ -735,6 +773,7 @@ describe("KeepSidian", function () {
 			);
 			const narrowLayout = await readFooterLayout();
 			expect(narrowLayout).not.toBeNull();
+			console.info("Sync Center narrow footer geometry", narrowLayout);
 			expect(narrowLayout?.viewportWidth).toBeLessThan(layout?.viewportWidth ?? Number.POSITIVE_INFINITY);
 			expect(narrowLayout?.footerWidth).toBeLessThan(layout?.footerWidth ?? Number.POSITIVE_INFINITY);
 			expect(narrowLayout?.footerOverflow).toBe(false);
@@ -742,7 +781,7 @@ describe("KeepSidian", function () {
 			expect(narrowLayout?.buttonOverflow).toBe(false);
 			await browser.saveScreenshot("test-results/sync-center-footer-narrow.png");
 		} finally {
-			await browser.setWindowSize(originalWindowSize.width, originalWindowSize.height);
+			await resizeWindow(originalWindowSize.width, originalWindowSize.height);
 		}
 
 		await browser.$(".keepsidian-sync-center-footer .keepsidian-modal-action--sync-footer-primary").click();
