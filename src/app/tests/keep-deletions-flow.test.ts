@@ -10,6 +10,8 @@ import { createPreparedSyncPlanFixture, createSyncPlanEntryFixture } from "@test
 import * as imports from "@features/keep/sync";
 import * as pushes from "@features/keep/push";
 import * as deletionsApi from "@integrations/server/keepDeletions";
+import * as collector from "@features/keep/push/collectNotes";
+import * as keepApi from "@integrations/server/keepApi";
 import type { NoteForPush } from "@features/keep/push/collectNotes";
 
 const checkpoint = "2026-08-01T00:00:00.000Z";
@@ -24,7 +26,7 @@ function setup() {
 	mock.app.vault.adapter.read.mockImplementation(async (path) => stored.get(path) ?? "");
 	mock.app.vault.adapter.write.mockImplementation(async (path, content) => { stored.set(path, content); });
 	mock.app.vault.createFolder.mockImplementation(async (path) => { folders.add(path); });
-	const file = Object.assign(new TFile("Keep/Gone.md"), { path: "Keep/Gone.md", basename: "Gone", extension: "md" });
+	const file = Object.assign(new TFile(), { path: "Keep/Gone.md", basename: "Gone", extension: "md" });
 	const vault = Object.assign(mock.app.vault, {
 		getMarkdownFiles: jest.fn(() => [file]),
 		getAbstractFileByPath: jest.fn(() => file),
@@ -95,7 +97,7 @@ it("retains the checkpoint and performs no writes when remote deletion revalidat
 
 it("does not check or delete notes during scheduled unreviewed downloads", async () => {
 	const { plugin, vault, fetchDeleted } = setup();
-	jest.spyOn(imports, "importGoogleKeepNotes").mockResolvedValue(undefined);
+	jest.spyOn(imports, "importGoogleKeepNotes").mockResolvedValue(1);
 	await runImportNotesFlow(plugin, true, String);
 	expect(fetchDeleted).not.toHaveBeenCalled();
 	expect(vault.trash).not.toHaveBeenCalled();
@@ -116,12 +118,52 @@ it("preserves opt-outs and upload indices through both halves of a two-way run",
 		)).plan,
 		notesToPush: notes,
 	});
-	const push = jest.spyOn(pushes, "pushGoogleKeepNotes").mockResolvedValue(undefined);
+	const push = jest.spyOn(pushes, "pushGoogleKeepNotes").mockResolvedValue(1);
 	const result = await runPreparedSyncPlan(plugin, prepared, String, jest.fn());
 	expect(result.nextPlan?.plan.entries.map((entry) => entry.id)).toEqual(["upload:1:Keep/New.md"]);
 	expect(result.nextPlan?.deletions).toBe(prepared.deletions);
+	expect(pushes.buildPushSyncPlan).toHaveBeenCalledWith(plugin, false, expect.any(String), expect.objectContaining({
+		reviewMerges: true, protectedPaths: ["Keep/Gone.md"],
+	}));
 	expect(plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(checkpoint);
 	await runPreparedSyncPlan(plugin, result.nextPlan!, String, jest.fn());
 	expect(push).toHaveBeenCalledWith(plugin, expect.any(Object), [notes[1]]);
 	expect(plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(completionDate);
+});
+
+
+it("excludes a retained deletion before real upload merge review and finishes with no upload work", async () => {
+	const { plugin, vault } = setup();
+	const prepared = (await buildManualSyncPlan(plugin, "two-way"))!;
+	prepared.plan.entries.find((entry) => entry.action === "delete")!.selected = false;
+	const retained: NoteForPush = {
+		fullPath: "Keep/Gone.md", relativePath: "Gone.md", title: "Gone",
+		content: `---\nGoogleKeepUrl: "${url}"\n---\nKept locally`, body: "Kept locally",
+		frontmatter: `GoogleKeepUrl: "${url}"`, lastSyncedDate: null,
+		modifiedSinceLastSync: true, attachments: [], updatedAttachmentNames: [], missingAttachments: [],
+	};
+	jest.spyOn(collector, "collectNotesToPush").mockResolvedValue({ notesToPush: [retained], skippedNotes: [] });
+	const fetchNotes = jest.spyOn(keepApi, "fetchNotes").mockRejectedValue(new Error("Kept deletions must never enter remote upload review"));
+	const success = jest.fn();
+	await expect(runPreparedSyncPlan(plugin, prepared, String, success)).resolves.toEqual({});
+	expect(fetchNotes).not.toHaveBeenCalled();
+	expect(vault.trash).not.toHaveBeenCalled();
+	expect(success).toHaveBeenCalledTimes(1);
+	expect(plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(completionDate);
+});
+
+it("retains archive policy and the chosen merge action while executing a deletion", async () => {
+	const { plugin, notes, importSelected } = setup();
+	jest.mocked(imports.buildImportSyncPlan).mockResolvedValue({
+		plan: createPreparedSyncPlanFixture("import", "import", [
+			createSyncPlanEntryFixture("merge", "Merge", { id: "import:0", path: "Keep/New.md" }),
+		]).plan,
+		notes: [notes[0]], noteEntryIds: ["import:0"], completionDate, archivedStatus: "all",
+	});
+	const prepared = (await buildManualSyncPlan(plugin, "import"))!;
+	prepared.plan.mergeAction = "merge-skip-conflicts";
+	await runPreparedSyncPlan(plugin, prepared, String, jest.fn());
+	expect(importSelected).toHaveBeenCalledWith(plugin, [notes[0]], expect.objectContaining({
+		archivedStatus: "all", mergeAction: "merge-skip-conflicts",
+	}), undefined, ["import:0"]);
 });

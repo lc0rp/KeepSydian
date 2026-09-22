@@ -17,8 +17,9 @@ import { SyncCancellationError } from "@app/sync-cancel";
 import { logSync } from "@app/logging";
 import { SyncProgressModal } from "@ui/modals/SyncProgressModal";
 import { Notice } from "obsidian";
-import { createPreparedSyncPlanFixture } from "@test-utils/fixtures/sync-plan";
+import { createPreparedSyncPlanFixture, createSyncPlanEntryFixture } from "@test-utils/fixtures/sync-plan";
 import type { NoteForPush } from "@features/keep/push/collectNotes";
+import { reviewPushNotes } from "@features/keep/push/merge-review";
 import * as retryPolicy from "@features/keep/download-retry";
 
 const runRetryPolicy = retryPolicy.retryDownload;
@@ -168,7 +169,33 @@ describe("persistent sync attempt preparation", () => {
 		});
 	});
 
-	it("resumes the failed cursor with the original cutoff and links attempts without writing notes", async () => {
+	it.each([false, true])("freezes the end before subscription and capability checks (premium=%s)", async (premium) => {
+		const startedAt = Date.parse("2026-06-01T12:00:00.000Z");
+		const now = jest.spyOn(Date, "now").mockReturnValue(startedAt);
+		plugin.settings.premiumFeatures = { ...DEFAULT_SETTINGS.premiumFeatures };
+		jest.spyOn(plugin.subscriptionService, "isSubscriptionActive").mockImplementation(async () => {
+			now.mockReturnValue(startedAt + 60_000);
+			return premium;
+		});
+		jest.spyOn(api, "getReplayEpoch").mockImplementation(async () => {
+			now.mockReturnValue(startedAt + 120_000);
+			return undefined;
+		});
+		const freeFetch = jest.spyOn(api, "fetchNotes").mockResolvedValue({ notes: [] });
+		const premiumFetch = jest.spyOn(api, "fetchNotesWithPremiumFeatures").mockResolvedValue({ notes: [] });
+		const plan = await buildManualSyncPlan(plugin, "import");
+		const filters = premium ? premiumFetch.mock.calls[0][5] : freeFetch.mock.calls[0][4];
+		expect(filters).toEqual({
+			changed_gt: checkpoint,
+			created_lt: new Date(startedAt).toISOString(),
+			updated_lt: new Date(startedAt).toISOString(),
+		});
+		expect(plan?.completionDate).toBe(new Date(startedAt - 1).toISOString());
+	});
+
+	it("resumes the failed cursor with both original bounds and links attempts without writing notes", async () => {
+		const startedAt = Date.parse("2026-06-01T12:00:00.000Z");
+		const now = jest.spyOn(Date, "now").mockReturnValue(startedAt);
 		const fetch = jest
 			.spyOn(api, "fetchNotes")
 			.mockResolvedValueOnce({ notes: [{ id: "first", title: "First" }], total_notes: 2, next_cursor: "next-page" })
@@ -176,12 +203,20 @@ describe("persistent sync attempt preparation", () => {
 		await expect(buildManualSyncPlan(plugin, "import")).rejects.toBeInstanceOf(imports.RecoverablePreparationError);
 		const originalAttempt = plugin.settings.lastSyncAttempt?.id;
 		expect(fetch).toHaveBeenCalledTimes(4);
+		const originalFilters = { ...fetch.mock.calls[0][4] };
+		expect(originalFilters).toEqual({
+			changed_gt: checkpoint,
+			created_lt: new Date(startedAt).toISOString(),
+			updated_lt: new Date(startedAt).toISOString(),
+		});
+		now.mockReturnValue(startedAt + 60_000);
 		plugin.settings.keepSidianLastSuccessfulSyncDate = "2025-01-01T00:00:00.000Z";
 		fetch.mockReset().mockResolvedValue({ notes: [{ id: "second", title: "Second" }], total_notes: 2 });
 		const plan = await buildManualSyncPlan(plugin, "import");
 		expect(fetch).toHaveBeenCalledTimes(1);
-		expect(fetch.mock.calls[0][4]).toEqual({ changed_gt: checkpoint });
+		expect(fetch.mock.calls[0][4]).toEqual(originalFilters);
 		expect(fetch.mock.calls[0][5]).toBe("next-page");
+		expect(plan?.completionDate).toBe(new Date(startedAt - 1).toISOString());
 		expect(plan?.importNotes?.map((note) => note.id)).toEqual(["first", "second"]);
 		expect(records().some((record) => record.resumedFrom === originalAttempt && record.event === "review-ready")).toBe(
 			true
@@ -235,15 +270,24 @@ describe("persistent sync attempt preparation", () => {
 		"shares the two-way attempt and defers its checkpoint through upload (success=%s)",
 		async (success) => {
 			jest.spyOn(api, "fetchNotes").mockResolvedValue({ notes: [] });
-			const push = createPreparedSyncPlanFixture("push", "upload", []);
-			jest.spyOn(pushes, "buildPushSyncPlan").mockResolvedValue({ plan: push.plan, notesToPush: [] });
+			// Include real actionable work; an empty second stage can now finish immediately.
+			const push = createPreparedSyncPlanFixture("push", "upload", [
+				createSyncPlanEntryFixture("upload", "Upload", { id: "upload:0:Keep/test.md", path: "Keep/test.md" }),
+			]);
+			jest.spyOn(pushes, "buildPushSyncPlan").mockResolvedValue({
+				plan: push.plan,
+				notesToPush: [{ fullPath: "Keep/test.md" } as NoteForPush],
+			});
+			const upload = jest.spyOn(pushes, "pushGoogleKeepNotes");
+			if (success) upload.mockResolvedValue(1);
+			else upload.mockRejectedValue(new NetworkError("dummy-key", 504));
 			const plan = (await buildManualSyncPlan(plugin, "two-way"))!;
 			const result = await run(plan);
 			expect(result.nextPlan?.attempt).toBe(plan.attempt);
 			expect(outcomes()).toHaveLength(0);
 			expect(plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(checkpoint);
-			if (!success) jest.spyOn(pushes, "pushGoogleKeepNotes").mockRejectedValue(new NetworkError("dummy-key", 504));
 			await run(result.nextPlan!);
+			expect(upload).toHaveBeenCalledTimes(1);
 			expect(outcomes()).toHaveLength(1);
 			expect(outcomes()[0].outcome).toBe(success ? "success" : "failed");
 			expect(records().filter((record) => record.event === "start")).toHaveLength(1);
@@ -288,7 +332,8 @@ describe("persistent sync attempt preparation", () => {
 					selectionLocked: false,
 				},
 			]);
-			prepared.pushNotes = [note];
+			files.set(note.fullPath, note.content);
+			prepared.pushNotes = await reviewPushNotes(plugin, [note]);
 			prepared.completionDate = "2024-03-01T00:00:00.000Z";
 			jest.spyOn(api, "pushNotes").mockResolvedValue({
 				results: [
@@ -306,9 +351,11 @@ describe("persistent sync attempt preparation", () => {
 				});
 			}
 			expect(await run(prepared)).toMatchObject({ failed: true });
+			expect(api.pushNotes).toHaveBeenCalledTimes(1);
 			expect(outcomes()).toMatchObject([{ outcome: "failed", phase: "upload" }]);
 			expect(plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(checkpoint);
-			expect(logs()).not.toMatch(/private-note-title|private-note-body|dummy-supporter-key/);
+			const logContents = [...files.entries()].filter(([path]) => path.includes("_KeepSidianLogs")).map(([, text]) => text).join("\n");
+			expect(logContents).not.toMatch(/private-note-title|private-note-body|dummy-supporter-key/);
 		}
 	);
 

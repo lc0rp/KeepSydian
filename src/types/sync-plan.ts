@@ -2,6 +2,12 @@ import type { SyncMode } from "./keepsidian-plugin-settings";
 
 export type SyncPlanStage = "import" | "upload";
 
+export type MergeAction =
+	| "merge-save-conflicts"
+	| "merge-skip-conflicts"
+	| "merge-overwrite-conflicts"
+	| "overwrite-all";
+
 export type SyncPlanAction =
 	| "create"
 	| "delete"
@@ -11,7 +17,8 @@ export type SyncPlanAction =
 	| "upload"
 	| "skipped-identical"
 	| "skipped-up-to-date"
-	| "skipped-conflict-copy";
+	| "skipped-conflict-copy"
+	| "skipped-conflict";
 
 export interface SyncPlanEntryMeta {
 	relativePath?: string;
@@ -50,4 +57,6 @@ export interface SyncPlan {
 	counts: SyncPlanCounts;
 	selectedCount: number;
 	actionableCount: number;
+	/** Applies to this reviewed run only; an omitted value preserves the safe default. */
+	mergeAction?: MergeAction;
 }

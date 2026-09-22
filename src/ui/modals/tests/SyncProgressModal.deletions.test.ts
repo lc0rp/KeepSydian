@@ -24,8 +24,11 @@ function setup(prepared: PreparedSyncPlan) {
 		isSupporterActive: async () => false,
 		renderImportOptions: jest.fn(),
 	});
+	document.body.appendChild(modal.containerEl);
 	return { modal, buildSyncPlan, runSyncPlan };
 }
+
+afterEach(() => document.body.replaceChildren());
 
 function button(modal: SyncProgressModal, label: string): HTMLButtonElement {
 	const result = Array.from(modal.contentEl.querySelectorAll("button")).find((el) => el.textContent?.includes(label));
@@ -88,7 +91,7 @@ it("preserves a kept deletion through the two-way upload review and Refresh", as
 	const prepared = createPreparedSyncPlanFixture("two-way", "import", [deleted,
 		createSyncPlanEntryFixture("create", "Create", { id: "create", path: "Keep/New.md" }),
 	]);
-	const file = Object.assign(new TFile(deleted.path), { path: deleted.path });
+	const file = Object.assign(new TFile(), { path: deleted.path });
 	prepared.deletions = {
 		accountEmail: "test@example.com", rootFolder: "Keep", entries: [deleted],
 		candidates: [{ entryId: deleted.id, path: deleted.path, keepUrl: "https://keep.google.com/#NOTE/one", content: "", file }],
@@ -105,8 +108,12 @@ it("preserves a kept deletion through the two-way upload review and Refresh", as
 	expect(modal.contentEl.querySelectorAll(".keepsidian-sync-plan-row")).toHaveLength(1);
 	expect(modal.contentEl.querySelector(".keepsidian-sync-plan-row-title")?.textContent).toBe("New");
 	buildSyncPlan.mockResolvedValue(upload());
+	file.path = "Keep/Renamed.md";
 	button(modal, "Refresh").click();
 	await flushUI();
+	expect(buildSyncPlan).toHaveBeenLastCalledWith("push", expect.objectContaining({
+		protectedPaths: ["Keep/One.md", "Keep/Renamed.md"],
+	}));
 	expect(modal.contentEl.querySelectorAll(".keepsidian-sync-plan-row")).toHaveLength(1);
 	expect(modal.contentEl.querySelector(".keepsidian-sync-plan-row-title")?.textContent).toBe("New");
 });

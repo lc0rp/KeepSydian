@@ -1,6 +1,7 @@
 import { normalizePathSafe } from "@services/paths";
-import { extractFrontmatter, getFrontmatterStringValue, type NormalizedNote } from "./note";
+import { extractFrontmatter, getFrontmatterStringValue, normalizeKeepNoteUrl, type NormalizedNote } from "./note";
 import {
+	CONFLICT_FILE_SUFFIX,
 	FRONTMATTER_GOOGLE_KEEP_CREATED_DATE_KEY,
 	FRONTMATTER_GOOGLE_KEEP_UPDATED_DATE_KEY,
 	FRONTMATTER_GOOGLE_KEEP_URL_KEY,
@@ -86,8 +87,8 @@ export async function buildExistingKeepNoteIndex(
 				const content = await adapter.read(filePath);
 				const [, , frontmatterDict] = extractFrontmatter(content);
 				const existingKeepUrl = getFrontmatterStringValue(frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
-				if (existingKeepUrl) {
-					pathByKeepUrl.set(existingKeepUrl, filePath);
+				if (existingKeepUrl && !filePath.includes(CONFLICT_FILE_SUFFIX)) {
+					pathByKeepUrl.set(normalizeKeepNoteUrl(existingKeepUrl), filePath);
 				}
 			} catch {
 				// Ignore unreadable candidates during lookup.
@@ -116,8 +117,8 @@ export async function buildExistingKeepNoteIndex(
 				continue;
 			}
 			const existingKeepUrl = getFrontmatterStringValue(frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
-			if (existingKeepUrl) {
-				pathByKeepUrl.set(existingKeepUrl, normalizedPath);
+			if (existingKeepUrl && !normalizedPath.includes(CONFLICT_FILE_SUFFIX)) {
+				pathByKeepUrl.set(normalizeKeepNoteUrl(existingKeepUrl), normalizedPath);
 			}
 		}
 
@@ -136,8 +137,8 @@ export async function buildExistingKeepNoteIndex(
 			const content = await adapter.read(filePath);
 			const [, , frontmatterDict] = extractFrontmatter(content);
 			const existingKeepUrl = getFrontmatterStringValue(frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
-			if (existingKeepUrl) {
-				pathByKeepUrl.set(existingKeepUrl, filePath);
+			if (existingKeepUrl && !filePath.includes(CONFLICT_FILE_SUFFIX)) {
+				pathByKeepUrl.set(normalizeKeepNoteUrl(existingKeepUrl), filePath);
 			}
 		} catch {
 			// Ignore unreadable candidates during lookup.
@@ -158,8 +159,9 @@ export function updateExistingKeepNoteIndex(
 	const normalizedPath = normalizePathSafe(filePath);
 	index.existingPaths.add(normalizedPath);
 	const incomingKeepUrl = getFrontmatterStringValue(incomingNote.frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
-	if (incomingKeepUrl) {
-		index.pathByKeepUrl.set(incomingKeepUrl, normalizedPath);
+	// A conflict copy shares the original's metadata, but is never its canonical download target.
+	if (incomingKeepUrl && !normalizedPath.includes(CONFLICT_FILE_SUFFIX)) {
+		index.pathByKeepUrl.set(normalizeKeepNoteUrl(incomingKeepUrl), normalizedPath);
 	}
 }
 
@@ -172,6 +174,14 @@ export async function findExistingKeepNotePath(
 ): Promise<string | null> {
 	const adapter = app.vault.adapter;
 	const normalizedPreferredPath = preferredPath ? normalizePathSafe(preferredPath) : null;
+	const incomingKeepUrl = getFrontmatterStringValue(incomingNote.frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
+
+	// A renamed linked note takes precedence over a different note with the expected filename.
+	if (incomingKeepUrl && index) {
+		const linkedPath =
+			index.pathByKeepUrl.get(normalizeKeepNoteUrl(incomingKeepUrl)) ?? index.pathByKeepUrl.get(incomingKeepUrl);
+		if (linkedPath) return linkedPath;
+	}
 
 	if (normalizedPreferredPath) {
 		if (index?.existingPaths.has(normalizedPreferredPath)) {
@@ -182,15 +192,10 @@ export async function findExistingKeepNotePath(
 		}
 	}
 
-	const incomingKeepUrl = getFrontmatterStringValue(incomingNote.frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
-	if (!incomingKeepUrl) {
+	if (!incomingKeepUrl || index) {
 		return normalizedPreferredPath;
 	}
 
-	if (index) {
-		return index.pathByKeepUrl.get(incomingKeepUrl) ?? normalizedPreferredPath;
-	}
-
 	const builtIndex = await buildExistingKeepNoteIndex(app, rootFolder);
-	return builtIndex.pathByKeepUrl.get(incomingKeepUrl) ?? normalizedPreferredPath;
+	return builtIndex.pathByKeepUrl.get(normalizeKeepNoteUrl(incomingKeepUrl)) ?? normalizedPreferredPath;
 }

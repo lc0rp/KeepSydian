@@ -121,8 +121,9 @@ describe("Google Keep Import Functions", () => {
 			expect(requestParams.url).not.toContain("updated_gt=");
 		});
 
-		it("omits sync date filters for one-off all-notes downloads", async () => {
+		it("omits the lower bound but retains the sync-start end for all dates", async () => {
 			mockPlugin.settings.keepSidianLastSuccessfulSyncDate = "2024-01-01T00:00:00.000Z";
+			jest.spyOn(Date, "now").mockReturnValue(Date.parse("2024-06-01T12:00:00.000Z"));
 
 			await importGoogleKeepNotes(mockPlugin, undefined, { kind: "all" });
 
@@ -130,16 +131,26 @@ describe("Google Keep Import Functions", () => {
 			expect(requestParams.url).not.toContain("changed_gt=");
 			expect(requestParams.url).not.toContain("created_gt=");
 			expect(requestParams.url).not.toContain("updated_gt=");
+			const query = new URL(requestParams.url).searchParams;
+			expect(query.get("created_lt")).toBe("2024-06-01T12:00:00.000Z");
+			expect(query.get("updated_lt")).toBe(query.get("created_lt"));
 		});
 
-		it("uses a one-off custom sync date when requested", async () => {
+		it("uses a one-off custom sync range without advancing the automatic checkpoint", async () => {
+			mockPlugin.settings.keepSidianLastSuccessfulSyncDate = "2024-05-01T00:00:00.000Z";
 			await importGoogleKeepNotes(mockPlugin, undefined, {
 				kind: "custom-since",
 				since: "2024-03-15T14:30:00.000Z",
+				until: "2024-04-01T00:00:00.000Z",
 			});
 
 			const [[requestParams]] = (requestUrl as jest.Mock).mock.calls;
-			expect(requestParams.url).toContain("changed_gt=2024-03-15T14%3A30%3A00.000Z");
+			const query = new URL(requestParams.url).searchParams;
+			expect(query.get("changed_gt")).toBe("2024-03-15T14:30:00.000Z");
+			expect(query.get("created_lt")).toBe("2024-04-01T00:00:00.000Z");
+			expect(query.get("updated_lt")).toBe(query.get("created_lt"));
+			expect(mockPlugin.settings.keepSidianLastSuccessfulSyncDate).toBe("2024-05-01T00:00:00.000Z");
+			expect(setVaultConfigMock).not.toHaveBeenCalled();
 		});
 
 		it("treats last-sync scope as all-notes when there is no saved sync date", async () => {
@@ -152,13 +163,13 @@ describe("Google Keep Import Functions", () => {
 			expect(requestParams.url).not.toContain("changed_gt=");
 		});
 
-		it("persists the last successful sync date after import", async () => {
+		it("persists a checkpoint just before the exclusive end even for an empty import", async () => {
 			jest.useFakeTimers().setSystemTime(new Date("2024-03-03T12:34:56.000Z"));
 
 			try {
 				await importGoogleKeepNotes(mockPlugin);
 
-				const expected = "2024-03-03T12:34:56.000Z";
+				const expected = "2024-03-03T12:34:55.999Z";
 				expect(mockPlugin.settings.keepSidianLastSuccessfulSyncDate).toBe(expected);
 				expect(setVaultConfigMock).toHaveBeenCalledWith("KeepSidianLastSuccessfulSyncDate", expected);
 			} finally {
@@ -166,9 +177,11 @@ describe("Google Keep Import Functions", () => {
 			}
 		});
 
-		it("uses cursor pagination when next_cursor is returned", async () => {
+		it("preserves the initial end and checkpoint throughout cursor pagination", async () => {
 			(handleDuplicateNotes as jest.Mock).mockResolvedValue("create");
-			const setTotalNotes = jest.fn();
+			const startedAt = Date.parse("2024-06-01T12:00:00.000Z");
+			const now = jest.spyOn(Date, "now").mockReturnValue(startedAt);
+			const setTotalNotes = jest.fn(() => now.mockReturnValue(startedAt + 300_000));
 			const firstPage = {
 				notes: [{ title: "First page note", text: "body-1" }],
 				total_notes: 2,
@@ -203,6 +216,12 @@ describe("Google Keep Import Functions", () => {
 			expect(firstRequest.url).toContain("offset=0");
 			expect(secondRequest.url).toContain("cursor=cursor-1");
 			expect(secondRequest.url).not.toContain("offset=");
+			for (const request of [firstRequest, secondRequest]) {
+				const query = new URL(request.url).searchParams;
+				expect(query.get("created_lt")).toBe(new Date(startedAt).toISOString());
+				expect(query.get("updated_lt")).toBe(new Date(startedAt).toISOString());
+			}
+			expect(mockPlugin.settings.keepSidianLastSuccessfulSyncDate).toBe(new Date(startedAt - 1).toISOString());
 			expect(setTotalNotes).toHaveBeenCalledTimes(1);
 			expect(setTotalNotes).toHaveBeenCalledWith(2);
 		});
@@ -214,7 +233,7 @@ describe("Google Keep Import Functions", () => {
 			expect(requestParams.url).toContain("limit=100");
 		});
 
-		it("retries after a rate-limited fetch response", async () => {
+		it("retries after a rate-limited fetch response with identical date bounds", async () => {
 			jest.useFakeTimers();
 			const emptyPage = { notes: [] };
 
@@ -233,6 +252,7 @@ describe("Google Keep Import Functions", () => {
 				await jest.advanceTimersByTimeAsync(3_000);
 				await expect(importPromise).resolves.toBe(0);
 				expect(requestUrl).toHaveBeenCalledTimes(2);
+				expect((requestUrl as jest.Mock).mock.calls[1][0].url).toBe((requestUrl as jest.Mock).mock.calls[0][0].url);
 			} finally {
 				jest.useRealTimers();
 			}
@@ -253,14 +273,23 @@ describe("Google Keep Import Functions", () => {
 			tagPrefix: "auto-",
 		};
 
-		it("should import notes with premium features", async () => {
-			await importGoogleKeepNotesWithOptions(mockPlugin, mockOptions);
+		it("should import notes with premium features and both date bounds", async () => {
+			await importGoogleKeepNotesWithOptions(mockPlugin, mockOptions, undefined, {
+				kind: "custom-since",
+				since: "2024-03-01T00:00:00.000Z",
+				until: "2024-04-01T00:00:00.000Z",
+			});
 			expect(requestUrl).toHaveBeenCalledWith(
 				expect.objectContaining({
 					url: expect.stringContaining("/premium"),
 					method: "POST",
 				})
 			);
+			const query = new URL((requestUrl as jest.Mock).mock.calls[0][0].url).searchParams;
+			expect(query.get("changed_gt")).toBe("2024-03-01T00:00:00.000Z");
+			expect(query.get("created_lt")).toBe("2024-04-01T00:00:00.000Z");
+			expect(query.get("updated_lt")).toBe("2024-04-01T00:00:00.000Z");
+			expect(setVaultConfigMock).not.toHaveBeenCalled();
 		});
 
 		it("sends a configured supporter key with premium requests", async () => {
@@ -770,7 +799,7 @@ describe("Google Keep Import Functions", () => {
 			await syncModule.processAndSaveNote(mockPlugin, incomingNote, mockPlugin.settings.saveLocation);
 
 			const expectedFilePath = `${mockPlugin.settings.saveLocation}/${incomingNote.title}.md`;
-			const expectedContent = `---\nExisting: true\nKeepSidianLastSyncedDate: 2023-01-01T00:00:00.000Z\n---\nLine 1\nLine 2`;
+			const expectedContent = `---\nExisting: true\nKeepSidianLastSyncedDate: 2023-01-01T00:00:00.000Z\nKeepSidianPendingUpload: true\n---\nLine 1\nLine 2`;
 			expect(mockPlugin.app.vault.adapter.write).toHaveBeenCalledWith(expectedFilePath, expectedContent);
 		});
 

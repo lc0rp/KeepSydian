@@ -2,7 +2,9 @@ import { Notice } from "obsidian";
 import type KeepSidianPlugin from "@app/main";
 import { normalizeNote, PreNormalizedNote, extractFrontmatter } from "./domain/note";
 import { handleDuplicateNotes } from "./domain/compare";
-import { mergeNoteText } from "./domain/merge";
+import { hasPendingUpload, remoteBaseline, resolveDownloadMerge, withSyncState } from "./domain/sync-state";
+import { getArchivedNoteUpdate, getDownloadFrontmatter, isArchivedDownload } from "./domain/archive";
+import type { KeepArchivedStatus } from "../../types/subscription";
 // Import via legacy google path so tests can spy on this module
 import { processAttachments, type AttachmentFailure } from "../keep/io/attachments";
 import type { NoteImportOptions } from "@ui/modals/NoteImportOptionsModal";
@@ -19,7 +21,7 @@ import {
 import { resolveNoteFolder, resolveNotePath } from "@services/note-path-resolver";
 import { flushLogSync, logSync } from "@app/logging";
 import type { GoogleKeepImportResponse, PremiumFeatureFlags, SyncFilters } from "@integrations/server/keepApi";
-import type { DownloadScope, SyncPlan, SyncPlanEntry } from "@types";
+import type { DownloadScope, MergeAction, SyncPlan, SyncPlanAction, SyncPlanEntry } from "@types";
 import { NetworkError } from "@services/errors";
 import { SyncCancellationError } from "@app/sync-cancel";
 import {
@@ -37,6 +39,7 @@ import { appendPerfTrace } from "@app/perf-trace";
 import { stripManagedImageEmbeds, withManagedImageEmbeds } from "./domain/attachmentEmbeds";
 import { safeSyncError, type SyncAttempt } from "@app/sync-attempt";
 import { retryDownload, isTransientDownloadError } from "./download-retry";
+import { resolveDownloadDateWindow } from "./download-date-window";
 import { KEEPSIDIAN_SERVER_URL } from "../../config";
 
 const LAST_SUCCESSFUL_SYNC_DATE_KEY = "KeepSidianLastSuccessfulSyncDate";
@@ -52,6 +55,7 @@ interface Preparation {
 	offset: number;
 	cursor?: string;
 	filters?: SyncFilters;
+	completionDate?: string;
 	page: number;
 	usingCursor: boolean;
 	active: boolean;
@@ -74,7 +78,17 @@ const NOTE_LOG_BATCH_OPTIONS = {
 	batchSize: NOTE_LOG_BATCH_SIZE,
 } as const;
 
-type NoteSaveAction = "skipped" | "created" | "merged" | "conflict" | "overwritten";
+type NoteSaveAction = "skipped" | "skipped-conflict" | "created" | "merged" | "conflict" | "overwritten" | "archived";
+
+const SAVE_PLAN_ACTIONS: Record<NoteSaveAction, SyncPlanAction> = {
+	skipped: "skipped-identical",
+	"skipped-conflict": "skipped-conflict",
+	created: "create",
+	merged: "merge",
+	conflict: "conflict-copy",
+	overwritten: "overwrite",
+	archived: "overwrite",
+};
 
 interface NoteSaveMetrics {
 	action: NoteSaveAction;
@@ -199,56 +213,30 @@ export function getLastSuccessfulSyncDate(plugin: KeepSidianPlugin): string | un
 }
 
 export function persistLastSuccessfulSyncDate(plugin: KeepSidianPlugin, isoString: string): void {
+	const previous = getLastSuccessfulSyncDate(plugin);
+	if (previous && Date.parse(previous) >= Date.parse(isoString)) return;
 	plugin.settings.keepSidianLastSuccessfulSyncDate = isoString;
 	setVaultConfig(plugin, LAST_SUCCESSFUL_SYNC_DATE_KEY, isoString);
 }
 
-function parseCustomSinceDate(isoString: string): Date {
-	const parsed = new Date(isoString);
-	if (Number.isNaN(parsed.getTime())) {
-		throw new Error("Choose a valid custom date before preparing the download review.");
-	}
-	if (parsed.getTime() > Date.now()) {
-		throw new Error("Custom download dates must be in the past.");
-	}
-	return parsed;
-}
-
 export function buildDownloadSyncFilters(
 	plugin: KeepSidianPlugin,
-	downloadScope?: DownloadScope
-): SyncFilters | undefined {
-	const scope = downloadScope ?? { kind: "last-sync" };
-
-	if (scope.kind === "all") {
-		return undefined;
-	}
-
-	if (scope.kind === "custom-since") {
-		const since = scope.since?.trim();
-		if (!since) {
-			throw new Error("Choose a custom date.");
-		}
-		return {
-			changed_gt: parseCustomSinceDate(since).toISOString(),
-		};
-	}
-
-	const lastSuccessfulSyncDate = getLastSuccessfulSyncDate(plugin);
-	return lastSuccessfulSyncDate
-		? {
-				changed_gt: lastSuccessfulSyncDate,
-			}
-		: undefined;
+	downloadScope?: DownloadScope,
+	startedAt = Date.now()
+): SyncFilters {
+	return resolveDownloadDateWindow(downloadScope, getLastSuccessfulSyncDate(plugin), startedAt).filters;
 }
 
 export interface SyncCallbacks {
+	archivedStatus?: KeepArchivedStatus;
 	attempt?: SyncAttempt;
+	mergeAction?: MergeAction;
+	onMergeConflict?: (notePath: string) => void;
 	deferCheckpoint?: (date: string) => void;
 	setTotalNotes?: (total: number) => void;
 	reportProgress?: () => void;
 	reportPlanProgress?: (processed: number, total?: number) => void;
-	onEntrySettled?: (entryId: string, success: boolean) => void;
+	onEntrySettled?: (entryId: string, success: boolean, outcome?: SyncPlanAction) => void;
 	onAttachmentWarning?: (warning: SyncAttachmentWarning) => void;
 }
 
@@ -263,6 +251,7 @@ interface FetchImportNotesResult {
 }
 
 export interface BuiltImportSyncPlan {
+	archivedStatus?: KeepArchivedStatus;
 	plan: SyncPlan;
 	notes: PreNormalizedNote[];
 	noteEntryIds: string[];
@@ -332,6 +321,11 @@ async function fetchImportNotesBase(
 	retryEnabled = true
 ): Promise<FetchImportNotesResult> {
 	const attempt = callbacks?.attempt;
+	const dateWindow = preparation
+		? { filters: preparation.filters, checkpoint: preparation.completionDate }
+		: resolveDownloadDateWindow(downloadScope, getLastSuccessfulSyncDate(plugin), attempt?.startedAt ?? Date.now());
+	const syncFilters = dateWindow.filters;
+	const completionDate = dateWindow.checkpoint;
 	await attempt?.transition("fetch");
 	let offset = preparation?.offset ?? 0;
 	let pageOrdinal = preparation?.page ?? 1;
@@ -340,9 +334,7 @@ async function fetchImportNotesBase(
 	let usingCursorPagination = preparation?.usingCursor ?? false;
 	let hasReportedTotal = false;
 	const fetchedNotes: PreNormalizedNote[] = preparation?.notes ?? [];
-	const syncFilters = preparation ? preparation.filters : buildDownloadSyncFilters(plugin, downloadScope);
 	attempt?.setCutoff(syncFilters?.changed_gt);
-	let completionDate: string | undefined;
 	while (true) {
 		throwIfSyncCancelled(plugin);
 		if (attempt?.finished) throw new SyncCancellationError();
@@ -367,7 +359,6 @@ async function fetchImportNotesBase(
 			},
 			retryEnabled
 		);
-		completionDate = new Date().toISOString();
 		if (typeof response.total_notes === "number" && callbacks?.setTotalNotes && !hasReportedTotal) {
 			try {
 				callbacks.setTotalNotes(response.total_notes);
@@ -411,7 +402,8 @@ function buildImportPlanEntry(
 	note: PreNormalizedNote,
 	allowPerNoteSelection: boolean,
 	selectionLockedReason?: string,
-	existingKeepNoteIndex?: ExistingKeepNoteIndex
+	existingKeepNoteIndex?: ExistingKeepNoteIndex,
+	archivedStatus?: KeepArchivedStatus
 ): Promise<SyncPlanEntry> {
 	return (async () => {
 		const normalizedNote = normalizeNote(note);
@@ -452,13 +444,20 @@ function buildImportPlanEntry(
 				selectable = true;
 				break;
 			case "merge": {
-				const existingContent = await plugin.app.vault.adapter.read(noteFilePath).catch(() => "");
-				const [, existingBody] = extractFrontmatter(existingContent);
-				const { hasConflict } = mergeNoteText(existingBody, normalizedNote.textWithoutFrontmatter);
+				const existingContent = await plugin.app.vault.adapter.read(noteFilePath);
+				const [existingFrontmatter, existingBody] = extractFrontmatter(existingContent);
+				const { hasConflict } = await resolveDownloadMerge(
+					existingFrontmatter,
+					stripManagedImageEmbeds(existingBody),
+					note
+				);
 				action = hasConflict ? "conflict-copy" : "merge";
 				label = hasConflict ? "Conflict copy" : "Merge";
 				selectable = true;
-				detail = hasConflict ? "Will create a conflict copy next to the existing note." : undefined;
+				detail = hasConflict ? "Will create a conflict copy next to the existing note unless another merge action is chosen." : undefined;
+				if (getArchivedNoteUpdate(note, existingContent, archivedStatus)) {
+					detail = `${detail ? `${detail} ` : ""}Also marks the existing note as archived.`;
+				}
 				break;
 			}
 			case "skip":
@@ -466,6 +465,16 @@ function buildImportPlanEntry(
 				action = "skipped-identical";
 				label = "Skipped: identical";
 				selectable = false;
+				if (isArchivedDownload(note, archivedStatus)) {
+					const existingContent = await plugin.app.vault.adapter.read(noteFilePath);
+					if (getArchivedNoteUpdate(note, existingContent, archivedStatus)) {
+						// An existing-file update, but only its archive property is overwritten.
+						action = "overwrite";
+						label = "Archive";
+						selectable = true;
+						detail = "Marks the existing note as archived. Its body and other properties are preserved.";
+					}
+				}
 				break;
 		}
 
@@ -494,8 +503,10 @@ export async function buildImportSyncPlan(
 	callbacks?: Pick<SyncCallbacks, "setTotalNotes" | "reportPlanProgress" | "attempt">,
 	downloadScope?: DownloadScope
 ): Promise<BuiltImportSyncPlan> {
+	const startedAt = callbacks?.attempt?.startedAt ?? Date.now();
 	const { email, token } = plugin.settings;
 	const supporterKey = plugin.settings.supporterKeyConfigured ? (plugin.settings.supporterKey ?? "") : undefined;
+	const archivedStatus = options?.archivedStatus ?? "active-only";
 	const identity = JSON.stringify([
 		email,
 		token,
@@ -513,6 +524,7 @@ export async function buildImportSyncPlan(
 		new Notice("Previous preparation expired or its options changed. Restarting the selected date range.");
 	}
 	if (!preparation) {
+		const dateWindow = resolveDownloadDateWindow(downloadScope, getLastSuccessfulSyncDate(plugin), startedAt);
 		// Free GET preparation is already replay-safe and needs no premium probe.
 		const epoch = options === undefined ? undefined : await getReplayEpoch(email, token);
 		preparation = {
@@ -524,7 +536,8 @@ export async function buildImportSyncPlan(
 			offset: 0,
 			page: 1,
 			usingCursor: false,
-			filters: buildDownloadSyncFilters(plugin, downloadScope),
+			filters: dateWindow.filters,
+			completionDate: dateWindow.checkpoint,
 			active: false,
 		};
 		preparations.set(plugin, preparation);
@@ -585,7 +598,15 @@ export async function buildImportSyncPlan(
 	const existingKeepNoteIndex = await buildExistingKeepNoteIndex(plugin.app, plugin.settings.saveLocation);
 	const entries = await Promise.all(
 		fetched.notes.map((note, index) =>
-			buildImportPlanEntry(plugin, index, note, allowPerNoteSelection, selectionLockedReason, existingKeepNoteIndex)
+			buildImportPlanEntry(
+				plugin,
+				index,
+				note,
+				allowPerNoteSelection,
+				selectionLockedReason,
+				existingKeepNoteIndex,
+				archivedStatus
+			)
 		)
 	);
 	const actionableEntries = entries.filter((entry) => entry.selectable);
@@ -595,6 +616,7 @@ export async function buildImportSyncPlan(
 	}, {});
 
 	return {
+		archivedStatus,
 		plan: {
 			id: `import-plan:${Date.now()}`,
 			mode: "import",
@@ -668,7 +690,7 @@ export async function importGoogleKeepNotes(
 	return await importGoogleKeepNotesBase(
 		plugin,
 		(offset, limit, filters, cursor) => apiFetchNotes(email, token, offset, limit, filters, cursor),
-		callbacks,
+		{ ...callbacks, archivedStatus: "active-only" },
 		downloadScope
 	);
 }
@@ -686,7 +708,7 @@ export async function importGoogleKeepNotesWithOptions(
 		plugin,
 		(offset, limit, filters, cursor) =>
 			apiFetchNotesWithPremium(email, token, featureFlags, offset, limit, filters, cursor, supporterKey),
-		callbacks,
+		{ ...callbacks, archivedStatus: options.archivedStatus ?? "active-only" },
 		downloadScope,
 		false
 	);
@@ -836,7 +858,10 @@ export async function processAndSaveNotes(
 								await ensureFolderCached(folderPath);
 							},
 							(warning: SyncAttachmentWarning) => callbacks?.onAttachmentWarning?.(warning),
-							callbacks?.attempt
+							callbacks?.attempt,
+							callbacks?.archivedStatus,
+							callbacks?.mergeAction,
+							callbacks?.onMergeConflict
 						)
 					);
 					batchMetrics.processed += 1;
@@ -886,7 +911,8 @@ export async function processAndSaveNotes(
 
 					callbacks?.reportProgress?.();
 					if (entryId) {
-						callbacks?.onEntrySettled?.(entryId, true);
+						if (callbacks?.mergeAction) callbacks.onEntrySettled?.(entryId, true, SAVE_PLAN_ACTIONS[metrics.action]);
+						else callbacks?.onEntrySettled?.(entryId, true);
 					}
 				} catch (error: unknown) {
 					await appendPerfTrace(plugin, "note-save-failed", {
@@ -935,7 +961,10 @@ export async function processAndSaveNote(
 	ensureFolderForPath: (folderPath: string) => Promise<void> = async (folderPath: string) =>
 		await ensureFolder(plugin.app, folderPath),
 	onAttachmentWarning?: (warning: SyncAttachmentWarning) => void,
-	attempt?: SyncAttempt
+	attempt?: SyncAttempt,
+	archivedStatus?: KeepArchivedStatus,
+	mergeAction?: MergeAction,
+	onMergeConflict?: (notePath: string) => void
 ): Promise<NoteSaveMetrics> {
 	const metrics: NoteSaveMetrics = {
 		action: "created",
@@ -974,6 +1003,7 @@ export async function processAndSaveNote(
 	metrics.resolveExistingPathDurationMs = getNowMs() - resolveExistingPathStartedAt;
 	const noteLink = `[${noteTitle}](${normalizePathSafe(noteFilePath)})`;
 	const noteFolder = dirnameSafe(noteFilePath);
+	let retainedImageNames: string[] = [];
 
 	const lastSyncedDate = new Date().toISOString();
 	const ensureParentFolder = async (filePath: string): Promise<void> => {
@@ -995,6 +1025,24 @@ export async function processAndSaveNote(
 			);
 		});
 	};
+	const markExistingNoteArchived = async (filePath: string, content?: string): Promise<boolean> => {
+		if (!isArchivedDownload(note, archivedStatus)) return false;
+		const readStartedAt = getNowMs();
+		const existingContent = content ?? (await plugin.app.vault.adapter.read(filePath));
+		metrics.readExistingDurationMs += getNowMs() - readStartedAt;
+		const updatedContent = getArchivedNoteUpdate(note, existingContent, archivedStatus);
+		if (updatedContent === undefined) return false;
+		// Archive bookkeeping must not manufacture a local body edit or hide an existing one.
+		const stat = await plugin.app.vault.adapter.stat(filePath);
+		if (!stat || !Number.isFinite(stat.mtime)) {
+			throw new Error("Cannot preserve the note modification time while marking it archived.");
+		}
+		throwIfSyncCancelled(plugin);
+		const writeStartedAt = getNowMs();
+		await plugin.app.vault.adapter.write(filePath, updatedContent, { ctime: stat.ctime, mtime: stat.mtime });
+		metrics.writeNoteDurationMs += getNowMs() - writeStartedAt;
+		return true;
+	};
 
 	try {
 		throwIfSyncCancelled(plugin);
@@ -1006,15 +1054,17 @@ export async function processAndSaveNote(
 				? "create"
 				: await handleDuplicateNotes(saveLocation, normalizedNote, plugin.app, noteFilePath, existingKeepNoteIndex);
 		metrics.duplicateDecisionDurationMs = getNowMs() - duplicateDecisionStartedAt;
-		const newFrontmatter = normalizedNote.frontmatter;
+		const newFrontmatter = getDownloadFrontmatter(note, archivedStatus);
 		const newTextWithoutFrontmatter = normalizedNote.textWithoutFrontmatter;
+		const baseline = duplicateNotesAction === "skip" ? undefined : await remoteBaseline(note);
 
 		if (duplicateNotesAction === "skip") {
-			metrics.action = "skipped";
-			await logNote(`${noteLink} - identical (skipped)`);
+			const archived = await markExistingNoteArchived(noteFilePath);
+			metrics.action = archived ? "archived" : "skipped";
+			await logNote(archived ? `${noteLink} - marked as archived` : `${noteLink} - identical (skipped)`);
 		} else if (duplicateNotesAction === "create") {
 			metrics.action = "created";
-			const mdFrontmatter = buildFrontmatterWithSyncDate(newFrontmatter, lastSyncedDate);
+			const mdFrontmatter = withSyncState(buildFrontmatterWithSyncDate(newFrontmatter, lastSyncedDate), false, baseline);
 			const newMdContent = wrapMarkdown(mdFrontmatter, newTextWithoutFrontmatter);
 			await ensureParentFolder(noteFilePath);
 			const writeStartedAt = getNowMs();
@@ -1032,48 +1082,59 @@ export async function processAndSaveNote(
 				typeof existingMarkdownFileContentRaw === "string" ? existingMarkdownFileContentRaw : "";
 			const [existingFrontmatter, existingTextWithoutFrontmatterRaw] = extractFrontmatter(existingMarkdownFileContent);
 			const existingTextWithoutFrontmatter = stripManagedImageEmbeds(existingTextWithoutFrontmatterRaw);
-
-			const mdFrontmatter = buildFrontmatterWithSyncDate(existingFrontmatter, lastSyncedDate, newFrontmatter);
+			let mdFrontmatter = withSyncState(
+				buildFrontmatterWithSyncDate(existingFrontmatter, lastSyncedDate, newFrontmatter),
+				hasPendingUpload(existingFrontmatter),
+				baseline
+			);
 
 			if (duplicateNotesAction === "merge") {
-				const { mergedText: mergedText, hasConflict } = mergeNoteText(
-					existingTextWithoutFrontmatter,
-					newTextWithoutFrontmatter
-				);
-
-				const mergedMdContent = wrapMarkdown(mdFrontmatter, mergedText);
-
-				if (!hasConflict) {
-					metrics.action = "merged";
-					await ensureParentFolder(noteFilePath);
-					const writeStartedAt = getNowMs();
-					await plugin.app.vault.adapter.write(noteFilePath, mergedMdContent);
-					metrics.writeNoteDurationMs += getNowMs() - writeStartedAt;
-					if (existingKeepNoteIndex) {
-						updateExistingKeepNoteIndex(existingKeepNoteIndex, noteFilePath, normalizedNote);
-					}
-					await logNote(`${noteLink} - merged (no conflict)`);
-				} else {
-					metrics.action = "conflict";
-					// Write a conflict copy
-					noteFilePath = noteFilePath.replace(/\.md$/, "");
-					noteFilePath = `${noteFilePath}${CONFLICT_FILE_SUFFIX}${lastSyncedDate}.md`;
-
-					await ensureParentFolder(noteFilePath);
-					const writeStartedAt = getNowMs();
-					await plugin.app.vault.adapter.write(noteFilePath, mergedMdContent);
-					metrics.writeNoteDurationMs += getNowMs() - writeStartedAt;
-					if (existingKeepNoteIndex) {
-						updateExistingKeepNoteIndex(existingKeepNoteIndex, noteFilePath, normalizedNote);
-					}
-					const conflictLink = `[${noteTitle}](${normalizePathSafe(noteFilePath)})`;
-					await logNote(`${conflictLink} - conflict copy created`);
+				const originalNoteFilePath = noteFilePath;
+				const decision = await resolveDownloadMerge(existingFrontmatter, existingTextWithoutFrontmatter, note, mergeAction);
+				if (decision.action === "skipped-conflict") {
+					metrics.action = "skipped-conflict";
+					onMergeConflict?.(normalizePathSafe(noteFilePath));
+					await logNote(`${noteLink} - conflict skipped; original and attachments left unchanged`);
+					// Do not stamp the original or process its attachments when skipping a conflict.
+					return metrics;
 				}
+				if (decision.action === "conflict-copy") {
+					metrics.action = "conflict";
+					onMergeConflict?.(normalizePathSafe(noteFilePath));
+					noteFilePath = `${noteFilePath.replace(/\.md$/, "")}${CONFLICT_FILE_SUFFIX}${lastSyncedDate}.md`;
+					mdFrontmatter = withSyncState(mdFrontmatter, false, baseline);
+				} else {
+					metrics.action = decision.action === "overwrite" ? "overwritten" : "merged";
+					// Persist pending state in the SAME write as the merged body. It
+					// survives losing an in-memory plan, deselection and app restart.
+					mdFrontmatter = withSyncState(mdFrontmatter, decision.action === "merge" || hasPendingUpload(existingFrontmatter), baseline);
+				}
+				if (decision.action === "merge" || decision.action === "conflict-copy") {
+					retainedImageNames = Array.from(existingTextWithoutFrontmatterRaw.matchAll(/!\[\[media\/([^\]\n|]+)(?:\|[^\]]+)?\]\]/g), (match) => match[1]);
+				}
+				const mergedBody = retainedImageNames.length ? withManagedImageEmbeds(decision.text, retainedImageNames) : decision.text;
+				await ensureParentFolder(noteFilePath);
+				const writeStartedAt = getNowMs();
+				await plugin.app.vault.adapter.write(noteFilePath, wrapMarkdown(mdFrontmatter, mergedBody));
+				metrics.writeNoteDurationMs += getNowMs() - writeStartedAt;
+				if (existingKeepNoteIndex) {
+					updateExistingKeepNoteIndex(existingKeepNoteIndex, noteFilePath, normalizedNote);
+				}
+				if (decision.action === "conflict-copy") {
+					// Preserve the original body, pending upload, baseline, and modification time.
+					await markExistingNoteArchived(originalNoteFilePath);
+				}
+				const resultLink = `[${noteTitle}](${normalizePathSafe(noteFilePath)})`;
+				await logNote(
+					decision.action === "conflict-copy"
+						? `${resultLink} - conflict copy created`
+						: decision.action === "overwrite"
+							? `${resultLink} - overwritten`
+							: `${resultLink} - merged (no conflict)`
+				);
 			} else {
 				metrics.action = "overwritten";
 				const mdContentWithSyncDate = wrapMarkdown(mdFrontmatter, newTextWithoutFrontmatter);
-
-				// overwrite path: write to current path
 				await ensureParentFolder(noteFilePath);
 				const writeStartedAt = getNowMs();
 				await plugin.app.vault.adapter.write(noteFilePath, mdContentWithSyncDate);
@@ -1125,7 +1186,7 @@ export async function processAndSaveNote(
 			if (plugin.settings.embedImportedImages && fileNames.length > 0) {
 				const existingNoteContent = await plugin.app.vault.adapter.read(noteFilePath);
 				const [existingFrontmatter, existingBody] = extractFrontmatter(existingNoteContent);
-				const bodyWithEmbeds = withManagedImageEmbeds(existingBody, fileNames);
+				const bodyWithEmbeds = withManagedImageEmbeds(existingBody, [...retainedImageNames, ...fileNames]);
 				const noteContentWithEmbeds = wrapMarkdown(existingFrontmatter, bodyWithEmbeds);
 				if (noteContentWithEmbeds !== existingNoteContent) {
 					const writeStartedAt = getNowMs();

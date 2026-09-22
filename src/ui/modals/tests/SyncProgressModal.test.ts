@@ -198,7 +198,7 @@ describe("SyncProgressModal", () => {
 		expect(getButton(modal, "Downloaded, please wait ...")).toBeTruthy();
 	});
 
-	test("customize sync renders start-date controls for download-capable modes only", async () => {
+	test("customize sync renders start and end controls for download-capable modes only", async () => {
 		const modal = new SyncProgressModal(app, modalOptions);
 		modal.onOpen();
 
@@ -209,8 +209,8 @@ describe("SyncProgressModal", () => {
 
 		expect(getButton(modal, "Customize sync").getAttribute("aria-expanded")).toBe("true");
 		expect(modal.contentEl.textContent).toContain("Mode");
-		expect(modal.contentEl.textContent).toContain("Start date");
-		expect(modal.contentEl.textContent).toContain("Last successful sync");
+		expect(modal.contentEl.textContent).toContain("Start & end date");
+		expect(modal.contentEl.textContent).toContain("Last sync → Now");
 		expect(modal.contentEl.textContent).toContain("Last sync:");
 		expect(modal.contentEl.textContent).toContain("2024");
 		expect(modalOptions.isSupporterActive).toHaveBeenCalled();
@@ -225,13 +225,19 @@ describe("SyncProgressModal", () => {
 		expect(input).toBeTruthy();
 		expect(input.value).toContain("2024-03-01");
 		expect(input.placeholder).toBe("YYYY-MM-DD HH:MM");
+		expect(input.closest("label")?.textContent).toBe("Start:");
+		const end = modal.contentEl.querySelector<HTMLInputElement>('[data-keepsidian-role="custom-until-input"]')!;
+		expect(end.value).toBe("");
+		expect(end.closest("label")?.textContent).toBe("End:");
 		expect(modal.contentEl.textContent).toContain("Use YYYY-MM-DD HH:MM.");
+		expect(modal.contentEl.textContent).toContain("Notes changed before this date will be included.");
 
 		getButton(modal, "Upload").click();
 		await flushUI();
 
-		expect(modal.contentEl.textContent).not.toContain("Start date");
+		expect(modal.contentEl.textContent).not.toContain("Start & end date");
 		expect(modal.contentEl.textContent).not.toContain("Premium options active: true");
+		expect(modal.contentEl.querySelector('[data-keepsidian-role="custom-until-input"]')).toBeNull();
 	});
 
 	test("shows the footer Start sync action only while sync customization is expanded", async () => {
@@ -418,7 +424,12 @@ describe("SyncProgressModal", () => {
 		expect(modal.contentEl.textContent).toContain("Download paused");
 	});
 
-	test("invalid or future custom dates block review generation", async () => {
+	test.each([
+		["custom-since-input", "2999-01-01 00:00", "Custom date must be in the past."],
+		["custom-until-input", "2999-01-01 00:00", "Custom end date must be in the past."],
+		["custom-until-input", "2023-01-01 00:00", "End date must be after the start date."],
+		["custom-until-input", "invalid", "Choose a valid custom end date."],
+	])("invalid custom range blocks review: %s = %s", async (role, value, message) => {
 		const modal = new SyncProgressModal(app, modalOptions);
 		modal.onOpen();
 
@@ -427,9 +438,9 @@ describe("SyncProgressModal", () => {
 		getButton(modal, "Custom").click();
 		await flushUI();
 
-		const input = getCustomSinceInput(modal) as HTMLInputElement;
+		const input = modal.contentEl.querySelector<HTMLInputElement>(`input[data-keepsidian-role="${role}"]`)!;
 		expect(input).toBeTruthy();
-		input.value = "2999-01-01 00:00";
+		input.value = value;
 		input.dispatchEvent(new Event("change"));
 		await flushUI();
 
@@ -438,10 +449,10 @@ describe("SyncProgressModal", () => {
 
 		expect(modalOptions.buildSyncPlan).not.toHaveBeenCalled();
 		expect(modal.contentEl.textContent).toContain("Couldn’t prepare the sync review");
-		expect(modal.contentEl.textContent).toContain("Custom date must be in the past.");
+		expect(modal.contentEl.textContent).toContain(message);
 	});
 
-	test("custom date input accepts a full four-digit year and builds a matching local timestamp", async () => {
+	test.each(["", "2025-04-13 10:30"])("builds local start and optional end timestamps (end=%s)", async (until) => {
 		const modal = new SyncProgressModal(app, modalOptions);
 		modal.onOpen();
 
@@ -451,12 +462,19 @@ describe("SyncProgressModal", () => {
 		await flushUI();
 
 		const input = getCustomSinceInput(modal) as HTMLInputElement;
+		const end = modal.contentEl.querySelector<HTMLInputElement>('[data-keepsidian-role="custom-until-input"]')!;
 		expect(input).toBeTruthy();
 		input.value = "2025-04-12 09:17";
 		input.dispatchEvent(new Event("input"));
 		expect(modal.contentEl.textContent).toContain("Use YYYY-MM-DD HH:MM.");
 		expect(modal.contentEl.textContent).not.toContain("Choose a custom date.");
 		input.dispatchEvent(new Event("change"));
+		await flushUI();
+		expect(getCustomSinceInput(modal)).toBe(input);
+		expect(modal.contentEl.querySelector('[data-keepsidian-role="custom-until-input"]')).toBe(end);
+		end.value = until;
+		end.dispatchEvent(new Event("input"));
+		end.dispatchEvent(new Event("change"));
 		await flushUI();
 
 		getButton(modal, "Start sync").click();
@@ -465,6 +483,7 @@ describe("SyncProgressModal", () => {
 		expect(modalOptions.buildSyncPlan).toHaveBeenLastCalledWith("import", expect.any(Object), {
 			kind: "custom-since",
 			since: new Date(2025, 3, 12, 9, 17, 0, 0).toISOString(),
+			...(until ? { until: new Date(2025, 3, 13, 10, 30, 0, 0).toISOString() } : {}),
 		});
 	});
 
@@ -576,7 +595,6 @@ describe("SyncProgressModal", () => {
 
 		getButton(modal, "Merge 1").click();
 		await flushUI();
-
 		expect(getRowTitles(modal)).toEqual(["Merge row"]);
 
 		getButton(modal, "Notes 2").click();
@@ -664,11 +682,11 @@ describe("SyncProgressModal", () => {
 		await flushUI();
 
 		expect(modal.contentEl.textContent).toContain("Running download plan");
-		expect(modal.contentEl.textContent).toContain("2 selected. 1 pending.");
-		expect(modal.contentEl.textContent).toContain("1 of 2 selected notes dealt with.");
-		expect(modal.contentEl.textContent).toContain("Notes 1/2");
+		expect(modal.contentEl.textContent).toContain("2 selected. 2 pending.");
+		expect(modal.contentEl.textContent).toContain("0 of 2 selected notes dealt with.");
+		expect(modal.contentEl.textContent).toContain("Notes 0/2");
 		expect(modal.contentEl.textContent).toContain("Created 0/1");
-		expect(modal.contentEl.textContent).toContain("Conflict copy 1/1");
+		expect(modal.contentEl.textContent).toContain("Conflict copy 0/1");
 		expect(modal.contentEl.textContent).toContain("Already up to date 1/1");
 		expect(modal.contentEl.textContent).toContain("Unchecked 1/1");
 
@@ -680,11 +698,19 @@ describe("SyncProgressModal", () => {
 		);
 		runCallback.onEntrySettled("create-1", true);
 		await flushUI();
+		expect(modal.contentEl.textContent).toContain("2 selected. 1 pending.");
+		expect(modal.contentEl.textContent).toContain("Notes 1/2");
+		expect(modal.contentEl.textContent).toContain("Conflict copy 0/1");
+
+		// Conflict copies perform I/O and only count after that write is acknowledged.
+		runCallback.onEntrySettled("conflict-1", true, "conflict-copy");
+		await flushUI();
 
 		expect(modal.contentEl.textContent).toContain("2 selected. 0 pending.");
 		expect(modal.contentEl.textContent).toContain("2 of 2 selected notes dealt with.");
 		expect(modal.contentEl.textContent).toContain("Notes 2/2");
 		expect(modal.contentEl.textContent).toContain("Created 1/1");
+		expect(modal.contentEl.textContent).toContain("Conflict copy 1/1");
 
 		deferred.resolve({});
 		await flushUI();
