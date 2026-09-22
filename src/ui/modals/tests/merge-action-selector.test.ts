@@ -110,3 +110,37 @@ it("resets a new plan to the safe default", async () => {
 	expect(selector(modal)?.value).toBe("merge-save-conflicts");
 	modal.close();
 });
+
+it("retains custom date bounds and merge policy through refresh and upload review", async () => {
+	const { modal, options } = setup(makePlan("two-way"));
+	await flush();
+	button(modal, "Customize sync").click();
+	await flush();
+	const custom = Array.from(modal.contentEl.querySelectorAll<HTMLButtonElement>(".keepsidian-sync-center-scope-button")).find((candidate) => candidate.textContent === "Custom");
+	expect(custom).toBeDefined();
+	custom!.click();
+	await flush();
+	for (const [role, value] of [["custom-since-input", "2024-01-02 00:00"], ["custom-until-input", "2024-01-03 12:00"]]) {
+		const input = modal.contentEl.querySelector<HTMLInputElement>(`[data-keepsidian-role="${role}"]`)!;
+		expect(input).not.toBeNull();
+		input.value = value;
+		input.dispatchEvent(new Event("input", { bubbles: true }));
+	}
+	await modal.beginReview("two-way");
+	const scope = { kind: "custom-since", since: new Date(2024, 0, 2, 0, 0).toISOString(), until: new Date(2024, 0, 3, 12, 0).toISOString() };
+	expect(options.buildSyncPlan).toHaveBeenLastCalledWith("two-way", expect.anything(), scope);
+	const control = selector(modal)!;
+	control.value = "merge-skip-conflicts";
+	control.dispatchEvent(new Event("change"));
+	options.buildSyncPlan.mockResolvedValue(makePlan("two-way"));
+	button(modal, "Refresh").click();
+	await flush();
+	expect(options.buildSyncPlan).toHaveBeenLastCalledWith("two-way", expect.anything(), scope);
+	expect(selector(modal)?.value).toBe("merge-skip-conflicts");
+	options.runSyncPlan.mockResolvedValue({ nextPlan: makePlan("two-way", "upload") });
+	button(modal, "Execute").click();
+	await flush();
+	expect(selector(modal)?.value).toBe("merge-skip-conflicts");
+	expect(modal.contentEl.textContent).toContain("Review upload plan");
+	modal.close();
+});

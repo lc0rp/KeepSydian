@@ -25,8 +25,12 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Record tested revision
-        run: git rev-parse HEAD
+      - name: Verify tested revision
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          echo "Tested revision: $EXPECTED_SHA"
 
       - name: Use Node.js
         uses: actions/setup-node@v4
@@ -69,8 +73,12 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Record built revision
-        run: git rev-parse HEAD
+      - name: Verify built revision
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          echo "Built revision: $EXPECTED_SHA"
 
       - name: Use Node.js
         uses: actions/setup-node@v4

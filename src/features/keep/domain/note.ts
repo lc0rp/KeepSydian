@@ -1,4 +1,5 @@
 import { parseYaml } from "obsidian";
+import { FRONTMATTER_GOOGLE_KEEP_URL_KEY } from "../constants";
 
 type FrontmatterDict = { [key: string]: unknown };
 
@@ -42,6 +43,13 @@ interface PreNormalizedNote {
 	header?: string;
 }
 
+/** Account selectors are navigation details; the #NOTE ID is the stable Keep identity. */
+export function normalizeKeepNoteUrl(value: string): string {
+	const trimmed = value.trim();
+	const match = /^https:\/\/keep\.google\.com\/(?:u\/\d+\/)?#NOTE\/([A-Za-z0-9._-]+)$/.exec(trimmed);
+	return match ? `https://keep.google.com/#NOTE/${match[1]}` : trimmed;
+}
+
 function normalizeDate(dateString?: string | null): Date | null {
 	if (!dateString) {
 		return null;
@@ -82,6 +90,16 @@ function normalizeNote(note: PreNormalizedNote): NormalizedNote {
 	normalizedNote.frontmatter = frontmatter;
 	normalizedNote.textWithoutFrontmatter = textWithoutFrontmatter;
 	normalizedNote.frontmatterDict = frontmatterDict;
+
+	const keepId = note.id?.trim();
+	if (!getFrontmatterStringValue(frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY)?.trim() && keepId && /^[A-Za-z0-9._-]+$/.test(keepId)) {
+		const url = `https://keep.google.com/#NOTE/${keepId}`;
+		const line = `${FRONTMATTER_GOOGLE_KEEP_URL_KEY}: ${url}`;
+		const urlProperty = /^(["']?)(?:GoogleKeepUrl|googleKeepUrl|google-keep-url)\1[\t ]*:[^\r\n]*/gm;
+		const replaced = frontmatter.replace(urlProperty, line);
+		normalizedNote.frontmatter = replaced !== frontmatter ? replaced : [frontmatter, line].filter(Boolean).join("\n");
+		frontmatterDict[FRONTMATTER_GOOGLE_KEEP_URL_KEY] = url;
+	}
 
 	return normalizedNote;
 }

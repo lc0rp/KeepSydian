@@ -28,7 +28,7 @@ it.each<MergeAction>(["merge-save-conflicts", "merge-skip-conflicts", "merge-ove
 		throwIfSyncCancelled: jest.fn(),
 	} as unknown as KeepSidianPlugin;
 	const conflict = jest.fn();
-	const result = await processAndSaveNote(plugin, { title: "note", text: "shared\nremote edit", blob_urls: ["https://example.invalid/test.png"] }, "Keep", undefined, undefined, undefined, undefined, undefined, undefined, action, conflict);
+	const result = await processAndSaveNote(plugin, { title: "note", text: "shared\nremote edit", blob_urls: ["https://example.invalid/test.png"] }, "Keep", undefined, undefined, undefined, undefined, undefined, undefined, undefined, action, conflict);
 	if (action === "merge-skip-conflicts") {
 		expect(result.action).toBe("skipped-conflict");
 		expect(write).not.toHaveBeenCalled();

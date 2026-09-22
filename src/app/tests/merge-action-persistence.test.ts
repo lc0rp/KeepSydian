@@ -286,3 +286,33 @@ it("falls back conservatively when no confirmed baseline is available", async ()
 	await f.run(plan);
 	expect(f.sent).toHaveLength(0);
 });
+
+it("retains merge policy and the automatic checkpoint through a bounded two-way run", async () => {
+	const f = fixture();
+	const scope = { kind: "custom-since", since: "2024-01-02T00:00:00.000Z", until: "2024-01-04T11:30:00.000Z" } as const;
+	const plan = (await buildManualSyncPlan(f.plugin, "two-way", undefined, scope))!;
+	expect(plan.completionDate).toBeUndefined();
+	const filters = (api.fetchNotesWithPremiumFeatures as jest.Mock).mock.calls[0]?.[5] ?? (api.fetchNotes as jest.Mock).mock.calls[0]?.[4];
+	expect(filters).toEqual({ changed_gt: scope.since, created_lt: scope.until, updated_lt: scope.until });
+	plan.plan.mergeAction = "merge-overwrite-conflicts";
+	const next = (await f.run(plan)).nextPlan!;
+	expect(next.plan.mergeAction).toBe("merge-overwrite-conflicts");
+	expect(next.completionDate).toBeUndefined();
+	expect(hasPendingUpload(extractFrontmatter(f.files.get(pathFor("A"))!)[0])).toBe(true);
+	expect(await f.run(next)).toEqual({});
+	expect(f.plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(checkpoint);
+	expect(f.remotes.get("A")?.text).toContain("local A");
+});
+
+it("keeps a clean archived merge pending with its confirmed remote baseline", async () => {
+	const f = fixture();
+	f.plugin.settings.premiumFeatures = { ...f.plugin.settings.premiumFeatures, archivedStatus: "all" };
+	f.remotes.get("A")!.archived = true;
+	const next = await f.download();
+	const content = f.files.get(pathFor("A"))!;
+	expect(content).toContain("GoogleKeepArchived: true");
+	expect(content).toContain("local A");
+	expect(hasPendingUpload(extractFrontmatter(content)[0])).toBe(true);
+	expect(await isRemoteBodyUnchanged(extractFrontmatter(content)[0], f.remotes.get("A")!)).toBe(true);
+	expect(next.pushNotes?.map((note) => note.fullPath)).toEqual([pathFor("A")]);
+});
