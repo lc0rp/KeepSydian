@@ -16,6 +16,7 @@ import {
 	persistLastSuccessfulSyncDate,
 } from "@features/keep/sync";
 import { buildDeletionPlan, executeReviewedDeletions, type PreparedDeletions } from "@features/keep/deletions";
+import { excludeDeletionUploads } from "@features/keep/deletion-upload-exclusions";
 import { buildPushSyncPlan, pushGoogleKeepNotes } from "@features/keep/push";
 import { ensureFolder, normalizePathSafe } from "@services/paths";
 import { resolveLogBaseFolder } from "@services/note-path-resolver";
@@ -210,19 +211,26 @@ async function buildManualSyncPlanCore(
 
 function getSelectedImportNotes(preparedPlan: PreparedSyncPlan): PreNormalizedNote[] {
 	const selectedEntryIds = new Set(
-		preparedPlan.plan.entries.filter((entry) => entry.action !== "delete" && entry.selectable && entry.selected).map((entry) => entry.id)
+		preparedPlan.plan.entries
+			.filter((entry) => entry.action !== "delete" && entry.selectable && entry.selected)
+			.map((entry) => entry.id)
 	);
 	const importNotes = preparedPlan.importNotes ?? [];
 	const importEntryIds = preparedPlan.importEntryIds ?? [];
 	return importNotes.filter((_note, index) => {
 		const entryId = importEntryIds[index];
-		return entryId ? selectedEntryIds.has(entryId) : selectedEntryIds.size === 0;
+		// Legacy plans may omit the mapping, but a deletion plan must never import
+		// an unmapped snapshot that could recreate a note the user just deleted.
+		return entryId
+			? selectedEntryIds.has(entryId)
+			: !preparedPlan.deletions?.entries.length && selectedEntryIds.size === 0;
 	});
 }
 
 function getSelectedPushNotes(preparedPlan: PreparedSyncPlan): NoteForPush[] {
+	const plan = excludeDeletionUploads(preparedPlan.plan, preparedPlan.deletions);
 	const selectedEntryIds = new Set(
-		preparedPlan.plan.entries.filter((entry) => entry.selectable && entry.selected).map((entry) => entry.id)
+		plan.entries.filter((entry) => entry.selectable && entry.selected).map((entry) => entry.id)
 	);
 	return (preparedPlan.pushNotes ?? []).filter((note, index) =>
 		selectedEntryIds.has(`upload:${index}:${normalizePathSafe(note.fullPath)}`)
@@ -287,9 +295,11 @@ export async function runPreparedSyncPlan(
 				const selectedEntries = preparedPlan.plan.entries.filter((entry) => entry.selectable && entry.selected);
 				const selectedEntryIds = selectedEntries.filter((entry) => entry.action !== "delete").map((entry) => entry.id);
 				uiSetTotalNotes(plugin, selectedEntries.length);
-				await executeReviewedDeletions(plugin, preparedPlan.deletions, new Set(selectedEntries.map((entry) => entry.id)), callbacks);
+				await executeReviewedDeletions(
+					plugin, preparedPlan.deletions, new Set(selectedEntries.map((entry) => entry.id)), callbacks
+				);
 				// Commit the checkpoint only after the entire attempt succeeds, including a later upload stage.
-				if (selectedNotes.length) {
+				if (selectedNotes.length || !preparedPlan.deletions?.entries.length) {
 					await importSelectedGoogleKeepNotes(plugin, selectedNotes, callbacks, undefined, selectedEntryIds);
 				}
 				if (preparedPlan.mode === "two-way") {
@@ -298,10 +308,7 @@ export async function runPreparedSyncPlan(
 					await attempt.transition("upload-plan");
 					const active = await getManualSupportState(plugin);
 					const built = await buildPushSyncPlan(plugin, active, active ? undefined : SUPPORTER_LOCK_REASON);
-					// Unchecking a deletion means keep the local copy, not restore it to
-					// Keep in the upload half of this same sync. Preserve original IDs.
-					const keptPaths = new Set(preparedPlan.deletions?.entries.map((entry) => entry.path) ?? []);
-					const uploadPlan = withPlanEntries(built.plan, built.plan.entries.filter((entry) => !keptPaths.has(entry.path)));
+					const uploadPlan = excludeDeletionUploads(built.plan, preparedPlan.deletions);
 					await attempt.transition("review");
 					return {
 						nextPlan: {
@@ -310,6 +317,7 @@ export async function runPreparedSyncPlan(
 							mode: "two-way",
 							stage: "upload",
 							pushNotes: built.notesToPush,
+							deletions: preparedPlan.deletions,
 							attachmentWarnings,
 							completionDate: preparedPlan.completionDate,
 						},
@@ -434,7 +442,7 @@ export async function runTwoWaySyncFlow(
 export async function openLatestSyncLogFlow(plugin: KeepSidianPlugin): Promise<void> {
 	if (plugin.settings.lastSyncAttempt?.logUnavailable) {
 		new Notice(
-			`KeepSidian: sync log unavailable for attempt ${plugin.settings.lastSyncAttempt.id}. Check vault storage permissions.`,
+			`KeepSidian: sync log unavailable for attempt ${plugin.settings.lastSyncAttempt.id}. Check vault storage permissions.`
 		);
 		return;
 	}
