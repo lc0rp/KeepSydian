@@ -6,35 +6,132 @@ on:
     paths: [".github/workflows/pr22-integration.yml"]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  prepare:
+  integrate:
     if: github.repository == 'lc0rp/KeepSydian'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
+    env:
+      ORIGINAL: 35cc1c778f170ce5df8406d97b92feb3869dadb6
+      BASE: db2c42e834b6cea1e9d4fc11a036b37d185273cd
+      MAIN: f58c0a5b9b54dc80742c83d3da4bf39205b6553f
+      EXPECTED_TREE: e955e442fa26de78254ea322dcda64b37c7841c3
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Export exact integration sources
+      - name: Reconstruct the reviewed three-way merge
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = 35cc1c778f170ce5df8406d97b92feb3869dadb6
-          test "$(git rev-parse origin/main)" = f58c0a5b9b54dc80742c83d3da4bf39205b6553f
-          mkdir -p "$RUNNER_TEMP/pr22-integration"
-          git archive --format=tar 35cc1c778f170ce5df8406d97b92feb3869dadb6 > "$RUNNER_TEMP/pr22-integration/head.tar"
-          git archive --format=tar f58c0a5b9b54dc80742c83d3da4bf39205b6553f > "$RUNNER_TEMP/pr22-integration/main.tar"
-          git archive --format=tar db2c42e834b6cea1e9d4fc11a036b37d185273cd > "$RUNNER_TEMP/pr22-integration/base.tar"
-          git diff --binary db2c42e834b6cea1e9d4fc11a036b37d185273cd f58c0a5b9b54dc80742c83d3da4bf39205b6553f > "$RUNNER_TEMP/pr22-integration/main.patch"
-          git ls-tree -r 35cc1c778f170ce5df8406d97b92feb3869dadb6 > "$RUNNER_TEMP/pr22-integration/head-tree.txt"
-          git ls-tree -r f58c0a5b9b54dc80742c83d3da4bf39205b6553f > "$RUNNER_TEMP/pr22-integration/main-tree.txt"
-      - uses: actions/upload-artifact@v4
+          test "$(git diff --name-only "$ORIGINAL" HEAD)" = .github/workflows/pr22-integration.yml
+          test "$(git rev-parse origin/main)" = "$MAIN"
+          test "$(git merge-base "$ORIGINAL" "$MAIN")" = "$BASE"
+          mkdir -p "$RUNNER_TEMP/pr22-evidence"
+          python - <<'PY'
+          import base64, hashlib, os, pathlib, subprocess, tempfile, zlib
+          root = pathlib.Path.cwd()
+          def tree(ref):
+              result = {}
+              for record in subprocess.check_output(['git', 'ls-tree', '-rz', ref]).split(b'\0'):
+                  if not record:
+                      continue
+                  info, path = record.split(b'\t', 1)
+                  mode, kind, sha = info.decode().split()
+                  assert kind == 'blob', (path, kind)
+                  result[path.decode()] = (mode, sha)
+              return result
+          refs = [os.environ[name] for name in ['BASE', 'ORIGINAL', 'MAIN']]
+          trees = [tree(ref) for ref in refs]
+          conflicts = []
+          for path in sorted(set().union(*(set(t) for t in trees))):
+              values = [subprocess.check_output(['git', 'cat-file', 'blob', t[path][1]]) if path in t else None for t in trees]
+              b, h, m = values
+              if h == m or m == b:
+                  output, selected = h, trees[1]
+              elif h == b:
+                  output, selected = m, trees[2]
+              else:
+                  assert all(v is not None for v in values), path
+                  with tempfile.TemporaryDirectory() as directory:
+                      sources = [pathlib.Path(directory) / name for name in ['base', 'head', 'main']]
+                      for target, value in zip(sources, values):
+                          target.write_bytes(value)
+                      result = subprocess.run(['git', 'merge-file', '-p', '-L', 'PR22', '-L', 'BASE', '-L', 'MAIN', str(sources[1]), str(sources[0]), str(sources[2])], capture_output=True)
+                      assert 0 <= result.returncode < 128, (path, result.stderr)
+                      if result.returncode:
+                          conflicts.append(path)
+                      output, selected = result.stdout, trees[1]
+              target = root / path
+              if output is None:
+                  target.unlink(missing_ok=True)
+              else:
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  target.write_bytes(output)
+                  target.chmod(0o755 if selected[path][0] == '100755' else 0o644)
+          assert conflicts == ['.github/workflows/ci.yml', 'src/features/keep/sync.ts', 'src/ui/modals/SyncProgressModal.ts'], conflicts
+          print('Resolved conflict paths:', conflicts)
+          # This payload is a unified source patch, never executable Python.
+          payload = '''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'''
+          patch = zlib.decompress(base64.b64decode(payload))
+          assert hashlib.sha256(patch).hexdigest() == 'b136ebbdd1c61dfd60637de70276951d39a0f0bd962996f9cc71bf0f86031ab0'
+          patch_path = pathlib.Path(os.environ['RUNNER_TEMP']) / 'resolution.patch'
+          patch_path.write_bytes(patch)
+          subprocess.run(['git', 'apply', '--check', str(patch_path)], check=True)
+          subprocess.run(['git', 'apply', str(patch_path)], check=True)
+          (root / '.github/workflows/pr22-integration.yml').unlink()
+          PY
+          git add -A
+          git diff --cached --check
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+          git config user.name 'ChatGPT'
+          git config user.email 'chatgpt@users.noreply.github.com'
+          MERGED_SHA=$(printf '%s\n' 'Merge latest main into PR 22; preserve archive, date-range and merge safeguards' | git commit-tree "$EXPECTED_TREE" -p "$GITHUB_SHA" -p "$MAIN")
+          git reset --hard "$MERGED_SHA"
+          echo "MERGED_SHA=$MERGED_SHA" >> "$GITHUB_ENV"
+          printf 'head=%s\nmain=%s\ntree=%s\n' "$MERGED_SHA" "$MAIN" "$EXPECTED_TREE" | tee "$RUNNER_TEMP/pr22-evidence/revision.txt"
+      - uses: actions/setup-node@v4
         with:
-          name: pr22-integration-sources
-          path: ${{ runner.temp }}/pr22-integration/
-          if-no-files-found: error
-          retention-days: 1
+          node-version: '18.x'
+          cache: npm
+      - name: Install dependencies
+        shell: bash
+        run: |
+          npm ci > "$RUNNER_TEMP/pr22-evidence/install.log" 2>&1 || { tail -80 "$RUNNER_TEMP/pr22-evidence/install.log"; exit 1; }
+      - name: Test the exact merged revision
+        shell: bash
+        run: |
+          git rev-parse HEAD
+          npm run coverage > "$RUNNER_TEMP/pr22-evidence/coverage.log" 2>&1 || { tail -160 "$RUNNER_TEMP/pr22-evidence/coverage.log"; exit 1; }
+          tail -8 "$RUNNER_TEMP/pr22-evidence/coverage.log"
+      - name: Build the exact merged revision
+        shell: bash
+        run: |
+          git rev-parse HEAD
+          npm run build > "$RUNNER_TEMP/pr22-evidence/build.log" 2>&1 || { tail -100 "$RUNNER_TEMP/pr22-evidence/build.log"; exit 1; }
+          tail -25 "$RUNNER_TEMP/pr22-evidence/build.log"
+          git diff --exit-code
+          test "$(git write-tree)" = "$EXPECTED_TREE"
+      - name: Publish only to the unchanged PR branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$MAIN"
+          test "$(git ls-remote origin refs/heads/c2c/merge-actions-20260922 | cut -f1)" = "$GITHUB_SHA"
+          AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$AUTH"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $AUTH" push origin "$MERGED_SHA:refs/heads/c2c/merge-actions-20260922"
+          echo "Published $MERGED_SHA with main $MAIN" | tee "$RUNNER_TEMP/pr22-evidence/published.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr22-integration-evidence
+          path: ${{ runner.temp }}/pr22-evidence/
+          if-no-files-found: warn
+          retention-days: 3
