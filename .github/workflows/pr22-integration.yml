@@ -1,0 +1,40 @@
+name: PR 22 pinned integration
+
+on:
+  push:
+    branches: ["c2c/merge-actions-20260922"]
+    paths: [".github/workflows/pr22-integration.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    if: github.repository == 'lc0rp/KeepSydian'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Export exact integration sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = 35cc1c778f170ce5df8406d97b92feb3869dadb6
+          test "$(git rev-parse origin/main)" = f58c0a5b9b54dc80742c83d3da4bf39205b6553f
+          mkdir -p "$RUNNER_TEMP/pr22-integration"
+          git archive --format=tar 35cc1c778f170ce5df8406d97b92feb3869dadb6 > "$RUNNER_TEMP/pr22-integration/head.tar"
+          git archive --format=tar f58c0a5b9b54dc80742c83d3da4bf39205b6553f > "$RUNNER_TEMP/pr22-integration/main.tar"
+          git archive --format=tar db2c42e834b6cea1e9d4fc11a036b37d185273cd > "$RUNNER_TEMP/pr22-integration/base.tar"
+          git diff --binary db2c42e834b6cea1e9d4fc11a036b37d185273cd f58c0a5b9b54dc80742c83d3da4bf39205b6553f > "$RUNNER_TEMP/pr22-integration/main.patch"
+          git ls-tree -r 35cc1c778f170ce5df8406d97b92feb3869dadb6 > "$RUNNER_TEMP/pr22-integration/head-tree.txt"
+          git ls-tree -r f58c0a5b9b54dc80742c83d3da4bf39205b6553f > "$RUNNER_TEMP/pr22-integration/main-tree.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr22-integration-sources
+          path: ${{ runner.temp }}/pr22-integration/
+          if-no-files-found: error
+          retention-days: 1
