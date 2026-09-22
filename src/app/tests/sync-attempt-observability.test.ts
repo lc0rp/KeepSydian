@@ -153,7 +153,6 @@ describe("persistent sync attempt preparation", () => {
 				fetchedCount: 1,
 				total: 501,
 				requestedLimit: 100,
-				requestedLimit: 100,
 			});
 			expect(logs()).not.toMatch(/private-cursor|private-note-title|private-note-body/);
 		}
