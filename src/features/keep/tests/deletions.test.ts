@@ -31,7 +31,7 @@ function setup() {
 	const cancel = jest.fn();
 	const plugin = { app: { vault }, settings, throwIfSyncCancelled: cancel } as unknown as KeepSidianPlugin;
 	const add = (path: string, content: string) => {
-		const file = Object.assign(new TFile(), { path, basename: path.split("/").pop()!.replace(/\.md$/, ""), extension: "md" });
+		const file = Object.assign(new TFile(path), { path, basename: path.split("/").pop()!.replace(/\.md$/, ""), extension: "md" });
 		files.set(path, file);
 		contents.set(file, content);
 		return file;
