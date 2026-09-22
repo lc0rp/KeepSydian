@@ -171,7 +171,7 @@ If your plugin does not need CSS, delete this file.
 
 .keepsidian-color-picker-swatch:hover::before {
 	box-shadow:
-		inset 0 0 0 1px rgb(255 255 255 / 45%),
+		inset 0 0 0 1px rgb(255 255 255 / 55%),
 		0 0 0 2px
 			color-mix(in srgb, var(--background-modifier-border-hover, var(--background-modifier-border)) 88%, transparent);
 }
@@ -548,19 +548,28 @@ If your plugin does not need CSS, delete this file.
 
 .keepsidian-sync-center-scope-input-wrap {
 	display: flex;
-	flex-direction: column;
-	gap: 6px;
+	flex-direction: row;
+	flex-wrap: nowrap;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
 	margin-top: 4px;
 }
 
 .keepsidian-sync-center-scope-input-label {
+	flex: 0 0 3.25em;
+	white-space: nowrap;
 	font-size: var(--font-ui-small);
 	font-weight: 600;
 	color: var(--text-normal);
 }
 
 .keepsidian-sync-center-scope-input {
-	width: 100%;
+	flex: 1 1 0;
+	width: 0;
+	min-width: 0;
+	max-width: 100%;
+	box-sizing: border-box;
 }
 
 .keepsidian-sync-center-scope-helper {
@@ -1190,6 +1199,10 @@ If your plugin does not need CSS, delete this file.
 	.keepsidian-modal-shell--plan {
 		width: calc(100vw - 24px);
 		max-width: calc(100vw - 24px);
+	}
+
+	.keepsidian-modal {
+		min-width: 0;
 	}
 
 	.keepsidian-sync-stepper {
