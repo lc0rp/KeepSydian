@@ -42,6 +42,12 @@ const t2 = "2024-01-04T12:00:02.000Z";
 const pathFor = (id: string) => `Keep/${id}.md`;
 const bodyOf = (content: string) => extractFrontmatter(content)[1];
 const parentOf = (path: string) => path.slice(0, path.lastIndexOf("/"));
+function attachmentBytes(text: string): ArrayBuffer {
+	const encoded = new TextEncoder().encode(text);
+	const buffer = new ArrayBuffer(encoded.byteLength);
+	new Uint8Array(buffer).set(encoded);
+	return buffer;
+}
 function remoteNote(id: string, body: string, updated = "2024-01-04T11:00:00.000Z"): PreNormalizedNote {
 	return { id, title: id, created: checkpoint, updated,
 		text: wrapMarkdown(`GoogleKeepUrl: https://keep.google.com/u/0/#NOTE/${id}\nGoogleKeepUpdatedDate: ${updated}`, body) };
@@ -237,7 +243,7 @@ it("preserves local-only deletions against a confirmed baseline through download
 it("retains old-mtime local image references and bytes until their upload is acknowledged", async () => {
 	const f = fixture();
 	f.files.set(pathFor("A"), f.files.get(pathFor("A"))! + "\n\n![[media/local.png]]");
-	f.binaries.set("Keep/media/local.png", new TextEncoder().encode("local-image").buffer);
+	f.binaries.set("Keep/media/local.png", attachmentBytes("local-image"));
 	f.mtimes.set("Keep/media/local.png", Date.parse("2024-01-03T00:00:00.000Z"));
 	const next = await f.download();
 	expect(f.files.get(pathFor("A"))).toContain("![[media/local.png]]");
@@ -250,9 +256,9 @@ it("retains old-mtime local image references and bytes until their upload is ack
 it.each(["before-upload", "in-flight"])("retains pending state when attachment bytes change %s without an mtime change", async (when) => {
 	const f = fixture();
 	f.files.set(pathFor("A"), f.files.get(pathFor("A"))! + "\n\n![[media/local.png]]");
-	f.binaries.set("Keep/media/local.png", new TextEncoder().encode("old-image").buffer);
+	f.binaries.set("Keep/media/local.png", attachmentBytes("old-image"));
 	const next = await f.download();
-	const change = () => f.binaries.set("Keep/media/local.png", new TextEncoder().encode("new-image").buffer);
+	const change = () => f.binaries.set("Keep/media/local.png", attachmentBytes("new-image"));
 	if (when === "before-upload") change();
 	else f.push.mockImplementationOnce(async (_email, _token, payload) => { change(); return { results: payload.map((note) => ({ path: note.path, success: true })) }; });
 	expect((await f.run(next)).failed).toBe(true);
