@@ -4,6 +4,7 @@ export type SyncPlanStage = "import" | "upload";
 
 export type SyncPlanAction =
 	| "create"
+	| "delete"
 	| "overwrite"
 	| "merge"
 	| "conflict-copy"
