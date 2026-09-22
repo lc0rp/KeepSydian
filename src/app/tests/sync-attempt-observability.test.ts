@@ -153,6 +153,7 @@ describe("persistent sync attempt preparation", () => {
 				fetchedCount: 1,
 				total: 501,
 				requestedLimit: 100,
+				requestedLimit: 100,
 			});
 			expect(logs()).not.toMatch(/private-cursor|private-note-title|private-note-body/);
 		}
@@ -171,7 +172,7 @@ describe("persistent sync attempt preparation", () => {
 	it.each([false, true])("freezes the end before subscription and capability checks (premium=%s)", async (premium) => {
 		const startedAt = Date.parse("2026-06-01T12:00:00.000Z");
 		const now = jest.spyOn(Date, "now").mockReturnValue(startedAt);
-		plugin.settings.premiumFeatures = {};
+		plugin.settings.premiumFeatures = { ...DEFAULT_SETTINGS.premiumFeatures };
 		jest.spyOn(plugin.subscriptionService, "isSubscriptionActive").mockImplementation(async () => {
 			now.mockReturnValue(startedAt + 60_000);
 			return premium;
