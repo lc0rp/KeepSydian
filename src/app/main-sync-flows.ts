@@ -15,6 +15,7 @@ import {
 	importSelectedGoogleKeepNotes,
 	persistLastSuccessfulSyncDate,
 } from "@features/keep/sync";
+import { buildDeletionPlan, executeReviewedDeletions, type PreparedDeletions } from "@features/keep/deletions";
 import { buildPushSyncPlan, pushGoogleKeepNotes } from "@features/keep/push";
 import { ensureFolder, normalizePathSafe } from "@services/paths";
 import { resolveLogBaseFolder } from "@services/note-path-resolver";
@@ -31,6 +32,7 @@ export interface PreparedSyncPlan {
 	stage: SyncPlanStage;
 	importNotes?: PreNormalizedNote[];
 	importEntryIds?: string[];
+	deletions?: PreparedDeletions;
 	completionDate?: string;
 	pushNotes?: NoteForPush[];
 	attachmentWarnings?: number;
@@ -62,6 +64,19 @@ function withPlanMode(plan: SyncPlan, mode: SyncMode): SyncPlan {
 			...entry,
 			mode,
 		})),
+	};
+}
+
+function withPlanEntries(plan: SyncPlan, entries: SyncPlan["entries"]): SyncPlan {
+	return {
+		...plan,
+		entries,
+		counts: entries.reduce<Record<string, number>>((counts, entry) => {
+			counts[entry.label] = (counts[entry.label] ?? 0) + 1;
+			return counts;
+		}, {}),
+		selectedCount: entries.filter((entry) => entry.selectable && entry.selected).length,
+		actionableCount: entries.filter((entry) => entry.selectable).length,
 	};
 }
 
@@ -175,20 +190,27 @@ async function buildManualSyncPlanCore(
 		callbacks,
 		downloadScope
 	);
+	const deletions = await buildDeletionPlan(plugin);
+	const deletionPaths = new Set(deletions.entries.map((entry) => entry.path));
+	// The trash check is newer than the paginated note snapshot. Never present
+	// both an import and a deletion for the same file in one reviewed plan.
+	const entries = builtImportPlan.plan.entries.filter((entry) => !deletionPaths.has(entry.path));
+	entries.push(...deletions.entries);
 
 	return {
-		plan: withPlanMode(builtImportPlan.plan, mode),
+		plan: withPlanMode(withPlanEntries(builtImportPlan.plan, entries), mode),
 		mode,
 		stage: "import",
 		importNotes: builtImportPlan.notes,
 		importEntryIds: builtImportPlan.noteEntryIds,
+		deletions,
 		completionDate: builtImportPlan.completionDate,
 	};
 }
 
 function getSelectedImportNotes(preparedPlan: PreparedSyncPlan): PreNormalizedNote[] {
 	const selectedEntryIds = new Set(
-		preparedPlan.plan.entries.filter((entry) => entry.selectable && entry.selected).map((entry) => entry.id)
+		preparedPlan.plan.entries.filter((entry) => entry.action !== "delete" && entry.selectable && entry.selected).map((entry) => entry.id)
 	);
 	const importNotes = preparedPlan.importNotes ?? [];
 	const importEntryIds = preparedPlan.importEntryIds ?? [];
@@ -262,23 +284,29 @@ export async function runPreparedSyncPlan(
 			await attempt.transition(preparedPlan.stage === "import" ? "execution" : "upload");
 			if (preparedPlan.stage === "import") {
 				const selectedNotes = getSelectedImportNotes(preparedPlan);
-				const selectedEntryIds = preparedPlan.plan.entries
-					.filter((entry) => entry.selectable && entry.selected)
-					.map((entry) => entry.id);
-				uiSetTotalNotes(plugin, selectedNotes.length);
+				const selectedEntries = preparedPlan.plan.entries.filter((entry) => entry.selectable && entry.selected);
+				const selectedEntryIds = selectedEntries.filter((entry) => entry.action !== "delete").map((entry) => entry.id);
+				uiSetTotalNotes(plugin, selectedEntries.length);
+				await executeReviewedDeletions(plugin, preparedPlan.deletions, new Set(selectedEntries.map((entry) => entry.id)), callbacks);
 				// Commit the checkpoint only after the entire attempt succeeds, including a later upload stage.
-				await importSelectedGoogleKeepNotes(plugin, selectedNotes, callbacks, undefined, selectedEntryIds);
+				if (selectedNotes.length) {
+					await importSelectedGoogleKeepNotes(plugin, selectedNotes, callbacks, undefined, selectedEntryIds);
+				}
 				if (preparedPlan.mode === "two-way") {
 					resetProgressIndicatorsForNextStage(plugin);
 					plugin.currentSyncPhaseLabel = "Upload step";
 					await attempt.transition("upload-plan");
 					const active = await getManualSupportState(plugin);
 					const built = await buildPushSyncPlan(plugin, active, active ? undefined : SUPPORTER_LOCK_REASON);
+					// Unchecking a deletion means keep the local copy, not restore it to
+					// Keep in the upload half of this same sync. Preserve original IDs.
+					const keptPaths = new Set(preparedPlan.deletions?.entries.map((entry) => entry.path) ?? []);
+					const uploadPlan = withPlanEntries(built.plan, built.plan.entries.filter((entry) => !keptPaths.has(entry.path)));
 					await attempt.transition("review");
 					return {
 						nextPlan: {
 							attempt,
-							plan: withPlanMode(built.plan, "two-way"),
+							plan: withPlanMode(uploadPlan, "two-way"),
 							mode: "two-way",
 							stage: "upload",
 							pushNotes: built.notesToPush,
@@ -406,7 +434,7 @@ export async function runTwoWaySyncFlow(
 export async function openLatestSyncLogFlow(plugin: KeepSidianPlugin): Promise<void> {
 	if (plugin.settings.lastSyncAttempt?.logUnavailable) {
 		new Notice(
-			`KeepSidian: sync log unavailable for attempt ${plugin.settings.lastSyncAttempt.id}. Check vault storage permissions.`
+			`KeepSidian: sync log unavailable for attempt ${plugin.settings.lastSyncAttempt.id}. Check vault storage permissions.`,
 		);
 		return;
 	}
