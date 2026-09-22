@@ -2,6 +2,7 @@ import { Notice } from "obsidian";
 import type { DataAdapter } from "obsidian";
 import type KeepSidianPlugin from "./main";
 import type { NoteImportOptions } from "@ui/modals/NoteImportOptionsModal";
+import type { KeepArchivedStatus } from "../types/subscription";
 import type { PreNormalizedNote } from "@features/keep/domain/note";
 import type { NoteForPush } from "@features/keep/push/collectNotes";
 import { HIDDEN_CLASS } from "@app/ui-constants";
@@ -31,6 +32,7 @@ export interface PreparedSyncPlan {
 	stage: SyncPlanStage;
 	importNotes?: PreNormalizedNote[];
 	importEntryIds?: string[];
+	archivedStatus?: KeepArchivedStatus;
 	completionDate?: string;
 	pushNotes?: NoteForPush[];
 	attachmentWarnings?: number;
@@ -182,6 +184,7 @@ async function buildManualSyncPlanCore(
 		stage: "import",
 		importNotes: builtImportPlan.notes,
 		importEntryIds: builtImportPlan.noteEntryIds,
+		archivedStatus: builtImportPlan.archivedStatus,
 		completionDate: builtImportPlan.completionDate,
 	};
 }
@@ -247,6 +250,7 @@ export async function runPreparedSyncPlan(
 	preparedPlan.attempt = attempt;
 	let attachmentWarnings = preparedPlan.attachmentWarnings ?? 0;
 	const callbacks = {
+		archivedStatus: preparedPlan.archivedStatus ?? "active-only",
 		attempt,
 		setTotalNotes: (n: number) => uiSetTotalNotes(plugin, n),
 		reportProgress: () => reportSyncProgress(plugin),
