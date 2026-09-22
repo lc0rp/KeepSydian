@@ -6,7 +6,12 @@ import { DEFAULT_SETTINGS } from "../../../types/keepsidian-plugin-settings";
 import type { KeepArchivedStatus } from "../../../types/subscription";
 import type { PreNormalizedNote } from "../domain/note";
 import { getArchivedNoteUpdate, getDownloadFrontmatter } from "../domain/archive";
-import { buildImportSyncPlan, importGoogleKeepNotes, importGoogleKeepNotesWithOptions, importSelectedGoogleKeepNotes } from "../sync";
+import {
+	buildImportSyncPlan,
+	importGoogleKeepNotes,
+	importGoogleKeepNotesWithOptions,
+	importSelectedGoogleKeepNotes,
+} from "../sync";
 import * as api from "@integrations/server/keepApi";
 import * as merge from "../domain/merge";
 
@@ -67,7 +72,10 @@ describe("archive metadata reconciliation", () => {
 	});
 
 	it("honors an explicit false over stale rendered archive metadata", () => {
-		expect(getArchivedNoteUpdate(remoteNote({ archived: false, text: ARCHIVED }), ORIGINAL, "all")).toBeUndefined();
+		const note = remoteNote({ archived: false, text: ARCHIVED });
+		expect(getArchivedNoteUpdate(note, ORIGINAL, "all")).toBeUndefined();
+		expect(getDownloadFrontmatter(note, "all")).not.toContain("GoogleKeepArchived");
+		expect(getDownloadFrontmatter(note, "active-only")).not.toContain("GoogleKeepArchived");
 	});
 
 	it("ignores trashed notes", () => {
@@ -75,7 +83,9 @@ describe("archive metadata reconciliation", () => {
 	});
 
 	it("requires the existing Google Keep identity, not just the title", () => {
-		expect(getArchivedNoteUpdate(remoteNote(), ORIGINAL.replace(KEEP_URL, `${KEEP_URL}-other`), "all")).toBeUndefined();
+		expect(
+			getArchivedNoteUpdate(remoteNote(), ORIGINAL.replace(KEEP_URL, `${KEEP_URL}-other`), "all")
+		).toBeUndefined();
 		expect(getArchivedNoteUpdate(remoteNote(), "# Archive fixture", "all")).toBeUndefined();
 	});
 
@@ -86,12 +96,25 @@ describe("archive metadata reconciliation", () => {
 	it("adds a missing archive property without changing body or unrelated metadata", () => {
 		const original = ORIGINAL.replace("GoogleKeepArchived: false\n", "");
 		const updated = getArchivedNoteUpdate(remoteNote(), original, "all");
-		expect(updated).toBe(original.replace("custom: preserve-me\n---", "custom: preserve-me\nGoogleKeepArchived: true\n---"));
+		expect(updated).toBe(
+			original.replace("custom: preserve-me\n---", "custom: preserve-me\nGoogleKeepArchived: true\n---")
+		);
 	});
 
 	it("preserves CRLF and legacy property casing without duplicating the archive key", () => {
 		const original = ORIGINAL.replace("GoogleKeepArchived", "google-keep-archived").replace(/\n/g, "\r\n");
 		expect(getArchivedNoteUpdate(remoteNote(), original, "all")).toBe(ARCHIVED.replace(/\n/g, "\r\n"));
+	});
+
+	it.each(["'GoogleKeepArchived'", '"GoogleKeepArchived"'])("updates a quoted key %s without duplicates", (key) => {
+		const original = ORIGINAL.replace("GoogleKeepArchived", key);
+		expect(getArchivedNoteUpdate(remoteNote(), original, "all")).toBe(ARCHIVED);
+	});
+
+	it("preserves nested user metadata with a similarly named key", () => {
+		const original = ORIGINAL.replace("custom: preserve-me", "custom:\n  GoogleKeepArchived: false");
+		const expected = original.replace("\nGoogleKeepArchived: false", "\nGoogleKeepArchived: true");
+		expect(getArchivedNoteUpdate(remoteNote(), original, "all")).toBe(expected);
 	});
 
 	it("supplies archive frontmatter for a top-level-only flag", () => {
@@ -147,25 +170,52 @@ describe("archive download planning and execution", () => {
 			showTwoWaySafeguardNotice: jest.fn(),
 		}) as unknown as KeepSidianPlugin;
 		jest.spyOn(api, "getReplayEpoch").mockResolvedValue(undefined);
-		jest.spyOn(api, "fetchNotesWithPremiumFeatures").mockResolvedValueOnce({ notes: [remoteNote()] }).mockResolvedValue({ notes: [] });
+		jest
+			.spyOn(api, "fetchNotesWithPremiumFeatures")
+			.mockResolvedValueOnce({ notes: [remoteNote()] })
+			.mockResolvedValue({ notes: [] });
 		jest.spyOn(api, "fetchNotes").mockResolvedValueOnce({ notes: [remoteNote()] }).mockResolvedValue({ notes: [] });
 	});
 
 	const run = (plan: NonNullable<Awaited<ReturnType<typeof buildManualSyncPlan>>>) =>
-		runPreparedSyncPlan(plugin, plan, () => "unused", () => undefined);
+		runPreparedSyncPlan(
+			plugin,
+			plan,
+			() => "unused",
+			() => undefined
+		);
 	const noteWrites = () => adapter.write.mock.calls.filter(([path]) => path === NOTE_PATH);
 
-	it.each<KeepArchivedStatus>(["archived-only", "all"])("offers and applies an archive-only plan with %s", async (status) => {
-		plugin.settings.premiumFeatures.archivedStatus = status;
-		const plan = await buildManualSyncPlan(plugin, "import");
-		expect(plan?.archivedStatus).toBe(status);
-		expect(plan?.plan.entries[0]).toMatchObject({ label: "Archive", selected: true, selectable: true, path: NOTE_PATH });
-		expect(plan?.plan.counts.Archive).toBe(1);
-		expect(files.get(NOTE_PATH)).toBe(ORIGINAL);
-		expect(await run(plan!)).toEqual({});
-		expect(files.get(NOTE_PATH)).toBe(ARCHIVED);
-		expect(noteWrites()).toHaveLength(1);
-	});
+	it.each<KeepArchivedStatus>(["archived-only", "all"])(
+		"offers and applies an archive-only plan with %s",
+		async (status) => {
+			plugin.settings.premiumFeatures.archivedStatus = status;
+			const plan = await buildManualSyncPlan(plugin, "import");
+			expect(plan?.archivedStatus).toBe(status);
+			expect(plan?.plan.entries[0]).toMatchObject({
+				label: "Archive",
+				selected: true,
+				selectable: true,
+				path: NOTE_PATH,
+			});
+			expect(plan?.plan.counts.Archive).toBe(1);
+			expect(api.fetchNotesWithPremiumFeatures).toHaveBeenCalledWith(
+				plugin.settings.email,
+				plugin.settings.token,
+				expect.objectContaining({ keep_state_filter: { archived: status } }),
+				0,
+				100,
+				{ changed_gt: LAST_SYNC },
+				undefined,
+				undefined,
+				undefined
+			);
+			expect(files.get(NOTE_PATH)).toBe(ORIGINAL);
+			expect(await run(plan!)).toEqual({});
+			expect(files.get(NOTE_PATH)).toBe(ARCHIVED);
+			expect(noteWrites()).toHaveLength(1);
+		}
+	);
 
 	it("keeps the reviewed filter even if settings change before execution", async () => {
 		const plan = await buildManualSyncPlan(plugin, "import");
@@ -216,6 +266,13 @@ describe("archive download planning and execution", () => {
 		expect(built.plan.entries[0]).toMatchObject({ action: "skipped-identical", selectable: false });
 	});
 
+	it("does not rewrite archive metadata on repeated execution", async () => {
+		await importSelectedGoogleKeepNotes(plugin, [remoteNote()], { archivedStatus: "all" });
+		await importSelectedGoogleKeepNotes(plugin, [remoteNote()], { archivedStatus: "all" });
+		expect(files.get(NOTE_PATH)).toBe(ARCHIVED);
+		expect(noteWrites()).toHaveLength(1);
+	});
+
 	it("also propagates the selected filter through direct downloads", async () => {
 		await importGoogleKeepNotesWithOptions(plugin, plugin.settings.premiumFeatures);
 		expect(files.get(NOTE_PATH)).toBe(ARCHIVED);
@@ -226,11 +283,21 @@ describe("archive download planning and execution", () => {
 		expect(files.get(NOTE_PATH)).toBe(ORIGINAL);
 	});
 
-	it.each<KeepArchivedStatus>(["active-only", "all"])("gates archive metadata during content overwrites with %s", async (status) => {
-		const changed = remoteNote({ text: remoteNote().text?.replace("Keep this body.", "Updated remote body.") });
-		await importSelectedGoogleKeepNotes(plugin, [changed], { archivedStatus: status });
-		expect(files.get(NOTE_PATH)).toContain("Updated remote body.");
-		expect(files.get(NOTE_PATH)).toContain(`GoogleKeepArchived: ${status === "all" ? "true" : "false"}`);
+	it.each<KeepArchivedStatus>(["active-only", "all"])(
+		"gates archive metadata during content overwrites with %s",
+		async (status) => {
+			const changed = remoteNote({ text: remoteNote().text?.replace("Keep this body.", "Updated remote body.") });
+			await importSelectedGoogleKeepNotes(plugin, [changed], { archivedStatus: status });
+			expect(files.get(NOTE_PATH)).toContain("Updated remote body.");
+			expect(files.get(NOTE_PATH)).toContain(`GoogleKeepArchived: ${status === "all" ? "true" : "false"}`);
+		}
+	);
+
+	it("does not mark a content overwrite archived when the API explicitly reports active", async () => {
+		const changed = remoteNote({ archived: false, text: ARCHIVED.replace("Keep this body.", "Active remote body.") });
+		await importSelectedGoogleKeepNotes(plugin, [changed], { archivedStatus: "all" });
+		expect(files.get(NOTE_PATH)).toContain("Active remote body.");
+		expect(files.get(NOTE_PATH)).toContain("GoogleKeepArchived: false");
 	});
 
 	it("archives the original while preserving local edits when a conflict copy is created", async () => {
@@ -249,15 +316,27 @@ describe("archive download planning and execution", () => {
 			files.set(path, text);
 		});
 		const settled = jest.fn();
-		await expect(importSelectedGoogleKeepNotes(plugin, [remoteNote()], { archivedStatus: "all", onEntrySettled: settled }, "2024-02-01T00:00:00.000Z", ["archive-entry"])).rejects.toThrow("Archive write failed");
+		await expect(
+			importSelectedGoogleKeepNotes(
+				plugin,
+				[remoteNote()],
+				{ archivedStatus: "all", onEntrySettled: settled },
+				"2024-02-01T00:00:00.000Z",
+				["archive-entry"]
+			)
+		).rejects.toThrow("Archive write failed");
 		expect(plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(LAST_SYNC);
 		expect(settled).toHaveBeenCalledWith("archive-entry", false);
 		expect(files.get(NOTE_PATH)).toBe(ORIGINAL);
 	});
 
 	it("cancels without changing the note or checkpoint", async () => {
-		jest.spyOn(plugin, "throwIfSyncCancelled").mockImplementation(() => { throw new SyncCancellationError(); });
-		await expect(importSelectedGoogleKeepNotes(plugin, [remoteNote()], { archivedStatus: "all" }, "2024-02-01T00:00:00.000Z")).rejects.toBeInstanceOf(SyncCancellationError);
+		jest.spyOn(plugin, "throwIfSyncCancelled").mockImplementation(() => {
+			throw new SyncCancellationError();
+		});
+		await expect(
+			importSelectedGoogleKeepNotes(plugin, [remoteNote()], { archivedStatus: "all" }, "2024-02-01T00:00:00.000Z")
+		).rejects.toBeInstanceOf(SyncCancellationError);
 		expect(files.get(NOTE_PATH)).toBe(ORIGINAL);
 		expect(plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(LAST_SYNC);
 	});
