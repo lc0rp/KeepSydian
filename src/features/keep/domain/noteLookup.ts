@@ -1,6 +1,7 @@
 import { normalizePathSafe } from "@services/paths";
 import { extractFrontmatter, getFrontmatterStringValue, normalizeKeepNoteUrl, type NormalizedNote } from "./note";
 import {
+	CONFLICT_FILE_SUFFIX,
 	FRONTMATTER_GOOGLE_KEEP_CREATED_DATE_KEY,
 	FRONTMATTER_GOOGLE_KEEP_UPDATED_DATE_KEY,
 	FRONTMATTER_GOOGLE_KEEP_URL_KEY,
@@ -86,7 +87,7 @@ export async function buildExistingKeepNoteIndex(
 				const content = await adapter.read(filePath);
 				const [, , frontmatterDict] = extractFrontmatter(content);
 				const existingKeepUrl = getFrontmatterStringValue(frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
-				if (existingKeepUrl) {
+				if (existingKeepUrl && !filePath.includes(CONFLICT_FILE_SUFFIX)) {
 					pathByKeepUrl.set(normalizeKeepNoteUrl(existingKeepUrl), filePath);
 				}
 			} catch {
@@ -116,7 +117,7 @@ export async function buildExistingKeepNoteIndex(
 				continue;
 			}
 			const existingKeepUrl = getFrontmatterStringValue(frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
-			if (existingKeepUrl) {
+			if (existingKeepUrl && !normalizedPath.includes(CONFLICT_FILE_SUFFIX)) {
 				pathByKeepUrl.set(normalizeKeepNoteUrl(existingKeepUrl), normalizedPath);
 			}
 		}
@@ -136,7 +137,7 @@ export async function buildExistingKeepNoteIndex(
 			const content = await adapter.read(filePath);
 			const [, , frontmatterDict] = extractFrontmatter(content);
 			const existingKeepUrl = getFrontmatterStringValue(frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
-			if (existingKeepUrl) {
+			if (existingKeepUrl && !filePath.includes(CONFLICT_FILE_SUFFIX)) {
 				pathByKeepUrl.set(normalizeKeepNoteUrl(existingKeepUrl), filePath);
 			}
 		} catch {
@@ -158,7 +159,8 @@ export function updateExistingKeepNoteIndex(
 	const normalizedPath = normalizePathSafe(filePath);
 	index.existingPaths.add(normalizedPath);
 	const incomingKeepUrl = getFrontmatterStringValue(incomingNote.frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
-	if (incomingKeepUrl) {
+	// A conflict copy shares the original's metadata, but is never its canonical download target.
+	if (incomingKeepUrl && !normalizedPath.includes(CONFLICT_FILE_SUFFIX)) {
 		index.pathByKeepUrl.set(normalizeKeepNoteUrl(incomingKeepUrl), normalizedPath);
 	}
 }
