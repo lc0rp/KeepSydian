@@ -24,7 +24,7 @@ function setup() {
 	mock.app.vault.adapter.read.mockImplementation(async (path) => stored.get(path) ?? "");
 	mock.app.vault.adapter.write.mockImplementation(async (path, content) => { stored.set(path, content); });
 	mock.app.vault.createFolder.mockImplementation(async (path) => { folders.add(path); });
-	const file = Object.assign(new TFile(), { path: "Keep/Gone.md", basename: "Gone", extension: "md" });
+	const file = Object.assign(new TFile("Keep/Gone.md"), { path: "Keep/Gone.md", basename: "Gone", extension: "md" });
 	const vault = Object.assign(mock.app.vault, {
 		getMarkdownFiles: jest.fn(() => [file]),
 		getAbstractFileByPath: jest.fn(() => file),
