@@ -1032,9 +1032,14 @@ export async function processAndSaveNote(
 		metrics.readExistingDurationMs += getNowMs() - readStartedAt;
 		const updatedContent = getArchivedNoteUpdate(note, existingContent, archivedStatus);
 		if (updatedContent === undefined) return false;
+		// Archive bookkeeping must not manufacture a local body edit or hide an existing one.
+		const stat = await plugin.app.vault.adapter.stat(filePath);
+		if (!stat || !Number.isFinite(stat.mtime)) {
+			throw new Error("Cannot preserve the note modification time while marking it archived.");
+		}
 		throwIfSyncCancelled(plugin);
 		const writeStartedAt = getNowMs();
-		await plugin.app.vault.adapter.write(filePath, updatedContent);
+		await plugin.app.vault.adapter.write(filePath, updatedContent, { ctime: stat.ctime, mtime: stat.mtime });
 		metrics.writeNoteDurationMs += getNowMs() - writeStartedAt;
 		return true;
 	};
