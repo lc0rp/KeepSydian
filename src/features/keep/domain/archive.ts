@@ -1,6 +1,6 @@
 import type { KeepArchivedStatus } from "../../../types/subscription";
 import { FRONTMATTER_GOOGLE_KEEP_ARCHIVED_KEY, FRONTMATTER_GOOGLE_KEEP_URL_KEY } from "../constants";
-import { extractFrontmatter, getFrontmatterStringValue, normalizeNote, type PreNormalizedNote } from "./note";
+import { extractFrontmatter, getFrontmatterStringValue, normalizeKeepNoteUrl, normalizeNote, type PreNormalizedNote } from "./note";
 
 // Only top-level properties are matched; similarly named fields in nested user metadata are left alone.
 const ARCHIVE_PROPERTY = /^(["']?)(?:GoogleKeepArchived|googleKeepArchived|google-keep-archived)\1[\t ]*:[^\r\n]*/gm;
@@ -44,11 +44,11 @@ export function getArchivedNoteUpdate(
 	if (!isArchivedDownload(note, archivedStatus)) return undefined;
 	const [, , existingProperties] = extractFrontmatter(existingMarkdown);
 	const incoming = normalizeNote(note);
-	const incomingUrl =
-		getFrontmatterStringValue(incoming.frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY) ??
-		(note.id ? `https://keep.google.com/#NOTE/${note.id}` : undefined);
+	const incomingUrl = getFrontmatterStringValue(incoming.frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
 	const existingUrl = getFrontmatterStringValue(existingProperties, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
-	if (!incomingUrl || incomingUrl !== existingUrl) return undefined;
+	if (!incomingUrl || !existingUrl || normalizeKeepNoteUrl(incomingUrl) !== normalizeKeepNoteUrl(existingUrl)) {
+		return undefined;
+	}
 	if (getFrontmatterStringValue(existingProperties, FRONTMATTER_GOOGLE_KEEP_ARCHIVED_KEY) === "true") {
 		return undefined;
 	}
