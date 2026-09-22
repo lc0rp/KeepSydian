@@ -3,6 +3,7 @@ import type KeepSidianPlugin from "@app/main";
 import { normalizeNote, PreNormalizedNote, extractFrontmatter } from "./domain/note";
 import { handleDuplicateNotes } from "./domain/compare";
 import { mergeNoteText } from "./domain/merge";
+import { resolveMergeAction } from "./domain/merge-action";
 // Import via legacy google path so tests can spy on this module
 import { processAttachments, type AttachmentFailure } from "../keep/io/attachments";
 import type { NoteImportOptions } from "@ui/modals/NoteImportOptionsModal";
@@ -19,7 +20,7 @@ import {
 import { resolveNoteFolder, resolveNotePath } from "@services/note-path-resolver";
 import { flushLogSync, logSync } from "@app/logging";
 import type { GoogleKeepImportResponse, PremiumFeatureFlags, SyncFilters } from "@integrations/server/keepApi";
-import type { DownloadScope, SyncPlan, SyncPlanEntry } from "@types";
+import type { DownloadScope, MergeAction, SyncPlan, SyncPlanAction, SyncPlanEntry } from "@types";
 import { NetworkError } from "@services/errors";
 import { SyncCancellationError } from "@app/sync-cancel";
 import {
@@ -74,7 +75,16 @@ const NOTE_LOG_BATCH_OPTIONS = {
 	batchSize: NOTE_LOG_BATCH_SIZE,
 } as const;
 
-type NoteSaveAction = "skipped" | "created" | "merged" | "conflict" | "overwritten";
+type NoteSaveAction = "skipped" | "skipped-conflict" | "created" | "merged" | "conflict" | "overwritten";
+
+const SAVE_PLAN_ACTIONS: Record<NoteSaveAction, SyncPlanAction> = {
+	skipped: "skipped-identical",
+	"skipped-conflict": "skipped-conflict",
+	created: "create",
+	merged: "merge",
+	conflict: "conflict-copy",
+	overwritten: "overwrite",
+};
 
 interface NoteSaveMetrics {
 	action: NoteSaveAction;
@@ -244,11 +254,13 @@ export function buildDownloadSyncFilters(
 
 export interface SyncCallbacks {
 	attempt?: SyncAttempt;
+	mergeAction?: MergeAction;
+	onMergeConflict?: (notePath: string) => void;
 	deferCheckpoint?: (date: string) => void;
 	setTotalNotes?: (total: number) => void;
 	reportProgress?: () => void;
 	reportPlanProgress?: (processed: number, total?: number) => void;
-	onEntrySettled?: (entryId: string, success: boolean) => void;
+	onEntrySettled?: (entryId: string, success: boolean, outcome?: SyncPlanAction) => void;
 	onAttachmentWarning?: (warning: SyncAttachmentWarning) => void;
 }
 
@@ -452,13 +464,16 @@ function buildImportPlanEntry(
 				selectable = true;
 				break;
 			case "merge": {
-				const existingContent = await plugin.app.vault.adapter.read(noteFilePath).catch(() => "");
+				const existingContent = await plugin.app.vault.adapter.read(noteFilePath);
 				const [, existingBody] = extractFrontmatter(existingContent);
-				const { hasConflict } = mergeNoteText(existingBody, normalizedNote.textWithoutFrontmatter);
+				const { hasConflict } = mergeNoteText(
+					stripManagedImageEmbeds(existingBody),
+					normalizedNote.textWithoutFrontmatter
+				);
 				action = hasConflict ? "conflict-copy" : "merge";
 				label = hasConflict ? "Conflict copy" : "Merge";
 				selectable = true;
-				detail = hasConflict ? "Will create a conflict copy next to the existing note." : undefined;
+				detail = hasConflict ? "Will create a conflict copy next to the existing note unless another merge action is chosen." : undefined;
 				break;
 			}
 			case "skip":
@@ -836,7 +851,9 @@ export async function processAndSaveNotes(
 								await ensureFolderCached(folderPath);
 							},
 							(warning: SyncAttachmentWarning) => callbacks?.onAttachmentWarning?.(warning),
-							callbacks?.attempt
+							callbacks?.attempt,
+							callbacks?.mergeAction,
+							callbacks?.onMergeConflict
 						)
 					);
 					batchMetrics.processed += 1;
@@ -886,7 +903,8 @@ export async function processAndSaveNotes(
 
 					callbacks?.reportProgress?.();
 					if (entryId) {
-						callbacks?.onEntrySettled?.(entryId, true);
+						if (callbacks?.mergeAction) callbacks.onEntrySettled?.(entryId, true, SAVE_PLAN_ACTIONS[metrics.action]);
+						else callbacks?.onEntrySettled?.(entryId, true);
 					}
 				} catch (error: unknown) {
 					await appendPerfTrace(plugin, "note-save-failed", {
@@ -935,7 +953,9 @@ export async function processAndSaveNote(
 	ensureFolderForPath: (folderPath: string) => Promise<void> = async (folderPath: string) =>
 		await ensureFolder(plugin.app, folderPath),
 	onAttachmentWarning?: (warning: SyncAttachmentWarning) => void,
-	attempt?: SyncAttempt
+	attempt?: SyncAttempt,
+	mergeAction?: MergeAction,
+	onMergeConflict?: (notePath: string) => void
 ): Promise<NoteSaveMetrics> {
 	const metrics: NoteSaveMetrics = {
 		action: "created",
@@ -1032,48 +1052,42 @@ export async function processAndSaveNote(
 				typeof existingMarkdownFileContentRaw === "string" ? existingMarkdownFileContentRaw : "";
 			const [existingFrontmatter, existingTextWithoutFrontmatterRaw] = extractFrontmatter(existingMarkdownFileContent);
 			const existingTextWithoutFrontmatter = stripManagedImageEmbeds(existingTextWithoutFrontmatterRaw);
-
 			const mdFrontmatter = buildFrontmatterWithSyncDate(existingFrontmatter, lastSyncedDate, newFrontmatter);
 
 			if (duplicateNotesAction === "merge") {
-				const { mergedText: mergedText, hasConflict } = mergeNoteText(
-					existingTextWithoutFrontmatter,
-					newTextWithoutFrontmatter
-				);
-
-				const mergedMdContent = wrapMarkdown(mdFrontmatter, mergedText);
-
-				if (!hasConflict) {
-					metrics.action = "merged";
-					await ensureParentFolder(noteFilePath);
-					const writeStartedAt = getNowMs();
-					await plugin.app.vault.adapter.write(noteFilePath, mergedMdContent);
-					metrics.writeNoteDurationMs += getNowMs() - writeStartedAt;
-					if (existingKeepNoteIndex) {
-						updateExistingKeepNoteIndex(existingKeepNoteIndex, noteFilePath, normalizedNote);
-					}
-					await logNote(`${noteLink} - merged (no conflict)`);
-				} else {
-					metrics.action = "conflict";
-					// Write a conflict copy
-					noteFilePath = noteFilePath.replace(/\.md$/, "");
-					noteFilePath = `${noteFilePath}${CONFLICT_FILE_SUFFIX}${lastSyncedDate}.md`;
-
-					await ensureParentFolder(noteFilePath);
-					const writeStartedAt = getNowMs();
-					await plugin.app.vault.adapter.write(noteFilePath, mergedMdContent);
-					metrics.writeNoteDurationMs += getNowMs() - writeStartedAt;
-					if (existingKeepNoteIndex) {
-						updateExistingKeepNoteIndex(existingKeepNoteIndex, noteFilePath, normalizedNote);
-					}
-					const conflictLink = `[${noteTitle}](${normalizePathSafe(noteFilePath)})`;
-					await logNote(`${conflictLink} - conflict copy created`);
+				const decision = resolveMergeAction(existingTextWithoutFrontmatter, newTextWithoutFrontmatter, mergeAction);
+				if (decision.action === "skipped-conflict") {
+					metrics.action = "skipped-conflict";
+					onMergeConflict?.(normalizePathSafe(noteFilePath));
+					await logNote(`${noteLink} - conflict skipped; original and attachments left unchanged`);
+					// Do not stamp the original or process its attachments when skipping a conflict.
+					return metrics;
 				}
+				if (decision.action === "conflict-copy") {
+					metrics.action = "conflict";
+					onMergeConflict?.(normalizePathSafe(noteFilePath));
+					noteFilePath = `${noteFilePath.replace(/\.md$/, "")}${CONFLICT_FILE_SUFFIX}${lastSyncedDate}.md`;
+				} else {
+					metrics.action = decision.action === "overwrite" ? "overwritten" : "merged";
+				}
+				await ensureParentFolder(noteFilePath);
+				const writeStartedAt = getNowMs();
+				await plugin.app.vault.adapter.write(noteFilePath, wrapMarkdown(mdFrontmatter, decision.text));
+				metrics.writeNoteDurationMs += getNowMs() - writeStartedAt;
+				if (existingKeepNoteIndex) {
+					updateExistingKeepNoteIndex(existingKeepNoteIndex, noteFilePath, normalizedNote);
+				}
+				const resultLink = `[${noteTitle}](${normalizePathSafe(noteFilePath)})`;
+				await logNote(
+					decision.action === "conflict-copy"
+						? `${resultLink} - conflict copy created`
+						: decision.action === "overwrite"
+							? `${resultLink} - overwritten`
+							: `${resultLink} - merged (no conflict)`
+				);
 			} else {
 				metrics.action = "overwritten";
 				const mdContentWithSyncDate = wrapMarkdown(mdFrontmatter, newTextWithoutFrontmatter);
-
-				// overwrite path: write to current path
 				await ensureParentFolder(noteFilePath);
 				const writeStartedAt = getNowMs();
 				await plugin.app.vault.adapter.write(noteFilePath, mdContentWithSyncDate);

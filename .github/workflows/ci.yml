@@ -3,7 +3,7 @@ name: Plugin CI
 on:
   workflow_call:
   push:
-    branches: [main, develop]
+    branches: [main, develop, "c2c/**"]
     tags-ignore:
       - "*"
   pull_request:
@@ -22,6 +22,11 @@ jobs:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Record tested revision
+        run: git rev-parse HEAD
 
       - name: Use Node.js
         uses: actions/setup-node@v4
@@ -61,6 +66,11 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Record built revision
+        run: git rev-parse HEAD
 
       - name: Use Node.js
         uses: actions/setup-node@v4
