@@ -1246,21 +1246,14 @@ export class SyncProgressModal extends Modal {
 		if (!this.bodyEl) {
 			return;
 		}
+		if (this.footerEl) {
+			clearElement(this.footerEl);
+			this.footerEl.className = "keepsidian-sync-center-footer";
+		}
 		clearElement(this.bodyEl);
 		const actionsEl = createChild(this.bodyEl, "div");
 		actionsEl.classList.add("keepsidian-modal-actions");
-
-		const startButton = this.createActionButton(
-			actionsEl,
-			this.preparationPaused && !this.isGeneratingReview
-				? "Resume download"
-				: getSetupPrimaryButtonLabel(this.isGeneratingReview, this.planBuildProcessed, this.planBuildTotal),
-			async () => {
-				await this.beginReview();
-			}
-		);
-		startButton.classList.add("mod-cta", "keepsidian-modal-action--primary");
-		startButton.disabled = this.isGeneratingReview || this.isSyncing;
+		this.createSetupStartButton(actionsEl);
 
 		const openLogButton = this.createActionButton(actionsEl, "Open sync log", async () => {
 			await this.options.onOpenSyncLog();
@@ -1360,10 +1353,30 @@ export class SyncProgressModal extends Modal {
 			}
 		}
 
-		const closeButton = createChild(this.bodyEl, "button", { text: "Close" });
-		closeButton.type = "button";
+		if (!this.footerEl) {
+			return;
+		}
+		if (this.showSyncOptions) {
+			const footerStartButton = this.createSetupStartButton(this.footerEl);
+			footerStartButton.classList.add("keepsidian-modal-action--sync-footer-primary");
+		}
+		const closeButton = this.createActionButton(this.footerEl, "Close sync center", async () => {
+			this.close();
+		});
 		closeButton.classList.add("keepsidian-modal-close");
-		closeButton.addEventListener("click", () => this.close());
+	}
+
+	private createSetupStartButton(containerEl: HTMLElement): HTMLButtonElement {
+		const label =
+			this.preparationPaused && !this.isGeneratingReview
+				? "Resume download"
+				: getSetupPrimaryButtonLabel(this.isGeneratingReview, this.planBuildProcessed, this.planBuildTotal);
+		const button = this.createActionButton(containerEl, label, async () => {
+			await this.beginReview();
+		});
+		button.classList.add("mod-cta", "keepsidian-modal-action--primary");
+		button.disabled = this.isGeneratingReview || this.isSyncing;
+		return button;
 	}
 
 	private renderDownloadScopeSection(containerEl: HTMLElement) {
@@ -1538,6 +1551,7 @@ export class SyncProgressModal extends Modal {
 
 		if (this.footerEl) {
 			clearElement(this.footerEl);
+			this.footerEl.className = "";
 		}
 
 		if (surface === "result" && this.footerEl) {
@@ -1546,7 +1560,7 @@ export class SyncProgressModal extends Modal {
 				await this.options.onOpenSyncLog();
 			});
 			openLogButton.classList.add("keepsidian-modal-action--open-log");
-			const closeButton = this.createActionButton(this.footerEl, "Close", async () => {
+			const closeButton = this.createActionButton(this.footerEl, "Close sync center", async () => {
 				this.close();
 			});
 			closeButton.classList.add("mod-cta", "keepsidian-modal-action--primary");
