@@ -6,8 +6,10 @@ import { SyncCancellationError, isSyncCancellationError } from "@app/sync-cancel
 import { buildFrontmatterWithSyncDate, wrapMarkdown } from "./frontmatter";
 import { FRONTMATTER_GOOGLE_KEEP_URL_KEY } from "./constants";
 import type { SyncCallbacks } from "./sync";
-import { collectNotesToPush, roundDateToSeconds } from "./push/collectNotes";
+import { collectNotesToPush, roundDateToSeconds, assertPendingAttachmentsUnchanged } from "./push/collectNotes";
 import { getReviewedPushAction, prepareReviewedUploads, reviewPushNotes, type PushPlanOptions, type ReviewedPushNote } from "./push/merge-review";
+import { DEFAULT_MERGE_ACTION } from "./domain/merge-action";
+import { bodyBaseline, hasPendingUpload, localKeepKey, stripSyncState, withSyncState } from "./domain/sync-state";
 import { pushNotes as apiPushNotes, PushNotePayload, PushNoteResult } from "@integrations/server/keepApi";
 import type { SyncPlan, SyncPlanEntry } from "@types";
 import { safeSyncError } from "@app/sync-attempt";
@@ -30,6 +32,7 @@ function buildPushPlanEntry(note: ReviewedPushNote, index: number, allowPerNoteS
 	if (attachmentCount > 0) detailParts.push(attachmentCount === 1 ? "Includes 1 updated attachment." : `Includes ${attachmentCount} updated attachments.`);
 	if (missingAttachmentCount > 0) detailParts.push(missingAttachmentCount === 1 ? "1 referenced attachment is missing." : `${missingAttachmentCount} referenced attachments are missing.`);
 	const action = getReviewedPushAction(note);
+	if (hasPendingUpload(note.frontmatter)) detailParts.push("Contains a downloaded merge awaiting a confirmed upload.");
 	if (action === "conflict-copy") detailParts.push("Will save a local conflict copy and leave both originals unchanged unless another merge action is chosen.");
 	return {
 		id: note.planEntryId ?? `upload:${index}:${normalizePathSafe(note.fullPath)}`,
@@ -86,7 +89,13 @@ export async function pushGoogleKeepNotes(plugin: KeepSidianPlugin, callbacks?: 
 		}
 		if (notesToPush.length === 0) { new Notice("No Google Keep notes to push."); return 0; }
 		callbacks?.setTotalNotes?.(notesToPush.length);
-		if (callbacks?.mergeAction) notesToPush = await prepareReviewedUploads(plugin, notesToPush, callbacks.mergeAction, callbacks);
+		// A later scheduled/legacy upload must not bypass conflict review for a
+		// durable pending merge that originated in the manual Sync Center.
+		const mergeAction = callbacks?.mergeAction ?? (notesToPush.some((note) => hasPendingUpload(note.frontmatter)) ? DEFAULT_MERGE_ACTION : undefined);
+		if (mergeAction) {
+			if (notesToPush.some((note) => !note.mergeReview)) notesToPush = await reviewPushNotes(plugin, notesToPush);
+			notesToPush = await prepareReviewedUploads(plugin, notesToPush, mergeAction, callbacks);
+		}
 		const { email, token } = plugin.settings;
 		const supporterKey = plugin.settings.supporterKeyConfigured ? (plugin.settings.supporterKey ?? "") : undefined;
 		let successCount = 0;
@@ -96,8 +105,12 @@ export async function pushGoogleKeepNotes(plugin: KeepSidianPlugin, callbacks?: 
 			const batch = notesToPush.slice(index, index + PUSH_PAYLOAD_BATCH_SIZE);
 			for (const note of batch) {
 				if (note.mergeReview && (await plugin.app.vault.adapter.read(note.fullPath)) !== note.mergeReview.sourceContent) throw new Error("A local note changed during upload. Refresh the plan.");
+				await assertPendingAttachmentsUnchanged(plugin, note);
 			}
-			const payloadBatch: PushNotePayload[] = batch.map((note) => ({ path: note.relativePath, title: note.title, content: note.content, attachments: note.attachments.length > 0 ? note.attachments : undefined }));
+			const payloadBatch: PushNotePayload[] = batch.map((note) => {
+				const frontmatter = stripSyncState(note.frontmatter);
+				return { path: note.relativePath, title: note.title, content: frontmatter === note.frontmatter ? note.content : wrapMarkdown(frontmatter, note.body), attachments: note.attachments.length > 0 ? note.attachments : undefined };
+			});
 			const response = await apiPushNotes(email, token, payloadBatch, supporterKey);
 			const resultMap = mapResultsByPath(response?.results), batchKey = "push:notes", batchOptions = { batchKey, batchSize: NOTE_LOG_BATCH_SIZE };
 			for (const [batchIndex, note] of batch.entries()) {
@@ -111,7 +124,6 @@ export async function pushGoogleKeepNotes(plugin: KeepSidianPlugin, callbacks?: 
 						firstFailure ??= new Error("The server did not confirm an upload");
 						await flushLogSync(plugin, { batchKey }); await logSync(plugin, `${noteLabel} - push failed: server rejected upload`); continue;
 					}
-					if (note.mergeReview && (await plugin.app.vault.adapter.read(note.fullPath)) !== note.mergeReview.sourceContent) throw new Error("A local note changed while its upload was in flight. Local edits were preserved.");
 					if (result?.keep_url) {
 						const normalizedKeepUrl = result.keep_url.trim();
 						if (normalizedKeepUrl) {
@@ -123,7 +135,15 @@ export async function pushGoogleKeepNotes(plugin: KeepSidianPlugin, callbacks?: 
 							}
 						}
 					}
-					await plugin.app.vault.adapter.write(note.fullPath, wrapMarkdown(buildFrontmatterWithSyncDate(note.frontmatter, pushTimestamp), note.body));
+					// Hash the acknowledged body, not local completion time. If the
+					// server transforms it, the next remote read conservatively differs.
+					const baseline = result?.success === true ? await bodyBaseline(localKeepKey(note.frontmatter), note.body) : undefined;
+					const frontmatter = withSyncState(buildFrontmatterWithSyncDate(note.frontmatter, pushTimestamp), false, baseline);
+					await assertPendingAttachmentsUnchanged(plugin, note);
+					if (note.mergeReview && (await plugin.app.vault.adapter.read(note.fullPath)) !== note.mergeReview.sourceContent) throw new Error("A local note changed while its upload was in flight. Local edits were preserved.");
+					// Body, baseline and pending state change together. A failed local
+					// write leaves the original pending marker available for retry.
+					await plugin.app.vault.adapter.write(note.fullPath, wrapMarkdown(frontmatter, note.body));
 					const attachmentSuffix = note.updatedAttachmentNames.length > 0 ? ` (updated ${note.updatedAttachmentNames.length === 1 ? "1 attachment" : `${note.updatedAttachmentNames.length} attachments`})` : "";
 					await logSync(plugin, `${noteLabel} - pushed${attachmentSuffix}`, batchOptions);
 					for (const missing of note.missingAttachments) await logSync(plugin, `${noteLabel} - missing attachment${callbacks?.attempt ? "" : ` ${missing}`}`, batchOptions);
@@ -134,16 +154,16 @@ export async function pushGoogleKeepNotes(plugin: KeepSidianPlugin, callbacks?: 
 					await flushLogSync(plugin, { batchKey }); await logSync(plugin, `${noteLabel} - error: ${JSON.stringify(safeSyncError(error))}`);
 				} finally {
 					const entryId = note.planEntryId ?? `upload:${index + batchIndex}:${normalizePathSafe(note.fullPath)}`;
-					if (callbacks?.mergeAction) callbacks.onEntrySettled?.(entryId, pushSucceeded, note.outcome ?? "upload");
+					if (mergeAction) callbacks?.onEntrySettled?.(entryId, pushSucceeded, note.outcome ?? "upload");
 					else callbacks?.onEntrySettled?.(entryId, pushSucceeded);
 					callbacks?.reportProgress?.();
 				}
 			}
 			await flushLogSync(plugin, { batchKey: "push:notes" });
 		}
-		if ((callbacks?.attempt || callbacks?.mergeAction) && firstFailure !== undefined) throw firstFailure;
+		if ((callbacks?.attempt || mergeAction) && firstFailure !== undefined) throw firstFailure;
 		throwIfSyncCancelled(plugin);
-		new Notice(callbacks?.mergeAction ? "Upload plan completed. See the results for saved or skipped conflicts." : "Pushed Google Keep notes.");
+		new Notice(mergeAction ? "Upload plan completed. See the results for saved or skipped conflicts." : "Pushed Google Keep notes.");
 		return successCount;
 	} catch (error: unknown) {
 		if (isSyncCancellationError(error)) throw error;

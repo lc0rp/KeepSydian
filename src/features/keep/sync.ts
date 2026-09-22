@@ -2,8 +2,7 @@ import { Notice } from "obsidian";
 import type KeepSidianPlugin from "@app/main";
 import { normalizeNote, PreNormalizedNote, extractFrontmatter } from "./domain/note";
 import { handleDuplicateNotes } from "./domain/compare";
-import { mergeNoteText } from "./domain/merge";
-import { resolveMergeAction } from "./domain/merge-action";
+import { hasPendingUpload, remoteBaseline, resolveDownloadMerge, withSyncState } from "./domain/sync-state";
 // Import via legacy google path so tests can spy on this module
 import { processAttachments, type AttachmentFailure } from "../keep/io/attachments";
 import type { NoteImportOptions } from "@ui/modals/NoteImportOptionsModal";
@@ -465,10 +464,11 @@ function buildImportPlanEntry(
 				break;
 			case "merge": {
 				const existingContent = await plugin.app.vault.adapter.read(noteFilePath);
-				const [, existingBody] = extractFrontmatter(existingContent);
-				const { hasConflict } = mergeNoteText(
+				const [existingFrontmatter, existingBody] = extractFrontmatter(existingContent);
+				const { hasConflict } = await resolveDownloadMerge(
+					existingFrontmatter,
 					stripManagedImageEmbeds(existingBody),
-					normalizedNote.textWithoutFrontmatter
+					note
 				);
 				action = hasConflict ? "conflict-copy" : "merge";
 				label = hasConflict ? "Conflict copy" : "Merge";
@@ -994,6 +994,7 @@ export async function processAndSaveNote(
 	metrics.resolveExistingPathDurationMs = getNowMs() - resolveExistingPathStartedAt;
 	const noteLink = `[${noteTitle}](${normalizePathSafe(noteFilePath)})`;
 	const noteFolder = dirnameSafe(noteFilePath);
+	let retainedImageNames: string[] = [];
 
 	const lastSyncedDate = new Date().toISOString();
 	const ensureParentFolder = async (filePath: string): Promise<void> => {
@@ -1028,13 +1029,14 @@ export async function processAndSaveNote(
 		metrics.duplicateDecisionDurationMs = getNowMs() - duplicateDecisionStartedAt;
 		const newFrontmatter = normalizedNote.frontmatter;
 		const newTextWithoutFrontmatter = normalizedNote.textWithoutFrontmatter;
+		const baseline = duplicateNotesAction === "skip" ? undefined : await remoteBaseline(note);
 
 		if (duplicateNotesAction === "skip") {
 			metrics.action = "skipped";
 			await logNote(`${noteLink} - identical (skipped)`);
 		} else if (duplicateNotesAction === "create") {
 			metrics.action = "created";
-			const mdFrontmatter = buildFrontmatterWithSyncDate(newFrontmatter, lastSyncedDate);
+			const mdFrontmatter = withSyncState(buildFrontmatterWithSyncDate(newFrontmatter, lastSyncedDate), false, baseline);
 			const newMdContent = wrapMarkdown(mdFrontmatter, newTextWithoutFrontmatter);
 			await ensureParentFolder(noteFilePath);
 			const writeStartedAt = getNowMs();
@@ -1052,10 +1054,14 @@ export async function processAndSaveNote(
 				typeof existingMarkdownFileContentRaw === "string" ? existingMarkdownFileContentRaw : "";
 			const [existingFrontmatter, existingTextWithoutFrontmatterRaw] = extractFrontmatter(existingMarkdownFileContent);
 			const existingTextWithoutFrontmatter = stripManagedImageEmbeds(existingTextWithoutFrontmatterRaw);
-			const mdFrontmatter = buildFrontmatterWithSyncDate(existingFrontmatter, lastSyncedDate, newFrontmatter);
+			let mdFrontmatter = withSyncState(
+				buildFrontmatterWithSyncDate(existingFrontmatter, lastSyncedDate, newFrontmatter),
+				hasPendingUpload(existingFrontmatter),
+				baseline
+			);
 
 			if (duplicateNotesAction === "merge") {
-				const decision = resolveMergeAction(existingTextWithoutFrontmatter, newTextWithoutFrontmatter, mergeAction);
+				const decision = await resolveDownloadMerge(existingFrontmatter, existingTextWithoutFrontmatter, note, mergeAction);
 				if (decision.action === "skipped-conflict") {
 					metrics.action = "skipped-conflict";
 					onMergeConflict?.(normalizePathSafe(noteFilePath));
@@ -1067,12 +1073,20 @@ export async function processAndSaveNote(
 					metrics.action = "conflict";
 					onMergeConflict?.(normalizePathSafe(noteFilePath));
 					noteFilePath = `${noteFilePath.replace(/\.md$/, "")}${CONFLICT_FILE_SUFFIX}${lastSyncedDate}.md`;
+					mdFrontmatter = withSyncState(mdFrontmatter, false, baseline);
 				} else {
 					metrics.action = decision.action === "overwrite" ? "overwritten" : "merged";
+					// Persist pending state in the SAME write as the merged body. It
+					// survives losing an in-memory plan, deselection and app restart.
+					mdFrontmatter = withSyncState(mdFrontmatter, decision.action === "merge" || hasPendingUpload(existingFrontmatter), baseline);
 				}
+				if (decision.action === "merge" || decision.action === "conflict-copy") {
+					retainedImageNames = Array.from(existingTextWithoutFrontmatterRaw.matchAll(/!\[\[media\/([^\]\n|]+)(?:\|[^\]]+)?\]\]/g), (match) => match[1]);
+				}
+				const mergedBody = retainedImageNames.length ? withManagedImageEmbeds(decision.text, retainedImageNames) : decision.text;
 				await ensureParentFolder(noteFilePath);
 				const writeStartedAt = getNowMs();
-				await plugin.app.vault.adapter.write(noteFilePath, wrapMarkdown(mdFrontmatter, decision.text));
+				await plugin.app.vault.adapter.write(noteFilePath, wrapMarkdown(mdFrontmatter, mergedBody));
 				metrics.writeNoteDurationMs += getNowMs() - writeStartedAt;
 				if (existingKeepNoteIndex) {
 					updateExistingKeepNoteIndex(existingKeepNoteIndex, noteFilePath, normalizedNote);
@@ -1139,7 +1153,7 @@ export async function processAndSaveNote(
 			if (plugin.settings.embedImportedImages && fileNames.length > 0) {
 				const existingNoteContent = await plugin.app.vault.adapter.read(noteFilePath);
 				const [existingFrontmatter, existingBody] = extractFrontmatter(existingNoteContent);
-				const bodyWithEmbeds = withManagedImageEmbeds(existingBody, fileNames);
+				const bodyWithEmbeds = withManagedImageEmbeds(existingBody, [...retainedImageNames, ...fileNames]);
 				const noteContentWithEmbeds = wrapMarkdown(existingFrontmatter, bodyWithEmbeds);
 				if (noteContentWithEmbeds !== existingNoteContent) {
 					const writeStartedAt = getNowMs();

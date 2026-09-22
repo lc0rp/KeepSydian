@@ -8,6 +8,7 @@ import {
 import { buildNotePath } from "@services/index";
 import { findExistingKeepNotePath, type ExistingKeepNoteIndex } from "./noteLookup";
 import { stripManagedImageEmbeds } from "./attachmentEmbeds";
+import { hasPendingUpload } from "./sync-state";
 
 interface UpdatedFileInfo {
 	textWithoutFrontmatter: string;
@@ -22,6 +23,7 @@ interface ExistingFileInfo {
 	fsCreatedDate: Date | null;
 	fsUpdatedDate: Date | null;
 	lastSyncedDate: Date | null;
+	pendingUpload?: boolean;
 }
 
 function getUpdatedFileInfo(incomingNote: NormalizedNote): UpdatedFileInfo {
@@ -34,7 +36,7 @@ function getUpdatedFileInfo(incomingNote: NormalizedNote): UpdatedFileInfo {
 
 async function getExistingFileInfo(noteFilePath: string, app: App): Promise<ExistingFileInfo> {
 	const existingContent = await app.vault.adapter.read(noteFilePath);
-	const [, existingBody, existingFrontMatterDict] = extractFrontmatter(existingContent);
+	const [existingFrontmatter, existingBody, existingFrontMatterDict] = extractFrontmatter(existingContent);
 
 	const existingCreatedDate = normalizeDate(
 		getFrontmatterStringValue(existingFrontMatterDict, FRONTMATTER_GOOGLE_KEEP_CREATED_DATE_KEY)
@@ -59,6 +61,7 @@ async function getExistingFileInfo(noteFilePath: string, app: App): Promise<Exis
 		fsCreatedDate: fsCreatedDate,
 		fsUpdatedDate: fsUpdatedDate,
 		lastSyncedDate: existingLastSyncedDate,
+		pendingUpload: hasPendingUpload(existingFrontmatter),
 	};
 }
 
@@ -104,6 +107,10 @@ function checkForDuplicateData(
 	if (incomingFile.textWithoutFrontmatter === existingFile.textWithoutFrontmatter) {
 		return "skip";
 	}
+
+	// A downloaded merge is still local work until Keep acknowledges its upload.
+	// Timestamp equality (including same-second writes) cannot retire that work.
+	if (existingFile.pendingUpload) return "merge";
 
 	// Step 2: If lastSyncedDate exists, use it to determine if both files have been modified
 	if (lastSyncedDate && existingUpdatedDate) {

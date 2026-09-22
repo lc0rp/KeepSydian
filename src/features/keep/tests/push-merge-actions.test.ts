@@ -152,13 +152,13 @@ describe("reviewed upload merge actions", () => {
 		expect(settled).toHaveBeenCalledWith("upload:9:Keep/note.md", true, "overwrite");
 	});
 
-	it("retains local-only deletions when Keep has not changed since the baseline", async () => {
+	it("treats a local timestamp without a confirmed remote baseline conservatively", async () => {
 		const f = fixture("common", "common\nold line");
 		f.remote.updated = "2023-12-31T00:00:00.000Z";
 		const built = await f.build();
-		expect(built.plan.entries[0].action).toBe("upload");
+		expect(built.plan.entries[0].action).toBe("merge");
 		await pushGoogleKeepNotes(f.plugin, { mergeAction: "merge-save-conflicts" }, built.notesToPush);
 		const payload = (pushNotes as jest.Mock).mock.calls[0][2] as PushNotePayload[];
-		expect(payload[0].content).not.toContain("old line");
+		expect(payload[0].content).toContain("old line");
 	});
 });

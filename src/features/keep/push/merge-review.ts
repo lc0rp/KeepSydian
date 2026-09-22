@@ -6,11 +6,12 @@ import { extractFrontmatter, getFrontmatterStringValue, normalizeNote } from "..
 import type { PreNormalizedNote } from "../domain/note";
 import { stripManagedImageEmbeds, withManagedImageEmbeds } from "../domain/attachmentEmbeds";
 import { resolveMergeAction } from "../domain/merge-action";
+import { isRemoteBodyUnchanged, keepKey } from "../domain/sync-state";
 import { CONFLICT_FILE_SUFFIX, FRONTMATTER_GOOGLE_KEEP_URL_KEY } from "../constants";
 import { wrapMarkdown } from "../frontmatter";
 import { ensureParentFolderForFile, normalizePathSafe } from "@services/paths";
 import { retryDownload } from "../download-retry";
-import type { NoteForPush } from "./collectNotes";
+import { assertPendingAttachmentsUnchanged, type NoteForPush } from "./collectNotes";
 import type { SyncCallbacks } from "../sync";
 
 export interface ReviewedPushNote extends NoteForPush {
@@ -32,16 +33,6 @@ export interface PushPlanOptions {
 }
 
 function checkCancelled(plugin: KeepSidianPlugin): void { plugin.throwIfSyncCancelled?.(); }
-
-/** Account indices in Keep URLs are not note identity. Never match by title. */
-function keepKey(value: string | undefined): string | undefined {
-	if (!value) return undefined;
-	try {
-		const url = new URL(value);
-		if (url.hostname !== "keep.google.com" || url.protocol !== "https:") return undefined;
-		return /^#NOTE\/([^/?#]+)$/.exec(url.hash)?.[1];
-	} catch { return undefined; }
-}
 
 function localKey(note: NoteForPush): string | undefined {
 	const [, , frontmatter] = extractFrontmatter(note.content);
@@ -96,14 +87,14 @@ async function fetchRemoteIndex(plugin: KeepSidianPlugin): Promise<Map<string, P
 
 export async function reviewPushNotes(plugin: KeepSidianPlugin, notes: ReviewedPushNote[]): Promise<ReviewedPushNote[]> {
 	const remoteIndex = notes.some((note) => localKey(note)) ? await fetchRemoteIndex(plugin) : new Map<string, PreNormalizedNote>();
-	return notes.map((note) => {
+	return Promise.all(notes.map(async (note) => {
 		const key = localKey(note), remote = key ? remoteIndex.get(key) : undefined;
 		if (key && !remote) throw new Error("A linked Keep note is unavailable. Refresh the download before uploading it.");
 		const remoteBody = remote ? stripManagedImageEmbeds(normalizeNote(remote).textWithoutFrontmatter) : "";
 		const localBody = stripManagedImageEmbeds(note.body);
-		const remoteUpdated = remote?.updated ? new Date(remote.updated).getTime() : NaN;
-		// Local-only edits remain uploads, including intentional deletions. Unknown baselines are conservative.
-		const remoteChanged = !note.lastSyncedDate || !Number.isFinite(remoteUpdated) || remoteUpdated > note.lastSyncedDate.getTime();
+		// Local write time is never a remote baseline. Unknown baselines merge
+		// conservatively; a confirmed body hash preserves local-only deletions.
+		const remoteChanged = remote ? !(await isRemoteBodyUnchanged(note.frontmatter, remote)) : false;
 		return {
 			...note,
 			mergeReview: {
@@ -112,7 +103,7 @@ export async function reviewPushNotes(plugin: KeepSidianPlugin, notes: ReviewedP
 				needsMerge: Boolean(remote && remoteBody !== localBody && remoteChanged),
 			},
 		};
-	});
+	}));
 }
 
 export function getReviewedPushAction(note: ReviewedPushNote): SyncPlanAction {
@@ -149,6 +140,7 @@ export async function prepareReviewedUploads(
 		checkCancelled(plugin);
 		const review = note.mergeReview;
 		if (!review || (await plugin.app.vault.adapter.read(note.fullPath)) !== review.sourceContent) throw new Error("A local note changed after review. Refresh the upload plan.");
+		await assertPendingAttachmentsUnchanged(plugin, note);
 		if (review.remoteKey) {
 			const current = remoteIndex.get(review.remoteKey);
 			if (!current || signature(current) !== review.remoteSignature) throw new Error("A Keep note changed after review. Refresh the upload plan.");

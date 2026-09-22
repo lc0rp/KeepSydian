@@ -5,6 +5,7 @@ import { dirnameSafe, mediaFolderPath, normalizePathSafe } from "@services/paths
 import { isKeepSidianFrontmatter, listMarkdownFilesRecursively } from "../domain/noteLookup";
 import { CONFLICT_FILE_SUFFIX, FRONTMATTER_KEEP_SIDIAN_LAST_SYNCED_DATE_KEY } from "../constants";
 import { ensurePascalCaseFrontmatter } from "../migrations/fixFrontmatterCasing";
+import { hasPendingUpload } from "../domain/sync-state";
 import type { PushAttachmentPayload } from "@integrations/server/keepApi";
 
 export interface VaultAdapter {
@@ -148,6 +149,15 @@ async function collectAttachments(
 	return { payloads, updatedAttachments, missingAttachments };
 }
 
+/** Pending media must match the reviewed bytes, even when mtime is unchanged. */
+export async function assertPendingAttachmentsUnchanged(plugin: KeepSidianPlugin, note: NoteForPush): Promise<void> {
+	if (!hasPendingUpload(note.frontmatter)) return;
+	const current = await collectAttachments(plugin.app.vault.adapter, note.content, note.fullPath, dirnameSafe(note.fullPath), null);
+	if (current.missingAttachments.length > 0 || JSON.stringify(current.payloads) !== JSON.stringify(note.attachments)) {
+		throw new Error("Pending attachments are missing or changed after review. Refresh the upload plan.");
+	}
+}
+
 function deriveNoteTitle(relativePath: string): string {
 	const parts = relativePath.split("/");
 	const fileName = parts[parts.length - 1] || relativePath;
@@ -171,12 +181,15 @@ export async function collectNotesToPush(plugin: KeepSidianPlugin, forcePaths: r
 			const content = await adapter.read(filePath);
 			const [frontmatter, body, frontmatterDict] = extractFrontmatter(content);
 			if (!isKeepSidianFrontmatter(frontmatterDict)) continue;
+			const pendingUpload = hasPendingUpload(frontmatter);
 			const lastSyncedDate = parseDate(getFrontmatterStringValue(frontmatterDict, FRONTMATTER_KEEP_SIDIAN_LAST_SYNCED_DATE_KEY));
 			const stat = typeof adapter.stat === "function" ? await adapter.stat(filePath) : null;
 			const modifiedDate = stat?.mtime ? roundDateToSeconds(new Date(stat.mtime)) : null;
 			const roundedLastSyncedDate = lastSyncedDate !== null ? roundDateToSeconds(lastSyncedDate) : null;
-			const modifiedSinceLastSync = !roundedLastSyncedDate || (modifiedDate !== null && roundedLastSyncedDate !== null && modifiedDate.getTime() > roundedLastSyncedDate.getTime());
-			const { payloads, updatedAttachments, missingAttachments } = await collectAttachments(adapter, content, filePath, dirnameSafe(filePath), lastSyncedDate);
+			const modifiedSinceLastSync = pendingUpload || !roundedLastSyncedDate || (modifiedDate !== null && roundedLastSyncedDate !== null && modifiedDate.getTime() > roundedLastSyncedDate.getTime());
+			// A download timestamp has never acknowledged local media. Retain all
+			// referenced bytes while this note has a durable pending upload.
+			const { payloads, updatedAttachments, missingAttachments } = await collectAttachments(adapter, content, filePath, dirnameSafe(filePath), pendingUpload ? null : lastSyncedDate);
 			const shouldPush = modifiedSinceLastSync || payloads.length > 0 || !lastSyncedDate || forced.has(normalizePathSafe(filePath));
 			const relativePath = normalizeRelativePath(filePath, saveLocation);
 			const title = getFrontmatterStringValue(frontmatterDict, "Title") || deriveNoteTitle(relativePath);
