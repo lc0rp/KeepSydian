@@ -1,12 +1,9 @@
 import type { KeepArchivedStatus } from "../../../types/subscription";
-import {
-	FRONTMATTER_GOOGLE_KEEP_ARCHIVED_KEY,
-	FRONTMATTER_GOOGLE_KEEP_URL_KEY,
-} from "../constants";
+import { FRONTMATTER_GOOGLE_KEEP_ARCHIVED_KEY, FRONTMATTER_GOOGLE_KEEP_URL_KEY } from "../constants";
 import { extractFrontmatter, getFrontmatterStringValue, normalizeNote, type PreNormalizedNote } from "./note";
 
 // Only top-level properties are matched; similarly named fields in nested user metadata are left alone.
-const ARCHIVE_PROPERTY = /^(?:GoogleKeepArchived|googleKeepArchived|google-keep-archived):[^\r\n]*/gm;
+const ARCHIVE_PROPERTY = /^(["']?)(?:GoogleKeepArchived|googleKeepArchived|google-keep-archived)\1[\t ]*:[^\r\n]*/gm;
 
 function isRemoteArchived(note: PreNormalizedNote): boolean {
 	if (typeof note.archived === "boolean") return note.archived;
@@ -24,9 +21,12 @@ export function isArchivedDownload(note: PreNormalizedNote, archivedStatus?: Kee
 
 /** Ensure the API's archive flag is honored even when it is absent from the rendered Markdown. */
 export function getDownloadFrontmatter(note: PreNormalizedNote, archivedStatus?: KeepArchivedStatus): string {
-	const frontmatter = normalizeNote(note).frontmatter;
-	if (!isRemoteArchived(note)) return frontmatter;
-	const withoutArchive = frontmatter.replace(ARCHIVE_PROPERTY, "").trim();
+	const normalized = normalizeNote(note);
+	const renderedArchived =
+		getFrontmatterStringValue(normalized.frontmatterDict, FRONTMATTER_GOOGLE_KEEP_ARCHIVED_KEY) === "true";
+	if (!isRemoteArchived(note) && !renderedArchived) return normalized.frontmatter;
+	const withoutArchive = normalized.frontmatter.replace(ARCHIVE_PROPERTY, "").trim();
+	// An explicit false from the API also takes precedence over stale rendered true metadata.
 	if (!isArchivedDownload(note, archivedStatus)) return withoutArchive;
 	return [withoutArchive, `${FRONTMATTER_GOOGLE_KEEP_ARCHIVED_KEY}: true`].filter(Boolean).join("\n");
 }
