@@ -18,6 +18,7 @@ import { formatModalSummary } from "@app/sync-status";
 import { formatAttemptSummary } from "@app/sync-attempt";
 import type { SyncAttempt } from "@app/sync-attempt";
 import type { LastSyncAttempt } from "../../types/sync-attempt";
+import { parseCustomScopeRange, renderCustomScopeInputs } from "./sync-date-range";
 
 interface CreateElOptions {
 	text?: string;
@@ -158,9 +159,6 @@ function formatScopeTimestamp(isoString: string): string {
 	}
 }
 
-const CUSTOM_SCOPE_INPUT_FORMAT = "YYYY-MM-DD HH:MM";
-const CUSTOM_SCOPE_INPUT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}):(\d{2}))$/;
-
 function toCustomScopeInputValue(isoString: string): string {
 	const parsed = new Date(isoString);
 	if (Number.isNaN(parsed.getTime())) {
@@ -169,50 +167,6 @@ function toCustomScopeInputValue(isoString: string): string {
 
 	const offsetMs = parsed.getTimezoneOffset() * 60_000;
 	return new Date(parsed.getTime() - offsetMs).toISOString().slice(0, 16).replace("T", " ");
-}
-
-function parseCustomScopeInput(value: string): { iso?: string; error?: string } {
-	const trimmedValue = value.trim();
-	if (!trimmedValue) {
-		return {
-			error: "Choose a custom date.",
-		};
-	}
-
-	const match = trimmedValue.match(CUSTOM_SCOPE_INPUT_PATTERN);
-	if (!match) {
-		return {
-			error: "Choose a valid custom date.",
-		};
-	}
-
-	const [, yearString, monthString, dayString, hourString, minuteString] = match;
-	const year = Number(yearString);
-	const month = Number(monthString);
-	const day = Number(dayString);
-	const hour = Number(hourString);
-	const minute = Number(minuteString);
-	const parsed = new Date(year, month - 1, day, hour, minute, 0, 0);
-	if (
-		Number.isNaN(parsed.getTime()) ||
-		parsed.getFullYear() !== year ||
-		parsed.getMonth() !== month - 1 ||
-		parsed.getDate() !== day ||
-		parsed.getHours() !== hour ||
-		parsed.getMinutes() !== minute
-	) {
-		return {
-			error: "Choose a valid custom date.",
-		};
-	}
-
-	if (parsed.getTime() > Date.now()) {
-		return {
-			error: "Custom date must be in the past.",
-		};
-	}
-
-	return { iso: parsed.toISOString() };
 }
 
 function clonePlan(plan: SyncPlan): SyncPlan {
@@ -372,6 +326,7 @@ export class SyncProgressModal extends Modal {
 	private selectedMode: SyncMode = "import";
 	private downloadScopeKind: DownloadScopeKind = "last-sync";
 	private customSinceInput = "";
+	private customUntilInput = "";
 	private showSyncOptions = false;
 	private isSyncing = false;
 	private isCanceling = false;
@@ -642,14 +597,12 @@ export class SyncProgressModal extends Modal {
 		}
 
 		if (this.downloadScopeKind === "custom-since") {
-			const parsed = parseCustomScopeInput(this.customSinceInput);
-			if (!parsed.iso) {
-				throw new Error(parsed.error ?? "Choose a custom date.");
+			const parsed = parseCustomScopeRange(this.customSinceInput, this.customUntilInput);
+			const error = parsed.startError ?? parsed.endError;
+			if (error) {
+				throw new Error(error);
 			}
-			return {
-				kind: "custom-since",
-				since: parsed.iso,
-			};
+			return parsed.scope;
 		}
 
 		return { kind: "last-sync" };
@@ -659,7 +612,8 @@ export class SyncProgressModal extends Modal {
 		if (this.downloadScopeKind !== "custom-since") {
 			return null;
 		}
-		return parseCustomScopeInput(this.customSinceInput).error ?? null;
+		const parsed = parseCustomScopeRange(this.customSinceInput, this.customUntilInput);
+		return parsed.startError ?? parsed.endError ?? null;
 	}
 
 	async beginReview(mode = this.selectedMode) {
@@ -1383,57 +1337,45 @@ export class SyncProgressModal extends Modal {
 		const sectionEl = createChild(containerEl, "div");
 		sectionEl.classList.add("keepsidian-sync-center-mode-section", "keepsidian-sync-center-scope-section");
 
-		const heading = createChild(sectionEl, "div", { text: "Start date" });
+		const heading = createChild(sectionEl, "div", { text: "Start & end date" });
 		heading.classList.add("keepsidian-sync-center-mode-label");
+		heading.title = "Choose the start and end dates for notes to download. A blank end uses the time sync starts.";
 
 		const optionsEl = createChild(sectionEl, "div");
 		optionsEl.classList.add("keepsidian-sync-center-modes");
 		optionsEl.setAttribute("role", "radiogroup");
-		optionsEl.setAttribute("aria-label", "Start date");
+		optionsEl.setAttribute("aria-label", "Start & end date");
 
 		const lastSuccessfulDownloadDate = this.getLastSuccessfulDownloadDate();
 		const lastSyncDescription = lastSuccessfulDownloadDate
 			? `Last sync: ${formatScopeTimestamp(lastSuccessfulDownloadDate)}.`
 			: "None yet.";
 
-		this.renderDownloadScopeOption(optionsEl, "Last successful sync", "last-sync", lastSyncDescription);
+		this.renderDownloadScopeOption(optionsEl, "Last sync → Now", "last-sync", lastSyncDescription);
 		this.renderDownloadScopeOption(optionsEl, "All dates", "all", "");
 		this.renderDownloadScopeOption(optionsEl, "Custom", "custom-since", "");
 
 		if (this.downloadScopeKind === "custom-since") {
-			const inputWrap = createChild(sectionEl, "label");
-			inputWrap.classList.add("keepsidian-sync-center-scope-input-wrap");
-
-			const input = createChild(inputWrap, "input");
-			input.type = "text";
-			input.value = this.customSinceInput;
-			input.placeholder = CUSTOM_SCOPE_INPUT_FORMAT;
-			input.autocomplete = "off";
-			input.setAttribute("aria-label", `Custom start date (${CUSTOM_SCOPE_INPUT_FORMAT})`);
-			input.setAttribute("data-keepsidian-role", "custom-since-input");
-			input.classList.add("keepsidian-sync-center-scope-input");
-
-			const helper = createChild(sectionEl, "div");
-			helper.classList.add("keepsidian-sync-center-scope-helper");
-			const syncCustomScopeHelper = () => {
-				const error = parseCustomScopeInput(input.value).error ?? null;
-				helper.textContent =
-					error ?? `Use ${CUSTOM_SCOPE_INPUT_FORMAT}. Notes changed after this date will be included.`;
-				helper.classList.toggle("is-warning", Boolean(error));
-			};
-			syncCustomScopeHelper();
-
-			input.addEventListener("input", () => {
-				this.customSinceInput = input.value;
-				this.modalAlert = null;
-				syncCustomScopeHelper();
-			});
-			input.addEventListener("change", () => {
-				this.customSinceInput = input.value;
-				this.modalAlert = null;
-				syncCustomScopeHelper();
-				void this.refreshUI();
-			});
+			renderCustomScopeInputs(
+				sectionEl,
+				{
+					since: this.customSinceInput,
+					until: this.customUntilInput,
+					disabled: this.isGeneratingReview || this.isSyncing,
+				},
+				({ since, until }) => {
+					if (since === this.customSinceInput && until === this.customUntilInput) return;
+					this.customSinceInput = since;
+					this.customUntilInput = until;
+					this.preparationPaused = false;
+					this.modalAlert = null;
+					if (this.alertHostEl && !this.dismissPrompt) clearElement(this.alertHostEl);
+					// Updating the helpers in place preserves focus when tabbing to the end input.
+					this.contentEl.querySelectorAll<HTMLButtonElement>(".keepsidian-modal-action--primary").forEach((button) => {
+						if (!button.disabled) button.textContent = "Start sync";
+					});
+				}
+			);
 		}
 	}
 
@@ -1450,6 +1392,13 @@ export class SyncProgressModal extends Modal {
 		button.classList.toggle("is-selected", this.downloadScopeKind === kind);
 		button.setAttribute("role", "radio");
 		button.setAttribute("aria-checked", this.downloadScopeKind === kind ? "true" : "false");
+		button.disabled = this.isGeneratingReview || this.isSyncing;
+		button.title =
+			kind === "custom-since"
+				? "Choose custom start and end dates. Leave the end blank to use the time sync starts."
+				: kind === "all"
+					? "Include notes from all start dates, changed before this sync starts."
+					: "Include notes changed after the last successful sync and before this sync starts.";
 
 		const indicator = createChild(button, "span");
 		indicator.classList.add("keepsidian-sync-center-mode-indicator");

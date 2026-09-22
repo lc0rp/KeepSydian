@@ -573,9 +573,9 @@ describe("KeepSidian", function () {
 		await customizeSyncButton.waitForExist({ timeout: 20000 });
 		await customizeSyncButton.click();
 
-		const downloadScopeHeading = browser.$('//*[normalize-space(.)="Start date"]');
+		const downloadScopeHeading = browser.$('//*[normalize-space(.)="Start & end date"]');
 		await downloadScopeHeading.waitForExist({ timeout: 20000 });
-		expect(await browser.$(buttonByText("Last successful sync")).isExisting()).toBe(true);
+		expect(await browser.$(buttonByText("Last sync → Now")).isExisting()).toBe(true);
 		expect(await browser.$(buttonByText("All dates")).isExisting()).toBe(true);
 		expect(await browser.$(exactButtonByText("Custom")).isExisting()).toBe(true);
 
@@ -584,6 +584,19 @@ describe("KeepSidian", function () {
 		await customSinceInput.waitForExist({ timeout: 20000 });
 		await customSinceInput.setValue("2025-04-12 09:17");
 		expect(await customSinceInput.getValue()).toBe("2025-04-12 09:17");
+		const customUntilInput = browser.$('//input[@data-keepsidian-role="custom-until-input"]');
+		await customUntilInput.waitForDisplayed({ timeout: 20000 });
+		expect(await customUntilInput.getValue()).toBe("");
+		expect(await customUntilInput.getAttribute("placeholder")).toBe("Now (at sync start)");
+		await customUntilInput.click();
+		expect(await browser.execute(() => document.activeElement?.getAttribute("data-keepsidian-role"))).toBe(
+			"custom-until-input"
+		);
+		await customUntilInput.setValue("2025-04-13 10:30");
+		expect(await customUntilInput.getValue()).toBe("2025-04-13 10:30");
+		expect(await customUntilInput.getAttribute("aria-invalid")).toBe("false");
+		mkdirSync(resolve("screenshots/sync-end-date-20260922"), { recursive: true });
+		await browser.saveScreenshot("screenshots/sync-end-date-20260922/custom-range.png");
 		await browser.$(exactButtonByText("All dates")).click();
 
 		const startSyncButton = browser.$(buttonByText("Start sync"));
@@ -629,6 +642,9 @@ describe("KeepSidian", function () {
 		await customizeSyncButton.waitForExist({ timeout: 20000 });
 		expect((await browser.$$(exactButtonByText("Start sync"))).length).toBe(1);
 		await customizeSyncButton.click();
+		await browser.$(exactButtonByText("Custom")).click();
+		await browser.$('input[data-keepsidian-role="custom-since-input"]').setValue("2025-04-12 09:17");
+		await browser.$('input[data-keepsidian-role="custom-until-input"]').setValue("2025-04-13 10:30");
 
 		const footer = browser.$(".keepsidian-sync-center-footer");
 		await footer.waitForExist({ timeout: 20000 });
@@ -653,7 +669,16 @@ describe("KeepSidian", function () {
 				const modalRect = modalEl.getBoundingClientRect();
 				const footerStyle = getComputedStyle(footerEl);
 				const buttons = Array.from(footerEl.querySelectorAll<HTMLElement>("button"));
+				const dateRows = Array.from(modalEl.querySelectorAll<HTMLElement>(".keepsidian-sync-center-scope-input-wrap"));
+				const datesFit = dateRows.length === 2 && dateRows.every((row) => {
+					const label = row.querySelector("span")?.getBoundingClientRect();
+					const input = row.querySelector("input")?.getBoundingClientRect();
+					const bounds = row.getBoundingClientRect();
+					return Boolean(label && input && input.width > 0 && input.left >= label.right &&
+						input.right <= bounds.right + 1 && Math.abs((label.top + label.bottom) - (input.top + input.bottom)) <= 2);
+				});
 				return {
+					datesFit,
 					viewportWidth: window.innerWidth,
 					footerWidth: footerRect.width,
 					modalWidth: modalRect.width,
@@ -688,6 +713,7 @@ describe("KeepSidian", function () {
 		const layout = await readFooterLayout();
 		expect(layout).not.toBeNull();
 		console.info("Sync Center expanded footer geometry", layout);
+		expect(layout?.datesFit).toBe(true);
 		expect(layout?.footerMarginTop).toBe("12px");
 		expect(layout?.startMarginTop).toBe("0px");
 		expect(layout?.closeMarginTop).toBe("0px");
@@ -707,7 +733,8 @@ describe("KeepSidian", function () {
 		});
 		expect(primaryState).toEqual({ topCta: true, topPrimary: true, footerCta: true, footerPrimary: true });
 		mkdirSync(resolve("test-results"), { recursive: true });
-		await browser.saveScreenshot("test-results/sync-center-footer-expanded.png");
+		mkdirSync(resolve("screenshots/sync-end-date-20260922"), { recursive: true });
+		await browser.saveScreenshot("screenshots/sync-end-date-20260922/expanded.png");
 
 		customizeSyncButton = browser.$(buttonByText("Customize sync"));
 		await customizeSyncButton.click();
@@ -774,12 +801,13 @@ describe("KeepSidian", function () {
 			const narrowLayout = await readFooterLayout();
 			expect(narrowLayout).not.toBeNull();
 			console.info("Sync Center narrow footer geometry", narrowLayout);
+			expect(narrowLayout?.datesFit).toBe(true);
 			expect(narrowLayout?.viewportWidth).toBeLessThan(layout?.viewportWidth ?? Number.POSITIVE_INFINITY);
 			expect(narrowLayout?.footerWidth).toBeLessThan(layout?.footerWidth ?? Number.POSITIVE_INFINITY);
 			expect(narrowLayout?.footerOverflow).toBe(false);
 			expect(narrowLayout?.modalOverflow).toBe(false);
 			expect(narrowLayout?.buttonOverflow).toBe(false);
-			await browser.saveScreenshot("test-results/sync-center-footer-narrow.png");
+			await browser.saveScreenshot("screenshots/sync-end-date-20260922/narrow.png");
 		} finally {
 			await resizeWindow(originalWindowSize.width, originalWindowSize.height);
 		}
