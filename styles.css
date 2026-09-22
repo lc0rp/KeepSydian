@@ -171,7 +171,7 @@ If your plugin does not need CSS, delete this file.
 
 .keepsidian-color-picker-swatch:hover::before {
 	box-shadow:
-		inset 0 0 0 1px rgb(255 255 255 / 55%),
+		inset 0 0 0 1px rgb(255 255 255 / 45%),
 		0 0 0 2px
 			color-mix(in srgb, var(--background-modifier-border-hover, var(--background-modifier-border)) 88%, transparent);
 }
