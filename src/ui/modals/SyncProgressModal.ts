@@ -18,6 +18,7 @@ import { formatModalSummary } from "@app/sync-status";
 import { formatAttemptSummary } from "@app/sync-attempt";
 import type { SyncAttempt } from "@app/sync-attempt";
 import type { LastSyncAttempt } from "../../types/sync-attempt";
+import { excludeDeletionUploads } from "@features/keep/deletion-upload-exclusions";
 
 interface CreateElOptions {
 	text?: string;
@@ -59,6 +60,7 @@ type ModalSurface = "setup" | "review" | "running" | "result";
 type ChipKey =
 	| "notes"
 	| "create"
+	| "delete"
 	| "merge"
 	| "overwrite"
 	| "upload"
@@ -99,6 +101,7 @@ interface DismissPromptState {
 const CHIP_ORDER: ChipKey[] = [
 	"notes",
 	"create",
+	"delete",
 	"merge",
 	"overwrite",
 	"upload",
@@ -113,6 +116,7 @@ const clearElement = (element: HTMLElement) => {
 		maybeObsidianElement.empty();
 		return;
 	}
+
 	element.innerHTML = "";
 };
 
@@ -230,6 +234,8 @@ function getChipKeyForEntry(entry: SyncPlanEntry): ChipKey {
 	switch (entry.action) {
 		case "create":
 			return "create";
+		case "delete":
+			return "delete";
 		case "merge":
 			return "merge";
 		case "overwrite":
@@ -252,6 +258,8 @@ function getReviewChipLabel(key: ChipKey): string {
 			return "Notes";
 		case "create":
 			return "Create";
+		case "delete":
+			return "Delete";
 		case "merge":
 			return "Merge";
 		case "overwrite":
@@ -273,6 +281,8 @@ function getExecutionChipLabel(key: ChipKey): string {
 			return "Notes";
 		case "create":
 			return "Created";
+		case "delete":
+			return "Deleted";
 		case "merge":
 			return "Merged";
 		case "overwrite":
@@ -787,6 +797,8 @@ export class SyncProgressModal extends Modal {
 				},
 			});
 			if (result.nextPlan) {
+				result.nextPlan.deletions = this.preparedPlan.deletions;
+				result.nextPlan.plan = excludeDeletionUploads(result.nextPlan.plan, result.nextPlan.deletions);
 				result.nextPlan.plan.title = getPlanTitle(result.nextPlan.plan);
 				this.preparedPlan = result.nextPlan;
 				this.activeAttempt = result.nextPlan.attempt ?? this.activeAttempt;
@@ -1537,6 +1549,16 @@ export class SyncProgressModal extends Modal {
 				text: `${this.preparedPlan.plan.actionableCount} changes found.`,
 			});
 			reviewCopy.classList.add("keepsidian-sync-plan-summary-copy");
+			const deletions = this.preparedPlan.plan.entries.filter((entry) => entry.action === "delete");
+			if (deletions.length > 0) {
+				const selected = deletions.filter((entry) => entry.selectable && entry.selected).length;
+				const warning = createChild(this.planSummaryEl, "div", {
+					text: `${selected} note${selected === 1 ? "" : "s"} will be deleted from Obsidian (moved to .trash). Uncheck any deletion to keep the local note. Attachments are retained.`,
+				});
+				warning.classList.add("keepsidian-sync-plan-summary-copy");
+				warning.setAttribute("aria-live", "polite");
+				warning.setAttribute("data-keepsidian-role", "deletion-summary");
+			}
 		}
 
 		if ((surface === "running" || surface === "result") && this.executionSnapshot) {
@@ -1590,6 +1612,8 @@ export class SyncProgressModal extends Modal {
 				refreshedPlan.attempt = original.attempt;
 				refreshedPlan.completionDate = original.completionDate;
 				refreshedPlan.attachmentWarnings = original.attachmentWarnings;
+				refreshedPlan.deletions = original.deletions;
+				refreshedPlan.plan = excludeDeletionUploads(refreshedPlan.plan, original.deletions);
 				refreshedPlan.mode = "two-way";
 				refreshedPlan.plan = {
 					...refreshedPlan.plan,
@@ -1733,6 +1757,7 @@ export class SyncProgressModal extends Modal {
 		const toggle = createChild(toggleWrap, "input");
 		toggle.type = "checkbox";
 		toggle.checked = entry.selected;
+		toggle.setAttribute("aria-label", `${entry.label}: ${entry.title}`);
 		toggle.disabled = !entry.selectable || entry.selectionLocked || this.isGeneratingReview;
 		if (entry.selectionLockedReason) {
 			toggle.title = entry.selectionLockedReason;
@@ -1858,7 +1883,10 @@ export class SyncProgressModal extends Modal {
 			denominators.set(key, (denominators.get(key) ?? 0) + 1);
 			const state = this.executionSnapshot.entryStates.get(entry.id) ?? "pending";
 			if (state === "done" || state === "failed" || state === "instant") {
-				numerators.set(key, (numerators.get(key) ?? 0) + 1);
+				// A failed deletion is handled, but must never be counted as Deleted.
+				if (key !== "delete" || state === "done") {
+					numerators.set(key, (numerators.get(key) ?? 0) + 1);
+				}
 				numerators.set("notes", (numerators.get("notes") ?? 0) + 1);
 			}
 		}
@@ -1868,7 +1896,9 @@ export class SyncProgressModal extends Modal {
 			const state = this.executionSnapshot.entryStates.get(entry.id) ?? "pending";
 			denominators.set(key, (denominators.get(key) ?? 0) + 1);
 			if (state === "done" || state === "failed" || state === "instant") {
-				numerators.set(key, (numerators.get(key) ?? 0) + 1);
+				if (key !== "delete" || state === "done") {
+					numerators.set(key, (numerators.get(key) ?? 0) + 1);
+				}
 			}
 		}
 
