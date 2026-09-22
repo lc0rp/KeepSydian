@@ -190,6 +190,8 @@ describe("archive download planning and execution", () => {
 		"offers and applies an archive-only plan with %s",
 		async (status) => {
 			plugin.settings.premiumFeatures.archivedStatus = status;
+			const startedAt = Date.now();
+			jest.spyOn(Date, "now").mockReturnValue(startedAt);
 			const plan = await buildManualSyncPlan(plugin, "import");
 			expect(plan?.archivedStatus).toBe(status);
 			expect(plan?.plan.entries[0]).toMatchObject({
@@ -205,7 +207,7 @@ describe("archive download planning and execution", () => {
 				expect.objectContaining({ keep_state_filter: { archived: status } }),
 				0,
 				100,
-				{ changed_gt: LAST_SYNC },
+				{ changed_gt: LAST_SYNC, created_lt: new Date(startedAt).toISOString(), updated_lt: new Date(startedAt).toISOString() },
 				undefined,
 				undefined,
 				undefined
@@ -340,4 +342,42 @@ describe("archive download planning and execution", () => {
 		expect(files.get(NOTE_PATH)).toBe(ORIGINAL);
 		expect(plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(LAST_SYNC);
 	});
+
+	it("preserves durable pending state and timestamps during a metadata-only archive", async () => {
+		const local = ORIGINAL.replace("tags:", `KeepSidianPendingUpload: true\nKeepSidianRemoteBaseline: sha256:${"a".repeat(64)}\ntags:`);
+		files.set(NOTE_PATH, local);
+		await importSelectedGoogleKeepNotes(plugin, [remoteNote()], { archivedStatus: "all", mergeAction: "merge-save-conflicts" });
+		expect(files.get(NOTE_PATH)).toBe(local.replace("GoogleKeepArchived: false", "GoogleKeepArchived: true"));
+		expect(noteWrites()).toHaveLength(1);
+		expect(noteWrites()[0][2]).toEqual({ ctime: Date.parse("2024-01-01"), mtime: Date.parse("2024-01-01") });
+	});
+
+	it.each(["merge-save-conflicts", "merge-skip-conflicts", "merge-overwrite-conflicts", "overwrite-all"] as const)(
+		"reconciles archived pending notes using %s",
+		async (mergeAction) => {
+			const local = ORIGINAL.replace("Keep this body.", "Unsynced local edit.").replace("tags:", "KeepSidianPendingUpload: true\ntags:");
+			files.set(NOTE_PATH, local);
+			const conflict = jest.fn();
+			await importSelectedGoogleKeepNotes(plugin, [remoteNote()], { archivedStatus: "all", mergeAction, onMergeConflict: conflict });
+			if (mergeAction === "merge-skip-conflicts") {
+				expect(files.get(NOTE_PATH)).toBe(local);
+				expect(noteWrites()).toHaveLength(0);
+				expect([...files.keys()].some((path) => path.includes("-conflict-"))).toBe(false);
+				expect(conflict).toHaveBeenCalledWith(NOTE_PATH);
+			} else if (mergeAction === "merge-save-conflicts") {
+				expect(files.get(NOTE_PATH)).toBe(local.replace("GoogleKeepArchived: false", "GoogleKeepArchived: true"));
+				expect(noteWrites()[0][2]).toEqual({ ctime: Date.parse("2024-01-01"), mtime: Date.parse("2024-01-01") });
+				const copy = [...files.entries()].find(([path]) => path.includes("-conflict-"));
+				expect(copy?.[1]).toContain("<<<<<<< existing");
+				expect(copy?.[1]).not.toContain("KeepSidianPendingUpload:");
+				expect(conflict).toHaveBeenCalledWith(NOTE_PATH);
+			} else {
+				expect(files.get(NOTE_PATH)).toContain("Keep this body.");
+				expect(files.get(NOTE_PATH)).not.toContain("Unsynced local edit.");
+				expect(files.get(NOTE_PATH)).toContain("GoogleKeepArchived: true");
+				expect(files.get(NOTE_PATH)).toContain("KeepSidianPendingUpload: true");
+				expect(conflict).not.toHaveBeenCalled();
+			}
+		}
+	);
 });

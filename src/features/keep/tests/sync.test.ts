@@ -799,7 +799,7 @@ describe("Google Keep Import Functions", () => {
 			await syncModule.processAndSaveNote(mockPlugin, incomingNote, mockPlugin.settings.saveLocation);
 
 			const expectedFilePath = `${mockPlugin.settings.saveLocation}/${incomingNote.title}.md`;
-			const expectedContent = `---\nExisting: true\nKeepSidianLastSyncedDate: 2023-01-01T00:00:00.000Z\n---\nLine 1\nLine 2`;
+			const expectedContent = `---\nExisting: true\nKeepSidianLastSyncedDate: 2023-01-01T00:00:00.000Z\nKeepSidianPendingUpload: true\n---\nLine 1\nLine 2`;
 			expect(mockPlugin.app.vault.adapter.write).toHaveBeenCalledWith(expectedFilePath, expectedContent);
 		});
 

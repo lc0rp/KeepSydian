@@ -145,8 +145,10 @@ describe("archive writes and subsequent upload planning", () => {
 		const result = await run(plan!);
 		expect(files.get(PATH)).toBe(ARCHIVED);
 		expect(times.get(PATH)?.mtime).toBe(ORIGINAL_MTIME);
-		expect(result.nextPlan?.stage).toBe("upload");
-		expect(result.nextPlan?.plan.entries.filter((entry) => entry.selectable)).toHaveLength(0);
+		// A metadata-only download finishes immediately when there is no upload work.
+		expect(result).toEqual({});
+		expect(plan?.attempt?.outcome).toBe("success");
+		expect(plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(plan?.completionDate);
 		expect((await collectNotesToPush(plugin)).notesToPush).toHaveLength(0);
 	});
 

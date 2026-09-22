@@ -1,3 +1,5 @@
+import type { DataAdapter } from "obsidian";
+
 // Factory for a minimal KeepSidianPlugin-like stub
 
 export interface MockVaultStat {
@@ -10,7 +12,7 @@ export interface MockVaultAdapter {
 	exists: jest.Mock<Promise<boolean>, [string]>;
 	list: jest.Mock<Promise<{ files: string[]; folders: string[] }>, [string]>;
 	read: jest.Mock<Promise<string>, [string]>;
-	write: jest.Mock<Promise<void>, [string, string]>;
+	write: jest.Mock<Promise<void>, Parameters<DataAdapter["write"]>>;
 	writeBinary: jest.Mock<Promise<void>, [string, ArrayBuffer]>;
 	readBinary: jest.Mock<Promise<ArrayBuffer>, [string]>;
 	stat: jest.Mock<Promise<MockVaultStat | null>, [string]>;

@@ -595,7 +595,6 @@ describe("SyncProgressModal", () => {
 
 		getButton(modal, "Merge 1").click();
 		await flushUI();
-
 		expect(getRowTitles(modal)).toEqual(["Merge row"]);
 
 		getButton(modal, "Notes 2").click();
@@ -683,11 +682,11 @@ describe("SyncProgressModal", () => {
 		await flushUI();
 
 		expect(modal.contentEl.textContent).toContain("Running download plan");
-		expect(modal.contentEl.textContent).toContain("2 selected. 1 pending.");
-		expect(modal.contentEl.textContent).toContain("1 of 2 selected notes dealt with.");
-		expect(modal.contentEl.textContent).toContain("Notes 1/2");
+		expect(modal.contentEl.textContent).toContain("2 selected. 2 pending.");
+		expect(modal.contentEl.textContent).toContain("0 of 2 selected notes dealt with.");
+		expect(modal.contentEl.textContent).toContain("Notes 0/2");
 		expect(modal.contentEl.textContent).toContain("Created 0/1");
-		expect(modal.contentEl.textContent).toContain("Conflict copy 1/1");
+		expect(modal.contentEl.textContent).toContain("Conflict copy 0/1");
 		expect(modal.contentEl.textContent).toContain("Already up to date 1/1");
 		expect(modal.contentEl.textContent).toContain("Unchecked 1/1");
 
@@ -699,11 +698,19 @@ describe("SyncProgressModal", () => {
 		);
 		runCallback.onEntrySettled("create-1", true);
 		await flushUI();
+		expect(modal.contentEl.textContent).toContain("2 selected. 1 pending.");
+		expect(modal.contentEl.textContent).toContain("Notes 1/2");
+		expect(modal.contentEl.textContent).toContain("Conflict copy 0/1");
+
+		// Conflict copies perform I/O and only count after that write is acknowledged.
+		runCallback.onEntrySettled("conflict-1", true, "conflict-copy");
+		await flushUI();
 
 		expect(modal.contentEl.textContent).toContain("2 selected. 0 pending.");
 		expect(modal.contentEl.textContent).toContain("2 of 2 selected notes dealt with.");
 		expect(modal.contentEl.textContent).toContain("Notes 2/2");
 		expect(modal.contentEl.textContent).toContain("Created 1/1");
+		expect(modal.contentEl.textContent).toContain("Conflict copy 1/1");
 
 		deferred.resolve({});
 		await flushUI();
