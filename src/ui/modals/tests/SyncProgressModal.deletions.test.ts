@@ -88,7 +88,7 @@ it("preserves a kept deletion through the two-way upload review and Refresh", as
 	const prepared = createPreparedSyncPlanFixture("two-way", "import", [deleted,
 		createSyncPlanEntryFixture("create", "Create", { id: "create", path: "Keep/New.md" }),
 	]);
-	const file = Object.assign(new TFile(), { path: deleted.path });
+	const file = Object.assign(new TFile(deleted.path), { path: deleted.path });
 	prepared.deletions = {
 		accountEmail: "test@example.com", rootFolder: "Keep", entries: [deleted],
 		candidates: [{ entryId: deleted.id, path: deleted.path, keepUrl: "https://keep.google.com/#NOTE/one", content: "", file }],
