@@ -3,6 +3,8 @@ import type KeepSidianPlugin from "@app/main";
 import { normalizeNote, PreNormalizedNote, extractFrontmatter } from "./domain/note";
 import { handleDuplicateNotes } from "./domain/compare";
 import { mergeNoteText } from "./domain/merge";
+import { getArchivedNoteUpdate, getDownloadFrontmatter, isArchivedDownload } from "./domain/archive";
+import type { KeepArchivedStatus } from "../../types/subscription";
 // Import via legacy google path so tests can spy on this module
 import { processAttachments, type AttachmentFailure } from "../keep/io/attachments";
 import type { NoteImportOptions } from "@ui/modals/NoteImportOptionsModal";
@@ -76,7 +78,7 @@ const NOTE_LOG_BATCH_OPTIONS = {
 	batchSize: NOTE_LOG_BATCH_SIZE,
 } as const;
 
-type NoteSaveAction = "skipped" | "created" | "merged" | "conflict" | "overwritten";
+type NoteSaveAction = "skipped" | "created" | "merged" | "conflict" | "overwritten" | "archived";
 
 interface NoteSaveMetrics {
 	action: NoteSaveAction;
@@ -216,6 +218,7 @@ export function buildDownloadSyncFilters(
 }
 
 export interface SyncCallbacks {
+	archivedStatus?: KeepArchivedStatus;
 	attempt?: SyncAttempt;
 	deferCheckpoint?: (date: string) => void;
 	setTotalNotes?: (total: number) => void;
@@ -236,6 +239,7 @@ interface FetchImportNotesResult {
 }
 
 export interface BuiltImportSyncPlan {
+	archivedStatus?: KeepArchivedStatus;
 	plan: SyncPlan;
 	notes: PreNormalizedNote[];
 	noteEntryIds: string[];
@@ -386,7 +390,8 @@ function buildImportPlanEntry(
 	note: PreNormalizedNote,
 	allowPerNoteSelection: boolean,
 	selectionLockedReason?: string,
-	existingKeepNoteIndex?: ExistingKeepNoteIndex
+	existingKeepNoteIndex?: ExistingKeepNoteIndex,
+	archivedStatus?: KeepArchivedStatus
 ): Promise<SyncPlanEntry> {
 	return (async () => {
 		const normalizedNote = normalizeNote(note);
@@ -434,6 +439,9 @@ function buildImportPlanEntry(
 				label = hasConflict ? "Conflict copy" : "Merge";
 				selectable = true;
 				detail = hasConflict ? "Will create a conflict copy next to the existing note." : undefined;
+				if (getArchivedNoteUpdate(note, existingContent, archivedStatus)) {
+					detail = `${detail ? `${detail} ` : ""}Also marks the existing note as archived.`;
+				}
 				break;
 			}
 			case "skip":
@@ -441,6 +449,16 @@ function buildImportPlanEntry(
 				action = "skipped-identical";
 				label = "Skipped: identical";
 				selectable = false;
+				if (isArchivedDownload(note, archivedStatus)) {
+					const existingContent = await plugin.app.vault.adapter.read(noteFilePath);
+					if (getArchivedNoteUpdate(note, existingContent, archivedStatus)) {
+						// An existing-file update, but only its archive property is overwritten.
+						action = "overwrite";
+						label = "Archive";
+						selectable = true;
+						detail = "Marks the existing note as archived. Its body and other properties are preserved.";
+					}
+				}
 				break;
 		}
 
@@ -472,6 +490,7 @@ export async function buildImportSyncPlan(
 	const startedAt = callbacks?.attempt?.startedAt ?? Date.now();
 	const { email, token } = plugin.settings;
 	const supporterKey = plugin.settings.supporterKeyConfigured ? (plugin.settings.supporterKey ?? "") : undefined;
+	const archivedStatus = options?.archivedStatus ?? "active-only";
 	const identity = JSON.stringify([
 		email,
 		token,
@@ -563,7 +582,15 @@ export async function buildImportSyncPlan(
 	const existingKeepNoteIndex = await buildExistingKeepNoteIndex(plugin.app, plugin.settings.saveLocation);
 	const entries = await Promise.all(
 		fetched.notes.map((note, index) =>
-			buildImportPlanEntry(plugin, index, note, allowPerNoteSelection, selectionLockedReason, existingKeepNoteIndex)
+			buildImportPlanEntry(
+				plugin,
+				index,
+				note,
+				allowPerNoteSelection,
+				selectionLockedReason,
+				existingKeepNoteIndex,
+				archivedStatus
+			)
 		)
 	);
 	const actionableEntries = entries.filter((entry) => entry.selectable);
@@ -573,6 +600,7 @@ export async function buildImportSyncPlan(
 	}, {});
 
 	return {
+		archivedStatus,
 		plan: {
 			id: `import-plan:${Date.now()}`,
 			mode: "import",
@@ -646,7 +674,7 @@ export async function importGoogleKeepNotes(
 	return await importGoogleKeepNotesBase(
 		plugin,
 		(offset, limit, filters, cursor) => apiFetchNotes(email, token, offset, limit, filters, cursor),
-		callbacks,
+		{ ...callbacks, archivedStatus: "active-only" },
 		downloadScope
 	);
 }
@@ -664,7 +692,7 @@ export async function importGoogleKeepNotesWithOptions(
 		plugin,
 		(offset, limit, filters, cursor) =>
 			apiFetchNotesWithPremium(email, token, featureFlags, offset, limit, filters, cursor, supporterKey),
-		callbacks,
+		{ ...callbacks, archivedStatus: options.archivedStatus ?? "active-only" },
 		downloadScope,
 		false
 	);
@@ -814,7 +842,8 @@ export async function processAndSaveNotes(
 								await ensureFolderCached(folderPath);
 							},
 							(warning: SyncAttachmentWarning) => callbacks?.onAttachmentWarning?.(warning),
-							callbacks?.attempt
+							callbacks?.attempt,
+							callbacks?.archivedStatus
 						)
 					);
 					batchMetrics.processed += 1;
@@ -913,7 +942,8 @@ export async function processAndSaveNote(
 	ensureFolderForPath: (folderPath: string) => Promise<void> = async (folderPath: string) =>
 		await ensureFolder(plugin.app, folderPath),
 	onAttachmentWarning?: (warning: SyncAttachmentWarning) => void,
-	attempt?: SyncAttempt
+	attempt?: SyncAttempt,
+	archivedStatus?: KeepArchivedStatus
 ): Promise<NoteSaveMetrics> {
 	const metrics: NoteSaveMetrics = {
 		action: "created",
@@ -973,6 +1003,24 @@ export async function processAndSaveNote(
 			);
 		});
 	};
+	const markExistingNoteArchived = async (filePath: string, content?: string): Promise<boolean> => {
+		if (!isArchivedDownload(note, archivedStatus)) return false;
+		const readStartedAt = getNowMs();
+		const existingContent = content ?? (await plugin.app.vault.adapter.read(filePath));
+		metrics.readExistingDurationMs += getNowMs() - readStartedAt;
+		const updatedContent = getArchivedNoteUpdate(note, existingContent, archivedStatus);
+		if (updatedContent === undefined) return false;
+		// Archive bookkeeping must not manufacture a local body edit or hide an existing one.
+		const stat = await plugin.app.vault.adapter.stat(filePath);
+		if (!stat || !Number.isFinite(stat.mtime)) {
+			throw new Error("Cannot preserve the note modification time while marking it archived.");
+		}
+		throwIfSyncCancelled(plugin);
+		const writeStartedAt = getNowMs();
+		await plugin.app.vault.adapter.write(filePath, updatedContent, { ctime: stat.ctime, mtime: stat.mtime });
+		metrics.writeNoteDurationMs += getNowMs() - writeStartedAt;
+		return true;
+	};
 
 	try {
 		throwIfSyncCancelled(plugin);
@@ -984,12 +1032,13 @@ export async function processAndSaveNote(
 				? "create"
 				: await handleDuplicateNotes(saveLocation, normalizedNote, plugin.app, noteFilePath, existingKeepNoteIndex);
 		metrics.duplicateDecisionDurationMs = getNowMs() - duplicateDecisionStartedAt;
-		const newFrontmatter = normalizedNote.frontmatter;
+		const newFrontmatter = getDownloadFrontmatter(note, archivedStatus);
 		const newTextWithoutFrontmatter = normalizedNote.textWithoutFrontmatter;
 
 		if (duplicateNotesAction === "skip") {
-			metrics.action = "skipped";
-			await logNote(`${noteLink} - identical (skipped)`);
+			const archived = await markExistingNoteArchived(noteFilePath);
+			metrics.action = archived ? "archived" : "skipped";
+			await logNote(archived ? `${noteLink} - marked as archived` : `${noteLink} - identical (skipped)`);
 		} else if (duplicateNotesAction === "create") {
 			metrics.action = "created";
 			const mdFrontmatter = buildFrontmatterWithSyncDate(newFrontmatter, lastSyncedDate);
@@ -1033,7 +1082,8 @@ export async function processAndSaveNote(
 					await logNote(`${noteLink} - merged (no conflict)`);
 				} else {
 					metrics.action = "conflict";
-					// Write a conflict copy
+					// Write a conflict copy, but archive the original linked note as well.
+					const originalNoteFilePath = noteFilePath;
 					noteFilePath = noteFilePath.replace(/\.md$/, "");
 					noteFilePath = `${noteFilePath}${CONFLICT_FILE_SUFFIX}${lastSyncedDate}.md`;
 
@@ -1044,6 +1094,7 @@ export async function processAndSaveNote(
 					if (existingKeepNoteIndex) {
 						updateExistingKeepNoteIndex(existingKeepNoteIndex, noteFilePath, normalizedNote);
 					}
+					await markExistingNoteArchived(originalNoteFilePath);
 					const conflictLink = `[${noteTitle}](${normalizePathSafe(noteFilePath)})`;
 					await logNote(`${conflictLink} - conflict copy created`);
 				}
