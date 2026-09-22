@@ -168,7 +168,33 @@ describe("persistent sync attempt preparation", () => {
 		});
 	});
 
-	it("resumes the failed cursor with the original cutoff and links attempts without writing notes", async () => {
+	it.each([false, true])("freezes the end before subscription and capability checks (premium=%s)", async (premium) => {
+		const startedAt = Date.parse("2026-06-01T12:00:00.000Z");
+		const now = jest.spyOn(Date, "now").mockReturnValue(startedAt);
+		plugin.settings.premiumFeatures = {};
+		jest.spyOn(plugin.subscriptionService, "isSubscriptionActive").mockImplementation(async () => {
+			now.mockReturnValue(startedAt + 60_000);
+			return premium;
+		});
+		jest.spyOn(api, "getReplayEpoch").mockImplementation(async () => {
+			now.mockReturnValue(startedAt + 120_000);
+			return undefined;
+		});
+		const freeFetch = jest.spyOn(api, "fetchNotes").mockResolvedValue({ notes: [] });
+		const premiumFetch = jest.spyOn(api, "fetchNotesWithPremiumFeatures").mockResolvedValue({ notes: [] });
+		const plan = await buildManualSyncPlan(plugin, "import");
+		const filters = premium ? premiumFetch.mock.calls[0][5] : freeFetch.mock.calls[0][4];
+		expect(filters).toEqual({
+			changed_gt: checkpoint,
+			created_lt: new Date(startedAt).toISOString(),
+			updated_lt: new Date(startedAt).toISOString(),
+		});
+		expect(plan?.completionDate).toBe(new Date(startedAt - 1).toISOString());
+	});
+
+	it("resumes the failed cursor with both original bounds and links attempts without writing notes", async () => {
+		const startedAt = Date.parse("2026-06-01T12:00:00.000Z");
+		const now = jest.spyOn(Date, "now").mockReturnValue(startedAt);
 		const fetch = jest
 			.spyOn(api, "fetchNotes")
 			.mockResolvedValueOnce({ notes: [{ id: "first", title: "First" }], total_notes: 2, next_cursor: "next-page" })
@@ -176,12 +202,20 @@ describe("persistent sync attempt preparation", () => {
 		await expect(buildManualSyncPlan(plugin, "import")).rejects.toBeInstanceOf(imports.RecoverablePreparationError);
 		const originalAttempt = plugin.settings.lastSyncAttempt?.id;
 		expect(fetch).toHaveBeenCalledTimes(4);
+		const originalFilters = { ...fetch.mock.calls[0][4] };
+		expect(originalFilters).toEqual({
+			changed_gt: checkpoint,
+			created_lt: new Date(startedAt).toISOString(),
+			updated_lt: new Date(startedAt).toISOString(),
+		});
+		now.mockReturnValue(startedAt + 60_000);
 		plugin.settings.keepSidianLastSuccessfulSyncDate = "2025-01-01T00:00:00.000Z";
 		fetch.mockReset().mockResolvedValue({ notes: [{ id: "second", title: "Second" }], total_notes: 2 });
 		const plan = await buildManualSyncPlan(plugin, "import");
 		expect(fetch).toHaveBeenCalledTimes(1);
-		expect(fetch.mock.calls[0][4]).toEqual({ changed_gt: checkpoint });
+		expect(fetch.mock.calls[0][4]).toEqual(originalFilters);
 		expect(fetch.mock.calls[0][5]).toBe("next-page");
+		expect(plan?.completionDate).toBe(new Date(startedAt - 1).toISOString());
 		expect(plan?.importNotes?.map((note) => note.id)).toEqual(["first", "second"]);
 		expect(records().some((record) => record.resumedFrom === originalAttempt && record.event === "review-ready")).toBe(
 			true
