@@ -17,6 +17,8 @@ import {
 	persistLastSuccessfulSyncDate,
 } from "@features/keep/sync";
 import { buildPushSyncPlan, pushGoogleKeepNotes } from "@features/keep/push";
+import { buildDeletionPlan, executeReviewedDeletions, type PreparedDeletions } from "@features/keep/deletions";
+import { excludeDeletionUploads, getDeletionUploadPaths } from "@features/keep/deletion-upload-exclusions";
 import { normalizeMergeAction } from "@features/keep/domain/merge-action";
 import { ensureFolder, normalizePathSafe } from "@services/paths";
 import { resolveLogBaseFolder } from "@services/note-path-resolver";
@@ -33,6 +35,7 @@ export interface PreparedSyncPlan {
 	stage: SyncPlanStage;
 	importNotes?: PreNormalizedNote[];
 	importEntryIds?: string[];
+	deletions?: PreparedDeletions;
 	archivedStatus?: KeepArchivedStatus;
 	completionDate?: string;
 	pushNotes?: NoteForPush[];
@@ -68,6 +71,19 @@ function withPlanMode(plan: SyncPlan, mode: SyncMode): SyncPlan {
 		...plan,
 		mode,
 		entries: plan.entries.map((entry) => ({ ...entry, mode })),
+	};
+}
+
+function withPlanEntries(plan: SyncPlan, entries: SyncPlan["entries"]): SyncPlan {
+	return {
+		...plan,
+		entries,
+		counts: entries.reduce<Record<string, number>>((counts, entry) => {
+			counts[entry.label] = (counts[entry.label] ?? 0) + 1;
+			return counts;
+		}, {}),
+		selectedCount: entries.filter((entry) => entry.selectable && entry.selected).length,
+		actionableCount: entries.filter((entry) => entry.selectable).length,
 	};
 }
 
@@ -181,29 +197,38 @@ async function buildManualSyncPlanCore(
 		callbacks,
 		downloadScope
 	);
+	const deletions = await buildDeletionPlan(plugin);
+	const deletionPaths = new Set(deletions.entries.map((entry) => entry.path));
+	// The fresh trash check supersedes any stale import for the same local file.
+	const entries = builtImportPlan.plan.entries.filter((entry) => !deletionPaths.has(entry.path));
+	entries.push(...deletions.entries);
 	return {
-		plan: withPlanMode(builtImportPlan.plan, mode),
+		plan: withPlanMode(withPlanEntries(builtImportPlan.plan, entries), mode),
 		mode,
 		stage: "import",
 		importNotes: builtImportPlan.notes,
 		importEntryIds: builtImportPlan.noteEntryIds,
+		deletions,
 		archivedStatus: builtImportPlan.archivedStatus,
 		completionDate: builtImportPlan.completionDate,
 	};
 }
 
 function getSelectedImportNotes(preparedPlan: PreparedSyncPlan): PreNormalizedNote[] {
-	const selectedEntryIds = new Set(preparedPlan.plan.entries.filter((entry) => entry.selectable && entry.selected).map((entry) => entry.id));
+	const selectedEntryIds = new Set(preparedPlan.plan.entries
+		.filter((entry) => entry.action !== "delete" && entry.selectable && entry.selected).map((entry) => entry.id));
 	const importNotes = preparedPlan.importNotes ?? [];
 	const importEntryIds = preparedPlan.importEntryIds ?? [];
 	return importNotes.filter((_note, index) => {
 		const entryId = importEntryIds[index];
-		return entryId ? selectedEntryIds.has(entryId) : selectedEntryIds.size === 0;
+		// Unmapped legacy imports must not recreate a note from a deletion plan.
+		return entryId ? selectedEntryIds.has(entryId) : !preparedPlan.deletions?.entries.length && selectedEntryIds.size === 0;
 	});
 }
 
 function getSelectedPushNotes(preparedPlan: PreparedSyncPlan): NoteForPush[] {
-	const selectedEntryIds = new Set(preparedPlan.plan.entries.filter((entry) => entry.selectable && entry.selected).map((entry) => entry.id));
+	const plan = excludeDeletionUploads(preparedPlan.plan, preparedPlan.deletions);
+	const selectedEntryIds = new Set(plan.entries.filter((entry) => entry.selectable && entry.selected).map((entry) => entry.id));
 	const protectedPaths = new Set(preparedPlan.unresolvedConflictPaths ?? []);
 	return (preparedPlan.pushNotes ?? []).filter((note, index) =>
 		!protectedPaths.has(normalizePathSafe(note.fullPath)) && selectedEntryIds.has(`upload:${index}:${normalizePathSafe(note.fullPath)}`)
@@ -276,9 +301,13 @@ export async function runPreparedSyncPlan(
 		await attempt.transition(preparedPlan.stage === "import" ? "execution" : "upload");
 		if (preparedPlan.stage === "import") {
 			const selectedNotes = getSelectedImportNotes(preparedPlan);
-			const selectedEntryIds = preparedPlan.plan.entries.filter((entry) => entry.selectable && entry.selected).map((entry) => entry.id);
-			uiSetTotalNotes(plugin, selectedNotes.length);
-			await importSelectedGoogleKeepNotes(plugin, selectedNotes, callbacks, undefined, selectedEntryIds);
+			const selectedEntries = preparedPlan.plan.entries.filter((entry) => entry.selectable && entry.selected);
+			const selectedEntryIds = selectedEntries.filter((entry) => entry.action !== "delete").map((entry) => entry.id);
+			uiSetTotalNotes(plugin, selectedEntries.length);
+			await executeReviewedDeletions(plugin, preparedPlan.deletions, new Set(selectedEntries.map((entry) => entry.id)), callbacks);
+			if (selectedNotes.length || !preparedPlan.deletions?.entries.length) {
+				await importSelectedGoogleKeepNotes(plugin, selectedNotes, callbacks, undefined, selectedEntryIds);
+			}
 			if (preparedPlan.mode === "two-way") {
 				resetProgressIndicatorsForNextStage(plugin);
 				plugin.currentSyncPhaseLabel = "Upload step";
@@ -286,17 +315,20 @@ export async function runPreparedSyncPlan(
 				const active = await getManualSupportState(plugin);
 				const built = await buildPushSyncPlan(plugin, active, active ? undefined : SUPPORTER_LOCK_REASON, {
 					reviewMerges: true,
-					protectedPaths: [...unresolvedPaths],
+					// Exclude before remote merge review, which rejects linked notes absent from Keep.
+					protectedPaths: [...unresolvedPaths, ...getDeletionUploadPaths(preparedPlan.deletions)],
 					forcePaths: [...forceUploadPaths],
 				});
-				if (built.plan.actionableCount > 0) {
+				const uploadPlan = excludeDeletionUploads(built.plan, preparedPlan.deletions);
+				if (uploadPlan.actionableCount > 0) {
 					await attempt.transition("review");
 					return { nextPlan: {
 						attempt,
-						plan: { ...withPlanMode(built.plan, "two-way"), mergeAction },
+						plan: { ...withPlanMode(uploadPlan, "two-way"), mergeAction },
 						mode: "two-way",
 						stage: "upload",
 						pushNotes: built.notesToPush,
+						deletions: preparedPlan.deletions,
 						attachmentWarnings,
 						completionDate: preparedPlan.completionDate,
 						unresolvedConflictPaths: [...unresolvedPaths],

@@ -10,6 +10,7 @@ export type MergeAction =
 
 export type SyncPlanAction =
 	| "create"
+	| "delete"
 	| "overwrite"
 	| "merge"
 	| "conflict-copy"

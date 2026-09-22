@@ -8,6 +8,7 @@ import { formatModalSummary } from "@app/sync-status";
 import { formatAttemptSummary } from "@app/sync-attempt";
 import type { SyncAttempt } from "@app/sync-attempt";
 import type { LastSyncAttempt } from "../../types/sync-attempt";
+import { excludeDeletionUploads, getDeletionUploadPaths } from "@features/keep/deletion-upload-exclusions";
 import { normalizeMergeAction } from "@features/keep/domain/merge-action";
 import { renderMergeActionSelector } from "./merge-action-selector";
 import { parseCustomScopeRange, renderCustomScopeInputs } from "./sync-date-range";
@@ -32,14 +33,14 @@ interface SyncProgressModalOptions {
 	renderImportOptions: (containerEl: HTMLElement, isActive: boolean) => void | Promise<void>;
 }
 type ModalSurface = "setup" | "review" | "running" | "result";
-type ChipKey = "notes" | "create" | "merge" | "overwrite" | "upload" | "conflict-copy" | "skipped-conflict" | "already-up-to-date" | "unchecked";
+type ChipKey = "notes" | "create" | "delete" | "merge" | "overwrite" | "upload" | "conflict-copy" | "skipped-conflict" | "already-up-to-date" | "unchecked";
 type EntryRunState = "pending" | "done" | "failed" | "unchecked" | "instant";
 interface ExecutionSnapshot { plan: SyncPlan; entryStates: Map<string, EntryRunState>; }
 interface ExecutionRowRefs { row: HTMLDivElement; statusSymbolEl: HTMLSpanElement; badgeEl: HTMLSpanElement; }
 interface ChipRenderState { key: ChipKey; label: string; numerator?: number; denominator?: number; count?: number; isActive: boolean; }
 interface ModalAlertState { title: string; message: string; }
 interface DismissPromptState { activeRun: boolean; }
-const CHIP_ORDER: ChipKey[] = ["notes", "create", "merge", "overwrite", "upload", "conflict-copy", "skipped-conflict", "already-up-to-date", "unchecked"];
+const CHIP_ORDER: ChipKey[] = ["notes", "create", "delete", "merge", "overwrite", "upload", "conflict-copy", "skipped-conflict", "already-up-to-date", "unchecked"];
 const clearElement = (element: HTMLElement) => {
 	const maybeObsidianElement = element as MaybeObsidianElement;
 	if (typeof maybeObsidianElement.empty === "function") { maybeObsidianElement.empty(); return; }
@@ -72,6 +73,7 @@ function clonePlan(plan: SyncPlan): SyncPlan {
 function getChipKeyForEntry(entry: SyncPlanEntry): ChipKey {
 	switch (entry.action) {
 		case "create": return "create";
+		case "delete": return "delete";
 		case "merge": return "merge";
 		case "overwrite": return "overwrite";
 		case "upload": return "upload";
@@ -84,6 +86,7 @@ function getReviewChipLabel(key: ChipKey): string {
 	switch (key) {
 		case "notes": return "Notes";
 		case "create": return "Create";
+		case "delete": return "Delete";
 		case "merge": return "Merge";
 		case "overwrite": return "Overwrite";
 		case "upload": return "Upload";
@@ -96,6 +99,7 @@ function getReviewChipLabel(key: ChipKey): string {
 function getExecutionChipLabel(key: ChipKey): string {
 	switch (key) {
 		case "create": return "Created";
+		case "delete": return "Deleted";
 		case "merge": return "Merged";
 		case "overwrite": return "Overwritten";
 		case "upload": return "Uploaded";
@@ -383,6 +387,8 @@ export class SyncProgressModal extends Modal {
 				onEntrySettled: (entryId, success, outcome) => this.handleEntrySettled(entryId, success, outcome),
 			});
 			if (result.nextPlan) {
+				result.nextPlan.deletions = this.preparedPlan.deletions;
+				result.nextPlan.plan = excludeDeletionUploads(result.nextPlan.plan, result.nextPlan.deletions);
 				result.nextPlan.plan.title = getPlanTitle(result.nextPlan.plan);
 				result.nextPlan.plan.mergeAction = normalizeMergeAction(result.nextPlan.plan.mergeAction ?? this.preparedPlan.plan.mergeAction);
 				this.preparedPlan = result.nextPlan;
@@ -753,7 +759,19 @@ export class SyncProgressModal extends Modal {
 			runButton.disabled = this.isGeneratingReview || !this.preparedPlan || this.preparedPlan.plan.entries.every((entry) => !entry.selectable || !entry.selected);
 		}
 		clearElement(this.planSummaryEl);
-		if (surface === "review" && this.preparedPlan) createChild(this.planSummaryEl, "div", { text: `${this.preparedPlan.plan.actionableCount} changes found.` }).classList.add("keepsidian-sync-plan-summary-copy");
+		if (surface === "review" && this.preparedPlan) {
+			createChild(this.planSummaryEl, "div", { text: `${this.preparedPlan.plan.actionableCount} changes found.` }).classList.add("keepsidian-sync-plan-summary-copy");
+			const deletions = this.preparedPlan.plan.entries.filter((entry) => entry.action === "delete");
+			if (deletions.length > 0) {
+				const selected = deletions.filter((entry) => entry.selectable && entry.selected).length;
+				const warning = createChild(this.planSummaryEl, "div", {
+					text: `${selected} note${selected === 1 ? "" : "s"} will be deleted from Obsidian (moved to .trash). Uncheck any deletion to keep the local note. Attachments are retained.`,
+				});
+				warning.classList.add("keepsidian-sync-plan-summary-copy");
+				warning.setAttribute("aria-live", "polite");
+				warning.setAttribute("data-keepsidian-role", "deletion-summary");
+			}
+		}
 		if ((surface === "running" || surface === "result") && this.executionSnapshot) this.renderRunningSummary();
 		if (surface === "review") this.renderChips(this.planSummaryEl, surface);
 		this.renderSelectionSummary(this.planSelectionSummaryEl, surface); this.renderEntries(this.planListEl, surface);
@@ -773,14 +791,16 @@ export class SyncProgressModal extends Modal {
 			try {
 				const context: SyncPlanBuildCallbacks = {
 					attempt: original.attempt,
-					protectedPaths: original.unresolvedConflictPaths,
+					protectedPaths: [...(original.unresolvedConflictPaths ?? []), ...getDeletionUploadPaths(original.deletions)],
 					forceUploadPaths: original.forceUploadPaths,
 				};
-				const hasContext = original.attempt || original.unresolvedConflictPaths || original.forceUploadPaths;
+				const hasContext = original.attempt || original.unresolvedConflictPaths || original.forceUploadPaths || original.deletions;
 				const refreshedPlan = hasContext ? await this.options.buildSyncPlan("push", context) : await this.options.buildSyncPlan("push");
 				if (generation !== this.reviewGeneration) return;
 				if (!refreshedPlan) { this.preparedPlan = null; return; }
 				refreshedPlan.attempt = original.attempt; refreshedPlan.completionDate = original.completionDate; refreshedPlan.attachmentWarnings = original.attachmentWarnings;
+				refreshedPlan.deletions = original.deletions;
+				refreshedPlan.plan = excludeDeletionUploads(refreshedPlan.plan, original.deletions);
 				refreshedPlan.unresolvedConflictPaths = original.unresolvedConflictPaths; refreshedPlan.forceUploadPaths = original.forceUploadPaths; refreshedPlan.mode = "two-way";
 				refreshedPlan.plan = {
 					...refreshedPlan.plan, mode: "two-way", mergeAction: normalizeMergeAction(original.plan.mergeAction),
@@ -849,6 +869,7 @@ export class SyncProgressModal extends Modal {
 		if (entry.selectionLocked) { row.classList.add("is-locked"); if (entry.selectionLockedReason) row.setAttribute("title", entry.selectionLockedReason); }
 		const toggleWrap = createChild(row, "div"); toggleWrap.classList.add("keepsidian-sync-plan-row-toggle");
 		const toggle = createChild(toggleWrap, "input"); toggle.type = "checkbox"; toggle.checked = entry.selected; toggle.disabled = !entry.selectable || entry.selectionLocked || this.isGeneratingReview;
+		toggle.setAttribute("aria-label", `${entry.label}: ${entry.title}`);
 		if (entry.selectionLockedReason) toggle.title = entry.selectionLockedReason;
 		toggle.addEventListener("change", () => {
 			entry.selected = toggle.checked;
@@ -903,12 +924,16 @@ export class SyncProgressModal extends Modal {
 		for (const entry of selectedEntries) {
 			const key = getChipKeyForEntry(entry); denominators.set(key, (denominators.get(key) ?? 0) + 1);
 			const state = this.executionSnapshot.entryStates.get(entry.id) ?? "pending";
-			if (state === "done" || state === "failed" || state === "instant") { numerators.set(key, (numerators.get(key) ?? 0) + 1); numerators.set("notes", (numerators.get("notes") ?? 0) + 1); }
+			if (state === "done" || state === "failed" || state === "instant") {
+				// Failed deletions are handled, but must never be counted as Deleted.
+				if (key !== "delete" || state === "done") numerators.set(key, (numerators.get(key) ?? 0) + 1);
+				numerators.set("notes", (numerators.get("notes") ?? 0) + 1);
+			}
 		}
 		for (const entry of supplementalEntries) {
 			const key = getChipKeyForEntry(entry), state = this.executionSnapshot.entryStates.get(entry.id) ?? "pending";
 			denominators.set(key, (denominators.get(key) ?? 0) + 1);
-			if (state === "done" || state === "failed" || state === "instant") numerators.set(key, (numerators.get(key) ?? 0) + 1);
+			if ((state === "done" || state === "failed" || state === "instant") && (key !== "delete" || state === "done")) numerators.set(key, (numerators.get(key) ?? 0) + 1);
 		}
 		const uncheckedCount = entries.filter((entry) => this.executionSnapshot?.entryStates.get(entry.id) === "unchecked").length;
 		if (uncheckedCount > 0) { denominators.set("unchecked", uncheckedCount); numerators.set("unchecked", uncheckedCount); }

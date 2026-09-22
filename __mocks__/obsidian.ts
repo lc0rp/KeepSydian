@@ -579,6 +579,14 @@ export class Setting {
 	}
 }
 
+/** Minimal runtime file identity for vault safety checks in tests. */
+export class TFile {
+	path = "";
+	basename = "";
+	extension = "";
+	stat = { ctime: 0, mtime: 0, size: 0 };
+}
+
 export class Modal {
 	app: App;
 	titleEl: EnhancedElement<"div">;
