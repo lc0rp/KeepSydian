@@ -17,7 +17,7 @@ jobs:
       ORIGINAL: 35cc1c778f170ce5df8406d97b92feb3869dadb6
       BASE: db2c42e834b6cea1e9d4fc11a036b37d185273cd
       MAIN: f58c0a5b9b54dc80742c83d3da4bf39205b6553f
-      EXPECTED_TREE: c3eafae5bfa604b24ec9d22b31adc32fd026fb0f
+      EXPECTED_TREE: cee88934c89903534c00990d69107baba30a243e
     steps:
       - uses: actions/checkout@v4
         with:
@@ -91,6 +91,11 @@ jobs:
           new = '\t\t// A metadata-only download finishes immediately when there is no upload work.\n\t\texpect(result).toEqual({});\n\t\texpect(plan?.attempt?.outcome).toBe("success");\n\t\texpect(plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(plan?.completionDate);'
           assert text.count(old) == 1
           test_path.write_text(text.replace(old, new))
+          mock_path = root / 'src/test-utils/mocks/plugin.ts'
+          text = mock_path.read_text()
+          old = 'write: jest.Mock<Promise<void>, [string, string]>;'
+          assert text.count(old) == 1
+          mock_path.write_text('import type { DataAdapter } from "obsidian";\n\n' + text.replace(old, 'write: jest.Mock<Promise<void>, Parameters<DataAdapter["write"]>>;'))
           (root / '.github/workflows/pr22-integration.yml').unlink()
           PY
           git add -A
