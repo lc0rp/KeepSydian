@@ -118,14 +118,12 @@ export async function scanLocalIdentities(
 		if (generation !== getGeneration() || before.length !== after.length || before.some((file, index) => !sameStat(file, after[index]))) {
 			throw new Error("The vault changed during the identity scan.");
 		}
-		return {
-			complete: true,
-			paths: new Set(before.map((file) => file.path)),
-			identities,
-			generation,
-			fingerprint: await sha256(JSON.stringify(before)),
-		};
+		const fingerprint = await sha256(JSON.stringify(before));
+		plugin.throwIfSyncCancelled?.();
+		if (generation !== getGeneration()) throw new Error("The vault changed before scan confirmation.");
+		return { complete: true, paths: new Set(before.map((file) => file.path)), identities, generation, fingerprint };
 	} catch {
+		plugin.throwIfSyncCancelled?.();
 		return { complete: false, reason: "Deletion review requires a complete, readable, stable vault scan. No missing note was treated as deleted." };
 	}
 }
