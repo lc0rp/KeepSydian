@@ -12,8 +12,9 @@ export async function initializeLocalDeletionTracking(plugin: KeepSidianPlugin):
 	if (getDeletionLedger(plugin)) return;
 	const vault = plugin.app?.vault;
 	if (!vault || !plugin.manifest?.id) return;
-	const directory = plugin.manifest.dir ?? `${vault.configDir}/plugins/${plugin.manifest.id}`;
-	if (!isSafeVaultPath(directory)) return;
+	const directory = plugin.manifest.dir ?? (typeof vault.configDir === "string"
+		? `${vault.configDir}/plugins/${plugin.manifest.id}` : undefined);
+	if (!directory || !isSafeVaultPath(directory)) return;
 	// Keep the original filename so upgrades cannot overlook corrupt/old data.
 	const ledger = new LocalDeletionLedger(plugin, `${directory}/local-deletions-v1.json`);
 	await ledger.ready;
@@ -31,9 +32,4 @@ export async function initializeLocalDeletionTracking(plugin: KeepSidianPlugin):
 		plugin.registerEvent(vault.on("rename", (file, oldPath) => changed(oldPath, file.path)));
 	}
 	plugin.register?.(() => unregisterDeletionLedger(plugin));
-}
-
-/** Inbound execution retires confirmed identities; events never create removals. */
-export async function withLocalDeletionTrackingSuppressed<T>(_plugin: KeepSidianPlugin, work: () => Promise<T>): Promise<T> {
-	return work();
 }
