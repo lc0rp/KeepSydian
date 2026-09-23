@@ -1,90 +1,76 @@
-import { TFile, type TAbstractFile } from "obsidian";
-import type KeepSidianPlugin from "@app/main";
-import { createMockPlugin } from "@test-utils/mocks/plugin";
-import { getDeletionLedger, LocalDeletionLedger } from "../ledger";
+import { webcrypto } from "crypto";
+import { TextEncoder } from "util";
+import { TFile } from "obsidian";
+import KeepSidianPlugin from "@app/main";
+import KeepSidianEntryPlugin from "../../../../main";
+import { getDeletionLedger } from "../ledger";
 import { isSafeVaultPath } from "../state";
 import { initializeLocalDeletionTracking } from "../tracking";
+import { deletionFixture, noteText } from "./support";
 
-const cleanups: Array<() => void> = [];
-const cleanup = () => { while (cleanups.length) cleanups.pop()!(); };
-
-beforeEach(() => {
-	jest.spyOn(LocalDeletionLedger.prototype, "captureIntent").mockResolvedValue({ account: "fixture", records: [] });
-	jest.spyOn(LocalDeletionLedger.prototype, "renamed").mockResolvedValue(undefined);
+const cryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+const encoderDescriptor = Object.getOwnPropertyDescriptor(globalThis, "TextEncoder");
+let fixture: Awaited<ReturnType<typeof deletionFixture>>;
+beforeAll(() => {
+	Object.defineProperty(globalThis, "crypto", { configurable: true, value: webcrypto });
+	Object.defineProperty(globalThis, "TextEncoder", { configurable: true, value: TextEncoder });
 });
-afterEach(() => { cleanup(); jest.restoreAllMocks(); });
+afterAll(() => {
+	if (cryptoDescriptor) Object.defineProperty(globalThis, "crypto", cryptoDescriptor);
+	if (encoderDescriptor) Object.defineProperty(globalThis, "TextEncoder", encoderDescriptor);
+});
+beforeEach(async () => { fixture = await deletionFixture(); });
+afterEach(() => { fixture.cleanup(); jest.restoreAllMocks(); });
 
-function fixture(inherited = false) {
-	const mock = createMockPlugin();
-	const receivers: unknown[] = [];
-	const originals = {
-		trash: jest.fn(async function (this: unknown, _file: TAbstractFile, _system: boolean): Promise<void> { receivers.push(this); }),
-		delete: jest.fn(async function (this: unknown, _file: TAbstractFile, _force?: boolean): Promise<void> { receivers.push(this); }),
-		rename: jest.fn(async function (this: unknown, _file: TAbstractFile, _path: string): Promise<void> { receivers.push(this); }),
-	};
-	const vault = Object.assign(mock.app.vault, { configDir: ".obsidian", on: jest.fn() });
-	if (inherited) Object.setPrototypeOf(vault, originals);
-	else Object.assign(vault, originals);
-	const plugin = Object.assign(mock, {
-		manifest: { id: "keepsidian", dir: ".obsidian/plugins/keepsidian" },
-		register: (callback: () => void) => { cleanups.push(callback); },
-		registerEvent: jest.fn(),
-	}) as unknown as KeepSidianPlugin;
-	return { plugin, vault, originals, receivers };
-}
-
-it.each([false, true])("forwards all arguments with the Vault receiver and restores exact descriptors (inherited=%s)", async (inherited) => {
-	const { plugin, vault, originals, receivers } = fixture(inherited);
-	const before = Object.getOwnPropertyDescriptors(vault);
-	await initializeLocalDeletionTracking(plugin);
-	const file = Object.assign(new TFile(), { path: "Keep/a.md" });
-	await plugin.app.vault.trash(file, false);
-	await plugin.app.vault.delete(file, true);
-	await plugin.app.vault.rename(file, "Other/a.md");
-	expect(originals.trash).toHaveBeenCalledWith(file, false);
-	expect(originals.delete).toHaveBeenCalledWith(file, true);
-	expect(originals.rename).toHaveBeenCalledWith(file, "Other/a.md");
-	expect(receivers).toEqual([vault, vault, vault]);
-	cleanup();
-	expect(Object.getOwnPropertyDescriptors(vault)).toEqual(before);
-	expect(plugin.app.vault.trash).toBe(originals.trash);
-	expect(plugin.app.vault.delete).toBe(originals.delete);
-	expect(plugin.app.vault.rename).toBe(originals.rename);
-	expect(getDeletionLedger(plugin)).toBeUndefined();
+it("never replaces Vault removal or rename methods and initializes only once", async () => {
+	const before = Object.getOwnPropertyDescriptors(fixture.vault);
+	expect(jest.isMockFunction(fixture.plugin.app.vault.trash)).toBe(true);
+	const ledger = getDeletionLedger(fixture.plugin);
+	await initializeLocalDeletionTracking(fixture.plugin);
+	expect(getDeletionLedger(fixture.plugin)).toBe(ledger);
+	expect(Object.getOwnPropertyDescriptors(fixture.vault)).toEqual(before);
+	fixture.cleanup();
+	expect(getDeletionLedger(fixture.plugin)).toBeUndefined();
 });
 
-it("leaves a later plugin's replacement hook intact on unload", async () => {
-	const { plugin, originals } = fixture();
-	await initializeLocalDeletionTracking(plugin);
-	const laterTrash = jest.fn(async () => undefined);
-	plugin.app.vault.trash = laterTrash;
-	cleanup();
-	expect(plugin.app.vault.trash).toBe(laterTrash);
-	expect(plugin.app.vault.delete).toBe(originals.delete);
-	expect(plugin.app.vault.rename).toBe(originals.rename);
+it.each(["create", "modify", "delete"])("only in-scope %s events invalidate membership scans", (event) => {
+	const before = fixture.ledger.generation;
+	fixture.emit(event, Object.assign(new TFile(), { path: "Other/a.md" }));
+	fixture.emit(event, Object.assign(new TFile(), { path: ".obsidian/workspace.json" }));
+	expect(fixture.ledger.generation).toBe(before);
+	fixture.emit(event, Object.assign(new TFile(), { path: "Keep/a.md" }));
+	expect(fixture.ledger.generation).toBe(before + 1);
 });
 
-it("restores earlier wrappers when a later method cannot be replaced", async () => {
-	const { plugin, vault } = fixture();
-	Object.defineProperty(vault, "rename", { writable: false });
-	const before = Object.getOwnPropertyDescriptors(vault);
-	await initializeLocalDeletionTracking(plugin);
-	expect(Object.getOwnPropertyDescriptors(vault)).toEqual(before);
-	expect(getDeletionLedger(plugin)).toBeUndefined();
+it("tracks both sides of rename for scan stability without creating tombstones", async () => {
+	await fixture.download("a");
+	const before = fixture.ledger.generation;
+	await fixture.plugin.app.vault.rename(fixture.files.get("Keep/a.md")!, "Other/a.md");
+	expect(fixture.ledger.generation).toBeGreaterThan(before);
+	expect((await fixture.ledger.records())[0].baseline).toBe("synced");
+	expect(fixture.stored.get("Other/a.md")).toBe(noteText("a"));
 });
 
-it("propagates a failed removal without confirming a witness or falling back to delete", async () => {
-	const { plugin, originals } = fixture();
-	const confirm = jest.spyOn(LocalDeletionLedger.prototype, "confirmIntent");
-	await initializeLocalDeletionTracking(plugin);
-	const error = new Error("fixture removal failed");
-	originals.trash.mockRejectedValueOnce(error);
-	const file = Object.assign(new TFile(), { path: "Keep/a.md" });
-	await expect(plugin.app.vault.trash(file, false)).rejects.toBe(error);
-	expect(confirm).not.toHaveBeenCalled();
-	expect(originals.delete).not.toHaveBeenCalled();
-	await expect(plugin.app.vault.trash(file, false)).resolves.toBeUndefined();
-	expect(originals.trash).toHaveBeenCalledTimes(2);
+it("retains the baseline when the native removal fails", async () => {
+	await fixture.download("a");
+	fixture.vault.trash.mockRejectedValueOnce(new Error("native failure"));
+	await expect(fixture.trash("a")).rejects.toThrow("native failure");
+	expect(fixture.stored.has("Keep/a.md")).toBe(true);
+	expect(fixture.vault.delete).not.toHaveBeenCalled();
+	expect(await fixture.ledger.records()).toHaveLength(1);
+});
+
+it("persists a fresh epoch before saving changed scope settings, including a return", async () => {
+	const save = jest.spyOn(KeepSidianPlugin.prototype, "saveSettings").mockResolvedValue(undefined);
+	await fixture.download("a");
+	const original = await fixture.ledger.context();
+	fixture.plugin.settings.saveLocation = "Other";
+	await KeepSidianEntryPlugin.prototype.saveSettings.call(fixture.plugin);
+	fixture.plugin.settings.saveLocation = "Keep";
+	await KeepSidianEntryPlugin.prototype.saveSettings.call(fixture.plugin);
+	expect(save).toHaveBeenCalledTimes(2);
+	expect((await fixture.ledger.context()).generation).not.toBe(original.generation);
+	expect(await fixture.ledger.records()).toEqual([]);
 });
 
 it.each([
