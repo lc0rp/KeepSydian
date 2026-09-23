@@ -16,7 +16,7 @@ export default class KeepSidianEntryPlugin extends KeepSidianPlugin {
 			// later must not revive a baseline from an earlier membership epoch.
 			await getDeletionLedger(this)?.refreshContext();
 		} catch {
-			new Notice("KeepSidian: folder membership metadata could not be confirmed. Keep Trash proposals remain disabled until a valid baseline is available.");
+			new Notice("Folder membership metadata could not be confirmed. Removal proposals remain disabled until a valid baseline is available.");
 		}
 		await super.saveSettings();
 	}
