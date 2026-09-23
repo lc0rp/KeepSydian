@@ -5,7 +5,7 @@ import { normalizeNote, type PreNormalizedNote } from "../domain/note";
 import { scanLocalIdentities, type IdentityScan } from "./scan";
 import {
 	decodeLedger, deletionAccount, deletionScope, encodeLedger, isSafeVaultPath,
-	isWithinScope, recordGeneration, MAX_DELETION_RECORDS,
+	isWithinScope, recordGeneration, sha256, MAX_DELETION_RECORDS,
 	type DeletionContext, type DownloadedRevisionReceipt, type LocalDeletionRecord,
 	type LocalDeletionState, type StoredDeletionState,
 } from "./state";
@@ -29,6 +29,7 @@ export class LocalDeletionLedger {
 	private blocked = false;
 	private revision = 0;
 	private session?: ReceiptSession;
+	private invalidatedSession?: string;
 
 	constructor(readonly plugin: KeepSidianPlugin, readonly metadataPath: string) {
 		if (!isSafeVaultPath(metadataPath)) throw new Error("Unsafe deletion metadata path.");
@@ -48,7 +49,9 @@ export class LocalDeletionLedger {
 	private async settingsContext(): Promise<{ account: string; scope: string }> {
 		const email = this.plugin.settings.email.trim().toLowerCase();
 		const scope = deletionScope(this.plugin.settings.saveLocation);
-		const account = await deletionAccount(email);
+		// Clearing account settings must durably invalidate the old scope too.
+		// This empty context has no authenticated receipts or eligible records.
+		const account = email ? await deletionAccount(email) : await sha256("keep-unconfigured-account-v2");
 		if (email !== this.plugin.settings.email.trim().toLowerCase() || scope !== deletionScope(this.plugin.settings.saveLocation)) {
 			throw new Error("The account or sync folder changed while reading membership context.");
 		}
@@ -98,8 +101,6 @@ export class LocalDeletionLedger {
 			if (await adapter.read(this.metadataPath) !== text) throw new Error("Membership write was not confirmed.");
 			await assertContext();
 		} catch {
-			// Preserve the last acknowledged baseline on a late event or failed
-			// readback. A failed rollback still blocks all use in this session.
 			this.blocked = true;
 			if (previousText !== undefined) {
 				try { await adapter.write(this.metadataPath, previousText); } catch { /* Remain blocked. */ }
@@ -129,6 +130,7 @@ export class LocalDeletionLedger {
 			}
 			const next: LocalDeletionState = { version: 2, ...current, generation: recordGeneration(), records };
 			await this.persist(next);
+			if (this.session) this.invalidatedSession = this.session.id;
 			this.session = undefined;
 			this.changed();
 			return { ...current, generation: next.generation };
@@ -162,6 +164,7 @@ export class LocalDeletionLedger {
 
 	async beginReceipts(id: string): Promise<void> {
 		const context = await this.context();
+		if (this.invalidatedSession === id) throw new Error("The receipt session's account or folder changed. Start a fresh review.");
 		if (this.session?.id === id && sameContext(context, this.session)) return;
 		this.session = { id, ...context, receipts: new Map() };
 	}
@@ -183,10 +186,14 @@ export class LocalDeletionLedger {
 			revision: revision && KEEP_REVISION_PATTERN.test(revision) ? revision : undefined });
 	}
 
-	discardReceipts(id: string): void { if (this.session?.id === id) this.session = undefined; }
+	discardReceipts(id: string): void {
+		if (this.session?.id === id) this.session = undefined;
+		if (this.invalidatedSession === id) this.invalidatedSession = undefined;
+	}
 
 	/** Selection may be partial; the independent folder inventory must be complete. */
 	async finishReceipts(id: string): Promise<boolean> {
+		if (this.invalidatedSession === id) throw new Error("The receipt session's account or folder changed. No checkpoint may advance.");
 		const session = this.session;
 		if (!session || session.id !== id) return !this.blocked;
 		const context = await this.context();
