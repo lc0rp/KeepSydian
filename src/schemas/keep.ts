@@ -8,6 +8,7 @@ export const PreNormalizedNoteSchema = z.object({
 	body: z.string().optional(),
 	created: z.string().nullable().optional(),
 	updated: z.string().nullable().optional(),
+	remote_revision: z.string().regex(/^keep-v1:[a-f0-9]{64}$/).optional(),
 	color: z.string().optional(),
 	pinned: z.boolean().optional(),
 	frontmatter: z.string().optional(),
