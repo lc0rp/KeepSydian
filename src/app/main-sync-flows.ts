@@ -47,7 +47,7 @@ export interface PreparedSyncPlan {
 	importEntryIds?: string[];
 	deletions?: PreparedDeletions;
 	localDeletions?: PreparedLocalDeletions;
-	deletionContext?: { account: string; scope: string };
+	deletionContext?: { account: string; scope: string; generation: string };
 	protectedLocalKeepUrls?: string[];
 	archivedStatus?: KeepArchivedStatus;
 	completionDate?: string;
@@ -138,15 +138,16 @@ async function getManualSupportState(plugin: KeepSidianPlugin): Promise<boolean>
 async function assertPreparedDeletionContext(plugin: KeepSidianPlugin, prepared: PreparedSyncPlan): Promise<void> {
 	if (!prepared.deletionContext) return;
 	const current = await getDeletionLedger(plugin)?.context();
-	if (!current || current.account !== prepared.deletionContext.account || current.scope !== prepared.deletionContext.scope) {
-		throw new Error("The Google Keep account or sync folder changed. Refresh the review plan before applying it.");
+	if (!current || current.account !== prepared.deletionContext.account || current.scope !== prepared.deletionContext.scope ||
+		current.generation !== prepared.deletionContext.generation) {
+		throw new Error("The Google Keep account or sync-folder baseline changed. Refresh the review plan before applying it.");
 	}
 }
 
 async function finishDeletionReceipts(plugin: KeepSidianPlugin, attempt: SyncAttempt): Promise<boolean> {
 	const completed = await getDeletionLedger(plugin)?.finishReceipts(attempt.id);
 	if (completed === false) {
-		new Notice("Notes were processed, but a complete deletion baseline could not be recorded. No new deletion eligibility or successful-sync checkpoint was advanced.");
+		new Notice("Notes were processed, but a complete sync-folder membership baseline could not be recorded. No new removal eligibility or successful-sync checkpoint was advanced.");
 		return false;
 	}
 	return true;
@@ -223,8 +224,8 @@ async function buildManualSyncPlanCore(
 			forceUploadPaths: callbacks.forceUploadPaths ? [...callbacks.forceUploadPaths] : undefined,
 		};
 	}
-	// This protection is independent of download filters and runs before the
-	// download half of two-way sync can recreate a locally removed identity.
+	// Membership protection precedes the download half of two-way sync and is
+	// independent of optional download filters and per-note review selections.
 	const protectedKeepUrls = await getLocalDeletionProtection(plugin);
 	const builtImportPlan = await buildImportSyncPlan(
 		plugin,
@@ -243,7 +244,7 @@ async function buildManualSyncPlanCore(
 		if (!identity || !protectedKeepUrls.has(identity)) return entry;
 		return { ...entry, action: "skipped-conflict" as const, label: "Preserved local removal", selectable: false,
 			selected: false, selectionLocked: false, meta: { ...entry.meta,
-				detail: "This identity is known locally but is absent from the active vault. Review its deletion in the upload plan; this download will not recreate it." } };
+				detail: "This tracked identity is absent from the configured sync folder. Review its removal in the upload plan; this download will not recreate it." } };
 	});
 	entries.push(...deletions.entries);
 	return {
@@ -420,7 +421,7 @@ export async function runPreparedSyncPlan(
 			(preparedPlan.mode === "import" && (preparedPlan.protectedLocalKeepUrls?.length ?? 0) > 0);
 		if (blocked) {
 			getDeletionLedger(plugin)?.discardReceipts(attempt.id);
-			new Notice("Conflicts or unverified local removals were preserved. The last successful sync checkpoint has not advanced.");
+			new Notice("Conflicts or unverified folder removals were preserved. The last successful sync checkpoint has not advanced.");
 			return;
 		}
 		if (!await finishDeletionReceipts(plugin, attempt)) return;
