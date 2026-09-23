@@ -6,7 +6,7 @@ import { canonicalKeepUrl } from "@integrations/server/keepDeletions";
 import { contentKeepIdentity } from "./scan";
 import { getDeletionLedger } from "./ledger";
 
-/** Recheck at the write boundary, not only when the review plan was built. */
+/** Recheck folder membership at the write boundary, including offline changes. */
 export async function assertDownloadIdentityPresentOrUntracked(plugin: KeepSidianPlugin, note: PreNormalizedNote): Promise<void> {
 	const ledger = getDeletionLedger(plugin);
 	if (!ledger) return;
@@ -17,18 +17,18 @@ export async function assertDownloadIdentityPresentOrUntracked(plugin: KeepSidia
 	try {
 		const content = await plugin.app.vault.adapter.read(record.path);
 		if (contentKeepIdentity(content) === keepUrl) return;
-	} catch { /* A missing original path may be a move; require an unfiltered scan. */ }
+	} catch { /* An in-folder rename may still contain the identity. */ }
 	const scan = await ledger.scan();
 	plugin.throwIfSyncCancelled?.();
 	if (!scan.complete || !scan.identities.get(keepUrl)?.length) {
-		throw new Error("A previously downloaded note is now absent locally. Review its removal in Sync Center; this download will not recreate it.");
+		throw new Error("A previously synced note is no longer in the sync folder. Review its removal in Sync Center; this download will not recreate it.");
 	}
 }
 
 /**
- * Nonselectable identical rows have been downloaded and compared, not unchecked
- * by the user. Recheck that comparison before enrolling their snapshot receipt.
- * Unchecked actionable rows and conflict copies never enter this path.
+ * Recheck identical rows before enrolling their snapshot receipts. Unchecked
+ * actionable rows and conflict copies receive no new baseline. Selection may
+ * be partial; the separate folder inventory must still be complete and stable.
  */
 export async function stageIdenticalDownloadReceipts(
 	plugin: KeepSidianPlugin,
