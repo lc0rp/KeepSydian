@@ -304,7 +304,7 @@ it("acknowledges already-trashed state safely after a lost response", async () =
 it.each(["restored", "gate", "metadata", "scope", "account"])("revalidates %s before any selected mutation", async (kind) => {
 	const plan = await absent("a"); jest.mocked(api.requestKeepTrash).mockClear();
 	if (kind === "restored") fixture.put("Keep/nested/restored.md", noteText("a"));
-	if (kind === "gate") jest.mocked(fixture.plugin.requireTwoWaySafeguards).mockResolvedValue({ allowed: false, reasons: [], autoUpgrade: false });
+	if (kind === "gate") jest.mocked(fixture.plugin.requireTwoWaySafeguards).mockResolvedValue({ allowed: false, reasons: [] });
 	if (kind === "metadata") fixture.stored.set(METADATA, "invalid");
 	if (kind === "scope") fixture.plugin.settings.saveLocation = "Other";
 	if (kind === "account") fixture.plugin.settings.email = "other@example.com";
