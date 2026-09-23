@@ -9,7 +9,7 @@ import * as imports from "@features/keep/sync";
 import * as collector from "@features/keep/push/collectNotes";
 import * as trashApi from "@integrations/server/keepTrash";
 import * as inboundApi from "@integrations/server/keepDeletions";
-import { deletionFixture, keepUrl, noteText } from "@features/keep/local-deletions/tests/support";
+import { deletionFixture, keepUrl, noteText, REVISION } from "@features/keep/local-deletions/tests/support";
 
 const cryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto");
 const encoderDescriptor = Object.getOwnPropertyDescriptor(globalThis, "TextEncoder");
@@ -36,8 +36,7 @@ afterEach(() => { fixture.cleanup(); jest.restoreAllMocks(); });
 
 async function prepareTwoWay() {
 	await fixture.download("a", "b");
-	await fixture.trash("a");
-	await fixture.trash("b");
+	fixture.remove("Keep/a.md"); fixture.remove("Keep/b.md");
 	const entries = ["a", "b"].map((id, index) => createSyncPlanEntryFixture("create", "Create", {
 		id: `import:${index}`, path: `Keep/${id}.md`,
 	}));
@@ -51,11 +50,11 @@ async function prepareTwoWay() {
 	return { prepared, save };
 }
 
-it("manual Push counts individual deletions and honors an unchecked row", async () => {
+it("manual Push counts individual removals and honors an unchecked row", async () => {
 	await fixture.download("a", "b");
-	await fixture.trash("a"); await fixture.trash("b");
+	fixture.remove("Keep/a.md"); fixture.remove("Keep/b.md");
 	const prepared = (await buildManualSyncPlan(fixture.plugin, "push"))!;
-	expect(prepared.plan).toMatchObject({ counts: { "Delete from Google Keep": 2 }, actionableCount: 2, selectedCount: 2 });
+	expect(prepared.plan).toMatchObject({ counts: { "No longer in sync folder": 2 }, actionableCount: 2, selectedCount: 2 });
 	prepared.plan.entries.find((entry) => entry.path === "Keep/b.md")!.selected = false;
 	const settled = jest.fn();
 	await expect(runPreparedSyncPlan(fixture.plugin, prepared, String, jest.fn(), { onEntrySettled: settled })).resolves.toEqual({});
@@ -66,13 +65,13 @@ it("manual Push counts individual deletions and honors an unchecked row", async 
 	expect(settled).toHaveBeenCalledWith(prepared.plan.entries[0].id, true, "delete");
 });
 
-it("protects local removals before two-way download and presents them in upload review", async () => {
+it("protects offline removals before two-way download and presents upload review", async () => {
 	const { prepared, save } = await prepareTwoWay();
 	const checkpoint = fixture.plugin.settings.keepSidianLastSuccessfulSyncDate;
 	expect(prepared.plan.entries.every((entry) => !entry.selectable && entry.label === "Preserved local removal")).toBe(true);
 	const success = jest.fn();
 	const result = await runPreparedSyncPlan(fixture.plugin, prepared, String, success);
-	expect(result.nextPlan?.plan).toMatchObject({ stage: "upload", counts: { "Delete from Google Keep": 2 } });
+	expect(result.nextPlan?.plan).toMatchObject({ stage: "upload", counts: { "No longer in sync folder": 2 } });
 	expect(save).toHaveBeenCalledWith(fixture.plugin, [], expect.any(Object), undefined, []);
 	expect(fixture.plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(checkpoint);
 	expect(success).not.toHaveBeenCalled();
@@ -112,8 +111,8 @@ it("shows a late remote conflict and retains the original checkpoint", async () 
 	expect(success).not.toHaveBeenCalled();
 });
 
-it("stops an automatic download rather than recreating an unchecked local removal", async () => {
-	await fixture.download("a"); await fixture.trash("a");
+it("stops automatic download instead of recreating offline folder removals", async () => {
+	await fixture.download("a"); fixture.remove("Keep/a.md");
 	const download = jest.spyOn(imports, "importGoogleKeepNotes").mockResolvedValue(1);
 	const checkpoint = fixture.plugin.settings.keepSidianLastSuccessfulSyncDate;
 	await runImportNotesFlow(fixture.plugin, true, String);
@@ -121,4 +120,32 @@ it("stops an automatic download rather than recreating an unchecked local remova
 	expect(trashApi.requestKeepTrash).not.toHaveBeenCalled();
 	expect(fixture.stored.has("Keep/a.md")).toBe(false);
 	expect(fixture.plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(checkpoint);
+});
+
+it("rejects a prepared download after a folder change and return", async () => {
+	const { prepared, save } = await prepareTwoWay();
+	const checkpoint = fixture.plugin.settings.keepSidianLastSuccessfulSyncDate;
+	fixture.plugin.settings.saveLocation = "Other"; await fixture.ledger.refreshContext();
+	fixture.plugin.settings.saveLocation = "Keep"; await fixture.ledger.refreshContext();
+	await expect(runPreparedSyncPlan(fixture.plugin, prepared, String, jest.fn())).resolves.toEqual({ failed: true });
+	expect(save).not.toHaveBeenCalled();
+	expect(fixture.plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(checkpoint);
+	expect(jest.mocked(trashApi.requestKeepTrash).mock.calls.filter((call) => call[3])).toEqual([]);
+});
+
+it("enrolls only the selected download with 124 unchecked actionable rows", async () => {
+	const ids = Array.from({ length: 125 }, (_, index) => `fixture-${index}`);
+	const entries = ids.map((id, index) => createSyncPlanEntryFixture("create", "Create", {
+		id: `import:${index}`, path: `Keep/${id}.md`, selected: index === 0,
+	}));
+	jest.spyOn(imports, "buildImportSyncPlan").mockResolvedValue({
+		plan: createPreparedSyncPlanFixture("import", "import", entries).plan,
+		notes: ids.map((id) => ({ title: id, text: noteText(id), remote_revision: REVISION })),
+		noteEntryIds: entries.map((entry) => entry.id), completionDate,
+	});
+	const prepared = (await buildManualSyncPlan(fixture.plugin, "import"))!;
+	await expect(runPreparedSyncPlan(fixture.plugin, prepared, String, jest.fn())).resolves.toEqual({});
+	expect((await fixture.ledger.records()).map((record) => record.keepUrl)).toEqual([keepUrl(ids[0])]);
+	expect(fixture.stored.has(`Keep/${ids[1]}.md`)).toBe(false);
+	expect(fixture.plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(completionDate);
 });
