@@ -30,9 +30,24 @@ export async function initializeLocalDeletionTracking(plugin: KeepSidianPlugin):
 	const ledger = new LocalDeletionLedger(plugin, `${directory}/local-deletions-v1.json`);
 	await ledger.ready;
 	const runtime: TrackingRuntime = { suppressed: 0, removals: new Set(), moves: new Set() };
-	const originalTrash = vault.trash;
-	const originalDelete = vault.delete;
-	const originalRename = vault.rename;
+	// Keep exact descriptors for restoration, including inherited methods. Invoke
+	// bound functions so every forwarded call retains its original Vault receiver.
+	const originalDescriptors = {
+		trash: Object.getOwnPropertyDescriptor(vault, "trash"),
+		delete: Object.getOwnPropertyDescriptor(vault, "delete"),
+		rename: Object.getOwnPropertyDescriptor(vault, "rename"),
+	};
+	// The project does not enable strictBindCallApply; retain the known signatures
+	// after bind rather than allowing its untyped return to escape into callbacks.
+	const originalTrash = vault.trash.bind(vault) as typeof vault.trash;
+	const originalDelete = vault.delete.bind(vault) as typeof vault.delete;
+	const originalRename = vault.rename.bind(vault) as typeof vault.rename;
+	const restoreHook = (name: keyof typeof originalDescriptors, wrapper: unknown): void => {
+		if (vault[name] !== wrapper) return;
+		const descriptor = originalDescriptors[name];
+		if (descriptor) Object.defineProperty(vault, name, descriptor);
+		else Reflect.deleteProperty(vault, name);
+	};
 
 	const remove = async (
 		file: TAbstractFile,
@@ -52,13 +67,13 @@ export async function initializeLocalDeletionTracking(plugin: KeepSidianPlugin):
 			}
 		} finally { runtime.removals.delete(path); }
 	};
-	const wrappedTrash: typeof vault.trash = async (file, system) => remove(file, "obsidian-trash", () => originalTrash.call(vault, file, system));
-	const wrappedDelete: typeof vault.delete = async (file, force) => remove(file, "obsidian-delete", () => originalDelete.call(vault, file, force));
+	const wrappedTrash: typeof vault.trash = async (file, system) => remove(file, "obsidian-trash", () => originalTrash(file, system));
+	const wrappedDelete: typeof vault.delete = async (file, force) => remove(file, "obsidian-delete", () => originalDelete(file, force));
 	const wrappedRename: typeof vault.rename = async (file, newPath) => {
 		const oldPath = file.path;
 		const internalTrashMove = runtime.suppressed > 0 || isWithinOperation(oldPath, runtime.removals);
 		runtime.moves.add(oldPath);
-		try { await originalRename.call(vault, file, newPath); }
+		try { await originalRename(file, newPath); }
 		finally { runtime.moves.delete(oldPath); }
 		// An explicit trash implementation may internally rename into .trash.
 		// Its outer removal witness, not that internal move, owns the ledger.
@@ -73,9 +88,9 @@ export async function initializeLocalDeletionTracking(plugin: KeepSidianPlugin):
 		vault.delete = wrappedDelete;
 		vault.rename = wrappedRename;
 	} catch {
-		if (vault.trash === wrappedTrash) vault.trash = originalTrash;
-		if (vault.delete === wrappedDelete) vault.delete = originalDelete;
-		if (vault.rename === wrappedRename) vault.rename = originalRename;
+		restoreHook("trash", wrappedTrash);
+		restoreHook("delete", wrappedDelete);
+		restoreHook("rename", wrappedRename);
 		new Notice("KeepSidian: explicit local deletion tracking is unavailable. No upload deletion will be inferred from missing files.");
 		return;
 	}
@@ -91,9 +106,9 @@ export async function initializeLocalDeletionTracking(plugin: KeepSidianPlugin):
 		}
 	}));
 	plugin.register(() => {
-		if (vault.trash === wrappedTrash) vault.trash = originalTrash;
-		if (vault.delete === wrappedDelete) vault.delete = originalDelete;
-		if (vault.rename === wrappedRename) vault.rename = originalRename;
+		restoreHook("trash", wrappedTrash);
+		restoreHook("delete", wrappedDelete);
+		restoreHook("rename", wrappedRename);
 		runtimes.delete(plugin);
 		unregisterDeletionLedger(plugin);
 	});
