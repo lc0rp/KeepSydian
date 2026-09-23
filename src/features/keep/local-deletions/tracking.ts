@@ -6,8 +6,12 @@ import {
 } from "./ledger";
 import { isSafeVaultPath } from "./state";
 
-interface TrackingRuntime { suppressed: number; deleting: number; moving: number; }
+interface TrackingRuntime { suppressed: number; removals: Set<string>; moves: Set<string>; }
 const runtimes = new WeakMap<KeepSidianPlugin, TrackingRuntime>();
+
+function isWithinOperation(path: string, operations: ReadonlySet<string>): boolean {
+	return [...operations].some((root) => path === root || path.startsWith(`${root}/`));
+}
 
 /**
  * A filesystem delete event cannot distinguish deletion from an external move.
@@ -25,7 +29,7 @@ export async function initializeLocalDeletionTracking(plugin: KeepSidianPlugin):
 	if (!isSafeVaultPath(directory)) return;
 	const ledger = new LocalDeletionLedger(plugin, `${directory}/local-deletions-v1.json`);
 	await ledger.ready;
-	const runtime: TrackingRuntime = { suppressed: 0, deleting: 0, moving: 0 };
+	const runtime: TrackingRuntime = { suppressed: 0, removals: new Set(), moves: new Set() };
 	const originalTrash = vault.trash;
 	const originalDelete = vault.delete;
 	const originalRename = vault.rename;
@@ -35,27 +39,33 @@ export async function initializeLocalDeletionTracking(plugin: KeepSidianPlugin):
 		witness: "obsidian-trash" | "obsidian-delete",
 		operation: () => Promise<void>
 	): Promise<void> => {
-		if (runtime.suppressed || runtime.deleting || runtime.moving) return operation();
-		runtime.deleting += 1;
+		const path = file.path;
+		if (runtime.suppressed || isWithinOperation(path, runtime.removals) || isWithinOperation(path, runtime.moves)) return operation();
+		runtime.removals.add(path);
 		let intent: LocalDeletionIntent | undefined;
 		try {
-			try { intent = await ledger.captureIntent(file.path); } catch { /* Local deletion remains available; no unsafe witness is manufactured. */ }
+			try { intent = await ledger.captureIntent(path); } catch { /* Local deletion remains available; no unsafe witness is manufactured. */ }
 			await operation();
 			if (intent?.records.length) {
 				try { await ledger.confirmIntent(intent, witness); }
 				catch { new Notice("KeepSidian: the local removal could not be safely recorded for upload. No Google Keep deletion was authorized."); }
 			}
-		} finally { runtime.deleting -= 1; }
+		} finally { runtime.removals.delete(path); }
 	};
 	const wrappedTrash: typeof vault.trash = async (file, system) => remove(file, "obsidian-trash", () => originalTrash.call(vault, file, system));
 	const wrappedDelete: typeof vault.delete = async (file, force) => remove(file, "obsidian-delete", () => originalDelete.call(vault, file, force));
 	const wrappedRename: typeof vault.rename = async (file, newPath) => {
 		const oldPath = file.path;
-		runtime.moving += 1;
+		const internalTrashMove = runtime.suppressed > 0 || isWithinOperation(oldPath, runtime.removals);
+		runtime.moves.add(oldPath);
 		try { await originalRename.call(vault, file, newPath); }
-		finally { runtime.moving -= 1; }
-		try { await ledger.renamed(oldPath, newPath); }
-		catch { /* A metadata failure disables outbound deletion, never the move itself. */ }
+		finally { runtime.moves.delete(oldPath); }
+		// An explicit trash implementation may internally rename into .trash.
+		// Its outer removal witness, not that internal move, owns the ledger.
+		if (!internalTrashMove) {
+			try { await ledger.renamed(oldPath, newPath); }
+			catch { /* A metadata failure disables outbound deletion, never the move itself. */ }
+		}
 	};
 
 	try {
@@ -66,6 +76,7 @@ export async function initializeLocalDeletionTracking(plugin: KeepSidianPlugin):
 		if (vault.trash === wrappedTrash) vault.trash = originalTrash;
 		if (vault.delete === wrappedDelete) vault.delete = originalDelete;
 		if (vault.rename === wrappedRename) vault.rename = originalRename;
+		new Notice("KeepSidian: explicit local deletion tracking is unavailable. No upload deletion will be inferred from missing files.");
 		return;
 	}
 	runtimes.set(plugin, runtime);
@@ -75,7 +86,9 @@ export async function initializeLocalDeletionTracking(plugin: KeepSidianPlugin):
 	plugin.registerEvent(vault.on("delete", () => ledger.changed()));
 	plugin.registerEvent(vault.on("rename", (file, oldPath) => {
 		ledger.changed();
-		void ledger.renamed(oldPath, file.path).catch(() => undefined);
+		if (!runtime.suppressed && !isWithinOperation(oldPath, runtime.removals)) {
+			void ledger.renamed(oldPath, file.path).catch(() => undefined);
+		}
 	}));
 	plugin.register(() => {
 		if (vault.trash === wrappedTrash) vault.trash = originalTrash;
