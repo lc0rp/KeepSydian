@@ -14,7 +14,7 @@ export default class KeepSidianEntryPlugin extends KeepSidianPlugin {
 		try {
 			// Persist invalidation before new account/folder settings. Switching back
 			// later must not revive a baseline from an earlier membership epoch.
-			if (this.settings.email.trim()) await getDeletionLedger(this)?.refreshContext();
+			await getDeletionLedger(this)?.refreshContext();
 		} catch {
 			new Notice("KeepSidian: folder membership metadata could not be confirmed. Keep Trash proposals remain disabled until a valid baseline is available.");
 		}
