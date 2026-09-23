@@ -51,6 +51,7 @@ export interface PushNoteResult {
 	message?: string;
 	error?: string;
 	keep_url?: string;
+	remote_revision?: string;
 }
 
 export interface PushNotesResponse {
