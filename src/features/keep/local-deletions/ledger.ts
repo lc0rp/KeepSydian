@@ -2,27 +2,28 @@ import type KeepSidianPlugin from "@app/main";
 import { canonicalKeepUrl } from "@integrations/server/keepDeletions";
 import { KEEP_REVISION_PATTERN } from "@integrations/server/keepTrash";
 import { normalizeNote, type PreNormalizedNote } from "../domain/note";
-import { contentKeepIdentity, scanLocalIdentities, type IdentityScan } from "./scan";
+import { scanLocalIdentities, type IdentityScan } from "./scan";
 import {
 	decodeLedger, deletionAccount, deletionScope, encodeLedger, isSafeVaultPath,
 	isWithinScope, recordGeneration, MAX_DELETION_RECORDS,
-	type DownloadedRevisionReceipt, type LocalDeletionRecord, type LocalDeletionState,
+	type DeletionContext, type DownloadedRevisionReceipt, type LocalDeletionRecord,
+	type LocalDeletionState, type StoredDeletionState,
 } from "./state";
 
-interface ReceiptSession {
+interface ReceiptSession extends DeletionContext {
 	id: string;
-	account: string;
-	scope: string;
 	receipts: Map<string, DownloadedRevisionReceipt>;
 }
-export interface LocalDeletionIntent { account: string; records: LocalDeletionRecord[]; }
-
 const ledgers = new WeakMap<KeepSidianPlugin, LocalDeletionLedger>();
 
-/** All durable writes are serialized independently of settings/credential saves. */
+function sameContext(a: DeletionContext, b: DeletionContext): boolean {
+	return a.account === b.account && a.scope === b.scope && a.generation === b.generation;
+}
+
+/** Folder membership is proved by complete scans; events only detect instability. */
 export class LocalDeletionLedger {
 	readonly ready: Promise<void>;
-	private state?: LocalDeletionState;
+	private state?: StoredDeletionState;
 	private diskText?: string;
 	private queue: Promise<void> = Promise.resolve();
 	private blocked = false;
@@ -44,8 +45,14 @@ export class LocalDeletionLedger {
 	get generation(): number { return this.revision; }
 	changed(): void { this.revision += 1; }
 
-	async context(): Promise<{ account: string; scope: string }> {
-		return { account: await deletionAccount(this.plugin.settings.email), scope: deletionScope(this.plugin.settings.saveLocation) };
+	private async settingsContext(): Promise<{ account: string; scope: string }> {
+		const email = this.plugin.settings.email.trim().toLowerCase();
+		const scope = deletionScope(this.plugin.settings.saveLocation);
+		const account = await deletionAccount(email);
+		if (email !== this.plugin.settings.email.trim().toLowerCase() || scope !== deletionScope(this.plugin.settings.saveLocation)) {
+			throw new Error("The account or sync folder changed while reading membership context.");
+		}
+		return { account, scope };
 	}
 
 	private async verifyDisk(): Promise<void> {
@@ -64,163 +71,171 @@ export class LocalDeletionLedger {
 		await this.verifyDisk();
 	}
 
-	async records(): Promise<LocalDeletionRecord[]> {
-		await this.verify();
-		const { account } = await this.context();
-		return this.state?.account === account ? this.state.records.map((record) => ({ ...record })) : [];
-	}
-
-	async scan(): Promise<IdentityScan> {
-		await this.verify();
-		return scanLocalIdentities(this.plugin, this.metadataPath, () => this.generation);
-	}
-
-	private async mutate(
-		account: string,
-		change: (records: LocalDeletionRecord[]) => Promise<LocalDeletionRecord[]> | LocalDeletionRecord[]
-	): Promise<void> {
+	private async serialized<T>(work: () => Promise<T>): Promise<T> {
 		const operation = this.queue.then(async () => {
 			await this.ready;
 			await this.verifyDisk();
-			if ((await this.context()).account !== account) throw new Error("The Keep account changed. Refresh the deletion plan.");
-			const records = await change(this.state?.account === account ? this.state.records.map((record) => ({ ...record })) : []);
-			if (records.length > MAX_DELETION_RECORDS) throw new Error("Deletion metadata capacity reached; no baseline was advanced.");
-			const next: LocalDeletionState = { version: 1, account, records };
-			const text = await encodeLedger(next);
-			if (text === this.diskText) return;
-			try {
-				await this.plugin.app.vault.adapter.write(this.metadataPath, text);
-				if (await this.plugin.app.vault.adapter.read(this.metadataPath) !== text) throw new Error("Deletion metadata write was not confirmed.");
-			} catch {
-				this.blocked = true;
-				throw new Error("Deletion metadata could not be saved. Unconfirmed rows remain unacknowledged.");
-			}
-			this.state = next;
-			this.diskText = text;
+			return work();
 		});
-		this.queue = operation.catch(() => undefined);
-		await operation;
+		this.queue = operation.then(() => undefined, () => undefined);
+		return operation;
+	}
+
+	private async persist(next: LocalDeletionState, guard: () => void = () => undefined): Promise<void> {
+		if (next.records.length > MAX_DELETION_RECORDS) throw new Error("Deletion metadata capacity reached; no baseline was advanced.");
+		const text = await encodeLedger(next);
+		const assertContext = async () => {
+			const current = await this.settingsContext();
+			if (current.account !== next.account || current.scope !== next.scope) throw new Error("The account or sync folder changed before membership was saved.");
+			guard();
+		};
+		await assertContext();
+		if (text === this.diskText) return;
+		const previousText = this.diskText;
+		const adapter = this.plugin.app.vault.adapter;
+		try {
+			await adapter.write(this.metadataPath, text);
+			if (await adapter.read(this.metadataPath) !== text) throw new Error("Membership write was not confirmed.");
+			await assertContext();
+		} catch {
+			// Preserve the last acknowledged baseline on a late event or failed
+			// readback. A failed rollback still blocks all use in this session.
+			this.blocked = true;
+			if (previousText !== undefined) {
+				try { await adapter.write(this.metadataPath, previousText); } catch { /* Remain blocked. */ }
+			}
+			throw new Error("Deletion metadata could not be confirmed. No baseline or checkpoint was advanced.");
+		}
+		this.state = next;
+		this.diskText = text;
+	}
+
+	/** Persist scope changes even when settings later return to the old folder. */
+	async refreshContext(): Promise<DeletionContext> {
+		return this.serialized(async () => {
+			const current = await this.settingsContext();
+			if (this.state?.version === 2 && this.state.account === current.account && this.state.scope === current.scope) {
+				return { ...current, generation: this.state.generation };
+			}
+			const records: LocalDeletionRecord[] = [];
+			if (this.state?.version === 1 && this.state.account === current.account) {
+				for (const record of this.state.records) {
+					if (record.scope !== current.scope || !isWithinScope(record.path, current.scope)) continue;
+					// Preserve identities/revisions for anti-resurrection protection.
+					// Only a fresh completed receipt can authorize the new semantics.
+					records.push({ keepUrl: record.keepUrl, path: record.path, scope: record.scope,
+						revision: record.revision, generation: recordGeneration(), baseline: "legacy" });
+				}
+			}
+			const next: LocalDeletionState = { version: 2, ...current, generation: recordGeneration(), records };
+			await this.persist(next);
+			this.session = undefined;
+			this.changed();
+			return { ...current, generation: next.generation };
+		});
+	}
+
+	async context(): Promise<DeletionContext> { return this.refreshContext(); }
+
+	async records(): Promise<LocalDeletionRecord[]> {
+		await this.context();
+		return this.state?.version === 2 ? this.state.records.map((record) => ({ ...record })) : [];
+	}
+
+	async scan(): Promise<IdentityScan> {
+		const context = await this.context();
+		const scan = await scanLocalIdentities(this.plugin, this.metadataPath, () => this.generation, context.scope);
+		if (!sameContext(context, await this.context())) {
+			return { complete: false, reason: "The account or sync folder changed during the membership scan. No removal was proposed." };
+		}
+		return scan;
+	}
+
+	private async mutate(context: DeletionContext, change: (records: LocalDeletionRecord[]) => LocalDeletionRecord[], guard?: () => void): Promise<void> {
+		await this.serialized(async () => {
+			const state = this.state;
+			if (state?.version !== 2 || !sameContext(context, state)) throw new Error("The membership baseline changed. Refresh the review.");
+			const records = change(state.records.map((record) => ({ ...record })));
+			await this.persist({ ...state, records }, guard);
+		});
 	}
 
 	async beginReceipts(id: string): Promise<void> {
-		await this.ready;
-		if (this.blocked) return;
-		if (this.session?.id === id) return;
 		const context = await this.context();
+		if (this.session?.id === id && sameContext(context, this.session)) return;
 		this.session = { id, ...context, receipts: new Map() };
 	}
 
 	stageDownload(note: PreNormalizedNote, path: string): void {
-		if (!this.session || !isSafeVaultPath(path)) return;
-		const normalized = normalizeNote(note);
-		const keepUrl = canonicalKeepUrl(normalized.frontmatterDict.GoogleKeepUrl);
+		if (!this.session || !isSafeVaultPath(path) || !isWithinScope(path, this.session.scope)) return;
+		const keepUrl = canonicalKeepUrl(normalizeNote(note).frontmatterDict.GoogleKeepUrl);
 		if (!keepUrl) return;
 		const revision = typeof note.remote_revision === "string" && KEEP_REVISION_PATTERN.test(note.remote_revision) ? note.remote_revision : undefined;
 		this.session.receipts.set(keepUrl, { keepUrl, path, scope: this.session.scope, revision });
 	}
 
 	stageUpload(keepUrl: string | undefined, path: string, revision: string | undefined): void {
-		if (!this.session || !keepUrl || canonicalKeepUrl(keepUrl) !== keepUrl || !isSafeVaultPath(path)) return;
-		// A newly uploaded/untracked note is NOT enrolled as a downloaded note.
+		if (!this.session || !keepUrl || canonicalKeepUrl(keepUrl) !== keepUrl || !isSafeVaultPath(path) || !isWithinScope(path, this.session.scope)) return;
 		const downloaded = this.session.receipts.has(keepUrl) ||
-			(this.state?.account === this.session.account && this.state.records.some((record) => record.keepUrl === keepUrl));
+			(this.state?.version === 2 && sameContext(this.state, this.session) && this.state.records.some((record) => record.keepUrl === keepUrl));
 		if (!downloaded) return;
-		this.session.receipts.set(keepUrl, {
-			keepUrl, path, scope: this.session.scope,
-			revision: revision && KEEP_REVISION_PATTERN.test(revision) ? revision : undefined,
-		});
+		this.session.receipts.set(keepUrl, { keepUrl, path, scope: this.session.scope,
+			revision: revision && KEEP_REVISION_PATTERN.test(revision) ? revision : undefined });
 	}
 
-	discardReceipts(id: string): void {
-		if (this.session?.id === id) this.session = undefined;
-	}
+	discardReceipts(id: string): void { if (this.session?.id === id) this.session = undefined; }
 
-	/** Returns false when a successful non-destructive sync cannot enroll a baseline. */
+	/** Selection may be partial; the independent folder inventory must be complete. */
 	async finishReceipts(id: string): Promise<boolean> {
 		const session = this.session;
 		if (!session || session.id !== id) return !this.blocked;
-		if (!session.receipts.size) { this.session = undefined; return true; }
 		const context = await this.context();
-		if (context.account !== session.account || context.scope !== session.scope) throw new Error("The account or sync folder changed before the baseline completed.");
+		if (!sameContext(context, session)) throw new Error("The account or sync folder changed before the baseline completed.");
+		if (!session.receipts.size) { this.session = undefined; return true; }
 		const scan = await this.scan();
 		if (!scan.complete) { this.session = undefined; return false; }
-		await this.mutate(session.account, (records) => {
+		await this.mutate(context, (records) => {
 			const next = new Map(records.map((record) => [record.keepUrl, record]));
 			for (const receipt of session.receipts.values()) {
 				const paths = scan.identities.get(receipt.keepUrl) ?? [];
-				if (paths.length !== 1 || !isWithinScope(paths[0], session.scope)) continue;
-				// Never overwrite a witnessed deletion that happened after this scan.
-				if (scan.generation !== this.generation) throw new Error("The vault changed before the deletion baseline completed.");
-				if (!receipt.revision) { next.delete(receipt.keepUrl); continue; }
-				next.set(receipt.keepUrl, {
-					keepUrl: receipt.keepUrl, path: paths[0], scope: session.scope,
-					revision: receipt.revision, generation: recordGeneration(), state: "present",
-				});
+				if (paths.length !== 1 || !isWithinScope(paths[0], context.scope)) continue;
+				if (!receipt.revision) {
+					const old = next.get(receipt.keepUrl);
+					if (old) next.set(receipt.keepUrl, { ...old, path: paths[0], baseline: "legacy", generation: recordGeneration() });
+					continue;
+				}
+				next.set(receipt.keepUrl, { keepUrl: receipt.keepUrl, path: paths[0], scope: context.scope,
+					revision: receipt.revision, generation: recordGeneration(), baseline: "synced" });
 			}
 			return [...next.values()];
+		}, () => {
+			if (scan.generation !== this.generation) throw new Error("The sync folder changed before its baseline completed.");
 		});
 		this.session = undefined;
 		return true;
 	}
 
-	/** Called BEFORE an explicit Obsidian trash/delete API invocation, not a watcher event. */
-	async captureIntent(path: string): Promise<LocalDeletionIntent> {
-		const { account } = await this.context();
-		const records: LocalDeletionRecord[] = [];
-		for (const record of await this.records()) {
-			if (record.path !== path && !record.path.startsWith(`${path}/`)) continue;
-			try {
-				const content = await this.plugin.app.vault.adapter.read(record.path);
-				if (contentKeepIdentity(content) === record.keepUrl) records.push(record);
-			} catch { /* An unreadable identity cannot authorize a tombstone. */ }
-		}
-		return { account, records };
-	}
-
-	/** Persist a witness only AFTER the explicit local operation succeeds and the path is absent. */
-	async confirmIntent(intent: LocalDeletionIntent, witness: "obsidian-trash" | "obsidian-delete"): Promise<void> {
-		if (!intent.records.length) return;
-		await this.mutate(intent.account, async (records) => {
-			for (const candidate of intent.records) {
-				const index = records.findIndex((record) => record.keepUrl === candidate.keepUrl && record.generation === candidate.generation && record.path === candidate.path);
-				if (index < 0 || await this.plugin.app.vault.adapter.exists(candidate.path)) continue;
-				records[index] = { ...records[index], state: "tombstone", witness, generation: recordGeneration() };
-			}
-			return records;
-		});
-	}
-
-	async renamed(oldPath: string, newPath: string): Promise<void> {
-		if (oldPath === newPath || !isSafeVaultPath(oldPath) || !isSafeVaultPath(newPath)) return;
-		const { account } = await this.context();
-		await this.mutate(account, (records) => records.map((record) => {
-			if (record.path !== oldPath && !record.path.startsWith(`${oldPath}/`)) return record;
-			const { witness: _witness, ...rest } = record;
-			return { ...rest, path: newPath + record.path.slice(oldPath.length), state: "present", generation: recordGeneration() };
-		}));
-	}
-
 	async assertCurrent(candidate: LocalDeletionRecord): Promise<void> {
 		const current = (await this.records()).find((record) => record.keepUrl === candidate.keepUrl);
 		if (!current || current.generation !== candidate.generation || current.path !== candidate.path ||
-			current.revision !== candidate.revision || current.scope !== candidate.scope || current.state !== "tombstone" || !current.witness) {
-			throw new Error("The local tombstone changed. Refresh the upload plan before deleting from Keep.");
+			current.revision !== candidate.revision || current.scope !== candidate.scope || current.baseline !== "synced") {
+			throw new Error("The tracked membership baseline changed. Refresh the upload plan before moving a note to Keep Trash.");
 		}
 	}
 
 	async retire(candidate: LocalDeletionRecord): Promise<void> {
 		await this.assertCurrent(candidate);
-		const { account } = await this.context();
-		await this.mutate(account, (records) => {
+		const context = await this.context();
+		await this.mutate(context, (records) => {
 			const current = records.find((record) => record.keepUrl === candidate.keepUrl);
-			if (!current || current.generation !== candidate.generation) throw new Error("The local tombstone changed before acknowledgement.");
+			if (!current || current.generation !== candidate.generation) throw new Error("The baseline changed before acknowledgement.");
 			return records.filter((record) => record.keepUrl !== candidate.keepUrl);
 		});
 	}
 
 	async retireRemoteTrash(keepUrls: ReadonlySet<string>): Promise<void> {
-		const { account } = await this.context();
-		await this.mutate(account, (records) => records.filter((record) => !keepUrls.has(record.keepUrl)));
+		const context = await this.context();
+		await this.mutate(context, (records) => records.filter((record) => !keepUrls.has(record.keepUrl)));
 	}
 }
 
