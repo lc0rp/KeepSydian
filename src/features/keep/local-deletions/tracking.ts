@@ -1,6 +1,6 @@
 import type KeepSidianPlugin from "@app/main";
 import { LocalDeletionLedger, getDeletionLedger, registerDeletionLedger, unregisterDeletionLedger } from "./ledger";
-import { isActiveMembershipPath } from "./scan";
+import { isActiveMembershipPath, resolveMembershipLogFolder } from "./scan";
 import { deletionScope, isSafeVaultPath } from "./state";
 
 /**
@@ -22,7 +22,8 @@ export async function initializeLocalDeletionTracking(plugin: KeepSidianPlugin):
 	const changed = (...paths: string[]) => {
 		try {
 			const scope = deletionScope(plugin.settings.saveLocation);
-			if (paths.some((path) => path === scope || isActiveMembershipPath(path, scope, ledger.metadataPath))) ledger.changed();
+			const logFolder = resolveMembershipLogFolder(plugin);
+			if (paths.some((path) => path === scope || isActiveMembershipPath(path, scope, ledger.metadataPath, logFolder))) ledger.changed();
 		} catch { ledger.changed(); }
 	};
 	if (typeof vault.on === "function" && typeof plugin.registerEvent === "function") {
