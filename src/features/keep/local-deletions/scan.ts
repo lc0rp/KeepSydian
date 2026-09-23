@@ -1,5 +1,7 @@
 import type KeepSidianPlugin from "@app/main";
 import { canonicalKeepUrl } from "@integrations/server/keepDeletions";
+import { resolveLogBaseFolder } from "@services/note-path-resolver";
+import { normalizePathSafe } from "@services/paths";
 import { extractFrontmatter } from "../domain/note";
 import { deletionScope, isSafeVaultPath, isWithinScope, sha256 } from "./state";
 
@@ -25,9 +27,15 @@ class ScanFailure extends Error {
 	constructor(readonly category: string) { super(category); }
 }
 
-/** Root vault Trash is outside active membership even when syncing the vault root. */
-export function isActiveMembershipPath(path: string, scope: string, metadataPath: string): boolean {
-	return isWithinScope(path, scope) && path !== metadataPath && path.split("/")[0]?.toLowerCase() !== ".trash";
+/** Match the logger's resolved directory, including its vault-root default. */
+export function resolveMembershipLogFolder(plugin: KeepSidianPlugin): string {
+	return normalizePathSafe(`${resolveLogBaseFolder(plugin.app, plugin.settings)}/_KeepSidianLogs`);
+}
+
+/** Exclude only root Trash, our index and the exact owned log subtree. */
+export function isActiveMembershipPath(path: string, scope: string, metadataPath: string, logFolder: string): boolean {
+	return isWithinScope(path, scope) && path !== metadataPath && path.split("/")[0]?.toLowerCase() !== ".trash" &&
+		path !== logFolder && !path.startsWith(`${logFolder}/`);
 }
 
 function sameStat(a: InventoryItem, b: InventoryItem): boolean {
@@ -54,6 +62,7 @@ export async function scanLocalIdentities(
 	try {
 		const vault = plugin.app.vault;
 		const adapter = vault.adapter;
+		const logFolder = resolveMembershipLogFolder(plugin);
 		if (typeof adapter.list !== "function" || typeof adapter.stat !== "function" ||
 			typeof adapter.read !== "function" || typeof vault.getFiles !== "function") throw new ScanFailure("adapter-capability");
 		const generation = getGeneration();
@@ -84,7 +93,7 @@ export async function scanLocalIdentities(
 							(parent !== "" && !path.startsWith(`${parent}/`)) ||
 							path.slice(parent.length + (parent ? 1 : 0)).includes("/") || seen.has(path)) throw new ScanFailure("listing-path");
 						seen.add(path);
-						if (!isActiveMembershipPath(path, scope, metadataPath)) continue;
+						if (!isActiveMembershipPath(path, scope, metadataPath, logFolder)) continue;
 						const stat = await adapter.stat(path);
 						if (!stat || stat.type !== (folder ? "folder" : "file")) throw new ScanFailure("item-changed");
 						if (folder) { pending.push(path); continue; }
@@ -98,7 +107,7 @@ export async function scanLocalIdentities(
 			}
 			const listed = new Set(files.map((file) => file.path));
 			for (const file of vault.getFiles()) {
-				if (isActiveMembershipPath(file.path, scope, metadataPath) && !listed.has(file.path)) throw new ScanFailure("loaded-file-omitted");
+				if (isActiveMembershipPath(file.path, scope, metadataPath, logFolder) && !listed.has(file.path)) throw new ScanFailure("loaded-file-omitted");
 			}
 			return { files: files.sort((a, b) => a.path.localeCompare(b.path)), folders: folders.sort((a, b) => a.path.localeCompare(b.path)) };
 		};
