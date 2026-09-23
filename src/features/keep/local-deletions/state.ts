@@ -7,7 +7,8 @@ export const MAX_DELETION_RECORDS = 20_000;
 export const MAX_LEDGER_BYTES = 16 * 1024 * 1024;
 
 export function isSafeVaultPath(path: string, allowRoot = false): boolean {
-	return (allowRoot || path.length > 0) && !path.startsWith("/") && !/^[A-Za-z]:/.test(path) && !/[\\\u0000]/.test(path) &&
+	return (allowRoot || path.length > 0) && !path.startsWith("/") && !/^[A-Za-z]:/.test(path) &&
+		!path.includes("\\") && !path.includes("\0") &&
 		(path === "" || path.split("/").every((part) => part !== "" && part !== "." && part !== ".."));
 }
 
