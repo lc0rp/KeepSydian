@@ -29,6 +29,7 @@ interface PreNormalizedNote {
 	text?: string;
 	created?: string;
 	updated?: string;
+	remote_revision?: string;
 	color?: string;
 	pinned?: boolean;
 	frontmatter?: string;

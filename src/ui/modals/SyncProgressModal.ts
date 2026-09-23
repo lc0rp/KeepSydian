@@ -12,6 +12,7 @@ import { excludeDeletionUploads, getDeletionUploadPaths } from "@features/keep/d
 import { normalizeMergeAction } from "@features/keep/domain/merge-action";
 import { renderMergeActionSelector } from "./merge-action-selector";
 import { parseCustomScopeRange, renderCustomScopeInputs } from "./sync-date-range";
+import { deletionReviewSummary, markDeletionConflict, retainUncheckedDeletions } from "./deletion-review";
 
 interface CreateElOptions { text?: string; cls?: string | string[]; }
 type MaybeObsidianElement = HTMLElement & { empty?: () => void; setText?: (text: string) => void; };
@@ -131,7 +132,7 @@ function getResultTitle(plan: SyncPlan, status: SyncRunStatus | null): string {
 }
 function getRuntimeStatusLabel(entry: SyncPlanEntry, state: EntryRunState): string {
 	if (state === "unchecked") return "Unchecked";
-	if (state === "failed") return "Failed";
+	if (state === "failed") return entry.action === "skipped-conflict" && entry.label === "Deletion conflict" ? "Deletion conflict" : "Failed";
 	if (state === "pending") return "Pending";
 	return getExecutionChipLabel(getChipKeyForEntry(entry));
 }
@@ -438,6 +439,11 @@ export class SyncProgressModal extends Modal {
 		if (!current || current === "unchecked" || current === "instant") return;
 		this.executionSnapshot.entryStates.set(entryId, success ? "done" : "failed");
 		const entry = this.executionSnapshot.plan.entries.find((candidate) => candidate.id === entryId);
+		if (!success && outcome === "skipped-conflict" && entry?.action === "delete") {
+			markDeletionConflict(entry);
+			void this.refreshUI();
+			return;
+		}
 		if (success && outcome && entry && entry.action !== outcome) {
 			entry.action = outcome;
 			void this.refreshUI();
@@ -763,10 +769,7 @@ export class SyncProgressModal extends Modal {
 			createChild(this.planSummaryEl, "div", { text: `${this.preparedPlan.plan.actionableCount} changes found.` }).classList.add("keepsidian-sync-plan-summary-copy");
 			const deletions = this.preparedPlan.plan.entries.filter((entry) => entry.action === "delete");
 			if (deletions.length > 0) {
-				const selected = deletions.filter((entry) => entry.selectable && entry.selected).length;
-				const warning = createChild(this.planSummaryEl, "div", {
-					text: `${selected} note${selected === 1 ? "" : "s"} will be deleted from Obsidian (moved to .trash). Uncheck any deletion to keep the local note. Attachments are retained.`,
-				});
+				const warning = createChild(this.planSummaryEl, "div", { text: deletionReviewSummary(this.preparedPlan.plan) });
 				warning.classList.add("keepsidian-sync-plan-summary-copy");
 				warning.setAttribute("aria-live", "polite");
 				warning.setAttribute("data-keepsidian-role", "deletion-summary");
@@ -800,7 +803,9 @@ export class SyncProgressModal extends Modal {
 				if (!refreshedPlan) { this.preparedPlan = null; return; }
 				refreshedPlan.attempt = original.attempt; refreshedPlan.completionDate = original.completionDate; refreshedPlan.attachmentWarnings = original.attachmentWarnings;
 				refreshedPlan.deletions = original.deletions;
-				refreshedPlan.plan = excludeDeletionUploads(refreshedPlan.plan, original.deletions);
+				refreshedPlan.deletionContext = original.deletionContext;
+				refreshedPlan.protectedLocalKeepUrls = original.protectedLocalKeepUrls;
+				refreshedPlan.plan = retainUncheckedDeletions(original.plan, excludeDeletionUploads(refreshedPlan.plan, original.deletions));
 				refreshedPlan.unresolvedConflictPaths = original.unresolvedConflictPaths; refreshedPlan.forceUploadPaths = original.forceUploadPaths; refreshedPlan.mode = "two-way";
 				refreshedPlan.plan = {
 					...refreshedPlan.plan, mode: "two-way", mergeAction: normalizeMergeAction(original.plan.mergeAction),
@@ -816,7 +821,12 @@ export class SyncProgressModal extends Modal {
 			}
 			return;
 		}
-		await this.beginReview(this.preparedPlan.mode, normalizeMergeAction(this.preparedPlan.plan.mergeAction));
+		const previous = this.preparedPlan.plan;
+		await this.beginReview(this.preparedPlan.mode, normalizeMergeAction(previous.mergeAction));
+		if (this.preparedPlan) {
+			this.preparedPlan.plan = retainUncheckedDeletions(previous, this.preparedPlan.plan);
+			await this.refreshUI();
+		}
 	}
 	private renderChips(containerEl: HTMLElement, surface: "review" | "running" | "result") {
 		const countsEl = createChild(containerEl, "div"); countsEl.classList.add("keepsidian-sync-plan-counts");

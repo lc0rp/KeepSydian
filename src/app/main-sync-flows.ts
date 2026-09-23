@@ -17,8 +17,18 @@ import {
 	persistLastSuccessfulSyncDate,
 } from "@features/keep/sync";
 import { buildPushSyncPlan, pushGoogleKeepNotes } from "@features/keep/push";
-import { buildDeletionPlan, executeReviewedDeletions, type PreparedDeletions } from "@features/keep/deletions";
+import { buildDeletionPlan, type PreparedDeletions } from "@features/keep/deletions";
 import { excludeDeletionUploads, getDeletionUploadPaths } from "@features/keep/deletion-upload-exclusions";
+import { getDeletionLedger } from "@features/keep/local-deletions/ledger";
+import { executeTrackedInboundDeletions } from "@features/keep/local-deletions/inbound";
+import { stageIdenticalDownloadReceipts } from "@features/keep/local-deletions/download";
+import {
+	assertNoUnreviewedLocalDeletions,
+	downloadedKeepIdentity,
+	executeReviewedLocalDeletions,
+	getLocalDeletionProtection,
+	type PreparedLocalDeletions,
+} from "@features/keep/local-deletions/plan";
 import { normalizeMergeAction } from "@features/keep/domain/merge-action";
 import { ensureFolder, normalizePathSafe } from "@services/paths";
 import { resolveLogBaseFolder } from "@services/note-path-resolver";
@@ -36,6 +46,9 @@ export interface PreparedSyncPlan {
 	importNotes?: PreNormalizedNote[];
 	importEntryIds?: string[];
 	deletions?: PreparedDeletions;
+	localDeletions?: PreparedLocalDeletions;
+	deletionContext?: { account: string; scope: string; generation: string };
+	protectedLocalKeepUrls?: string[];
 	archivedStatus?: KeepArchivedStatus;
 	completionDate?: string;
 	pushNotes?: NoteForPush[];
@@ -122,6 +135,24 @@ async function getManualSupportState(plugin: KeepSidianPlugin): Promise<boolean>
 	return isSupporterActive;
 }
 
+async function assertPreparedDeletionContext(plugin: KeepSidianPlugin, prepared: PreparedSyncPlan): Promise<void> {
+	if (!prepared.deletionContext) return;
+	const current = await getDeletionLedger(plugin)?.context();
+	if (!current || current.account !== prepared.deletionContext.account || current.scope !== prepared.deletionContext.scope ||
+		current.generation !== prepared.deletionContext.generation) {
+		throw new Error("The Google Keep account or sync-folder baseline changed. Refresh the review plan before applying it.");
+	}
+}
+
+async function finishDeletionReceipts(plugin: KeepSidianPlugin, attempt: SyncAttempt): Promise<boolean> {
+	const completed = await getDeletionLedger(plugin)?.finishReceipts(attempt.id);
+	if (completed === false) {
+		new Notice("Notes were processed, but a complete sync-folder membership baseline could not be recorded. No new removal eligibility or successful-sync checkpoint was advanced.");
+		return false;
+	}
+	return true;
+}
+
 export async function buildManualSyncPlan(
 	plugin: KeepSidianPlugin,
 	mode: SyncMode,
@@ -145,6 +176,7 @@ export async function buildManualSyncPlan(
 			await attempt.finish("canceled");
 			return null;
 		}
+		await assertPreparedDeletionContext(plugin, prepared);
 		prepared.attempt = attempt;
 		await attempt.transition("review");
 		return prepared;
@@ -173,6 +205,7 @@ async function buildManualSyncPlanCore(
 			return null;
 		}
 	}
+	const deletionContext = await getDeletionLedger(plugin)?.context();
 	if (mode === "push") {
 		await callbacks.attempt?.transition("upload-plan");
 		const builtPushPlan = await buildPushSyncPlan(plugin, allowPerNoteSelection, selectionLockedReason, {
@@ -185,10 +218,15 @@ async function buildManualSyncPlanCore(
 			mode,
 			stage: "upload",
 			pushNotes: builtPushPlan.notesToPush,
+			localDeletions: builtPushPlan.localDeletions,
+			deletionContext,
 			unresolvedConflictPaths: callbacks.protectedPaths ? [...callbacks.protectedPaths] : undefined,
 			forceUploadPaths: callbacks.forceUploadPaths ? [...callbacks.forceUploadPaths] : undefined,
 		};
 	}
+	// Membership protection precedes the download half of two-way sync and is
+	// independent of optional download filters and per-note review selections.
+	const protectedKeepUrls = await getLocalDeletionProtection(plugin);
 	const builtImportPlan = await buildImportSyncPlan(
 		plugin,
 		isSupporterActive ? plugin.settings.premiumFeatures : undefined,
@@ -199,8 +237,15 @@ async function buildManualSyncPlanCore(
 	);
 	const deletions = await buildDeletionPlan(plugin);
 	const deletionPaths = new Set(deletions.entries.map((entry) => entry.path));
+	const identityByEntry = new Map(builtImportPlan.noteEntryIds.map((id, index) => [id, downloadedKeepIdentity(builtImportPlan.notes[index])]));
 	// The fresh trash check supersedes any stale import for the same local file.
-	const entries = builtImportPlan.plan.entries.filter((entry) => !deletionPaths.has(entry.path));
+	const entries = builtImportPlan.plan.entries.filter((entry) => !deletionPaths.has(entry.path)).map((entry) => {
+		const identity = identityByEntry.get(entry.id);
+		if (!identity || !protectedKeepUrls.has(identity)) return entry;
+		return { ...entry, action: "skipped-conflict" as const, label: "Preserved local removal", selectable: false,
+			selected: false, selectionLocked: false, meta: { ...entry.meta,
+				detail: "This tracked identity is absent from the configured sync folder. Review its removal in the upload plan; this download will not recreate it." } };
+	});
 	entries.push(...deletions.entries);
 	return {
 		plan: withPlanMode(withPlanEntries(builtImportPlan.plan, entries), mode),
@@ -209,6 +254,8 @@ async function buildManualSyncPlanCore(
 		importNotes: builtImportPlan.notes,
 		importEntryIds: builtImportPlan.noteEntryIds,
 		deletions,
+		deletionContext,
+		protectedLocalKeepUrls: [...protectedKeepUrls],
 		archivedStatus: builtImportPlan.archivedStatus,
 		completionDate: builtImportPlan.completionDate,
 	};
@@ -217,9 +264,12 @@ async function buildManualSyncPlanCore(
 function getSelectedImportNotes(preparedPlan: PreparedSyncPlan): PreNormalizedNote[] {
 	const selectedEntryIds = new Set(preparedPlan.plan.entries
 		.filter((entry) => entry.action !== "delete" && entry.selectable && entry.selected).map((entry) => entry.id));
+	const protectedKeepUrls = new Set(preparedPlan.protectedLocalKeepUrls ?? []);
 	const importNotes = preparedPlan.importNotes ?? [];
 	const importEntryIds = preparedPlan.importEntryIds ?? [];
-	return importNotes.filter((_note, index) => {
+	return importNotes.filter((note, index) => {
+		const identity = downloadedKeepIdentity(note);
+		if (identity && protectedKeepUrls.has(identity)) return false;
 		const entryId = importEntryIds[index];
 		// Unmapped legacy imports must not recreate a note from a deletion plan.
 		return entryId ? selectedEntryIds.has(entryId) : !preparedPlan.deletions?.entries.length && selectedEntryIds.size === 0;
@@ -240,23 +290,32 @@ async function executeAttempt(
 	plugin: KeepSidianPlugin,
 	attempt: SyncAttempt,
 	work: () => Promise<RunPreparedSyncPlanResult>,
-	warnings: () => number
+	warnings: () => number,
+	beforeSuccess?: () => Promise<void>
 ): Promise<RunPreparedSyncPlanResult> {
 	await attempt.start();
-	if (attempt.finished) return { canceled: attempt.outcome !== "failed", failed: attempt.outcome === "failed" };
+	if (attempt.finished) {
+		getDeletionLedger(plugin)?.discardReceipts(attempt.id);
+		return { canceled: attempt.outcome !== "failed", failed: attempt.outcome === "failed" };
+	}
 	try {
 		await attempt.transition("storage");
 		await ensureStoragePathsOrThrow(plugin);
 		if (!(await prepareSyncLog(plugin))) throw new Error("Sync log storage unavailable");
+		await getDeletionLedger(plugin)?.beginReceipts(attempt.id);
 		plugin.currentSyncMode = attempt.mode;
 		plugin.currentSyncPhaseLabel = attempt.mode === "two-way" ? "Download step" : "Syncing";
 		startSyncUI(plugin);
 		const result = await work();
 		if (result.nextPlan) return result;
+		plugin.throwIfSyncCancelled?.();
+		if (beforeSuccess) await beforeSuccess();
+		else await finishDeletionReceipts(plugin, attempt);
 		await attempt.finish("success");
 		finishSyncUI(plugin, getSuccessfulRunStatus(warnings()), warnings());
 		return result;
 	} catch (error) {
+		getDeletionLedger(plugin)?.discardReceipts(attempt.id);
 		await attempt.fail(error);
 		const canceled = isSyncCancellationError(error);
 		finishSyncUI(plugin, canceled ? "canceled" : "failed");
@@ -298,16 +357,18 @@ export async function runPreparedSyncPlan(
 		onAttachmentWarning: () => { attachmentWarnings += 1; },
 	};
 	return executeAttempt(plugin, attempt, async () => {
+		await assertPreparedDeletionContext(plugin, preparedPlan);
 		await attempt.transition(preparedPlan.stage === "import" ? "execution" : "upload");
 		if (preparedPlan.stage === "import") {
 			const selectedNotes = getSelectedImportNotes(preparedPlan);
 			const selectedEntries = preparedPlan.plan.entries.filter((entry) => entry.selectable && entry.selected);
 			const selectedEntryIds = selectedEntries.filter((entry) => entry.action !== "delete").map((entry) => entry.id);
 			uiSetTotalNotes(plugin, selectedEntries.length);
-			await executeReviewedDeletions(plugin, preparedPlan.deletions, new Set(selectedEntries.map((entry) => entry.id)), callbacks);
+			await executeTrackedInboundDeletions(plugin, preparedPlan.deletions, new Set(selectedEntries.map((entry) => entry.id)), callbacks);
 			if (selectedNotes.length || !preparedPlan.deletions?.entries.length) {
 				await importSelectedGoogleKeepNotes(plugin, selectedNotes, callbacks, undefined, selectedEntryIds);
 			}
+			await stageIdenticalDownloadReceipts(plugin, preparedPlan.importNotes ?? [], preparedPlan.importEntryIds ?? [], preparedPlan.plan.entries);
 			if (preparedPlan.mode === "two-way") {
 				resetProgressIndicatorsForNextStage(plugin);
 				plugin.currentSyncPhaseLabel = "Upload step";
@@ -320,7 +381,8 @@ export async function runPreparedSyncPlan(
 					forcePaths: [...forceUploadPaths],
 				});
 				const uploadPlan = excludeDeletionUploads(built.plan, preparedPlan.deletions);
-				if (uploadPlan.actionableCount > 0) {
+				// Conflict-only deletion plans still need a visible review stage.
+				if (uploadPlan.actionableCount > 0 || (built.localDeletions?.entries.length ?? 0) > 0) {
 					await attempt.transition("review");
 					return { nextPlan: {
 						attempt,
@@ -329,29 +391,43 @@ export async function runPreparedSyncPlan(
 						stage: "upload",
 						pushNotes: built.notesToPush,
 						deletions: preparedPlan.deletions,
+						localDeletions: built.localDeletions,
+						deletionContext: preparedPlan.deletionContext,
+						protectedLocalKeepUrls: preparedPlan.protectedLocalKeepUrls,
 						attachmentWarnings,
 						completionDate: preparedPlan.completionDate,
 						unresolvedConflictPaths: [...unresolvedPaths],
 						forceUploadPaths: [...forceUploadPaths],
 					} };
 				}
-				if (unresolvedPaths.size === 0) onTwoWaySuccess();
+				preparedPlan.localDeletions = built.localDeletions;
 			}
 		} else {
 			plugin.currentSyncPhaseLabel = preparedPlan.mode === "two-way" ? "Upload step" : "Syncing";
 			const selectedNotes = getSelectedPushNotes(preparedPlan);
-			uiSetTotalNotes(plugin, selectedNotes.length);
-			await pushGoogleKeepNotes(plugin, callbacks, selectedNotes);
-			if (preparedPlan.mode === "two-way" && unresolvedPaths.size === 0) onTwoWaySuccess();
+			const selectedEntries = preparedPlan.plan.entries.filter((entry) => entry.selectable && entry.selected);
+			const selectedDeletionCount = selectedEntries.filter((entry) => entry.action === "delete").length;
+			uiSetTotalNotes(plugin, selectedNotes.length + selectedDeletionCount);
+			if (selectedNotes.length || selectedDeletionCount === 0) {
+				await pushGoogleKeepNotes(plugin, { ...callbacks, setTotalNotes: (n) => uiSetTotalNotes(plugin, n + selectedDeletionCount) }, selectedNotes);
+			}
+			await executeReviewedLocalDeletions(plugin, preparedPlan.localDeletions, new Set(selectedEntries.map((entry) => entry.id)), callbacks);
 		}
 		plugin.throwIfSyncCancelled?.();
-		if (preparedPlan.completionDate && unresolvedPaths.size === 0) {
-			persistLastSuccessfulSyncDate(plugin, preparedPlan.completionDate);
-		} else if (unresolvedPaths.size > 0) {
-			new Notice("Conflicts were preserved. The last successful download date has not advanced.");
-		}
 		return {};
-	}, () => attachmentWarnings);
+	}, () => attachmentWarnings, async () => {
+		await assertPreparedDeletionContext(plugin, preparedPlan);
+		const blocked = unresolvedPaths.size > 0 || preparedPlan.localDeletions?.hasBlockingConflicts ||
+			(preparedPlan.mode === "import" && (preparedPlan.protectedLocalKeepUrls?.length ?? 0) > 0);
+		if (blocked) {
+			getDeletionLedger(plugin)?.discardReceipts(attempt.id);
+			new Notice("Conflicts or unverified folder removals were preserved. The last successful sync checkpoint has not advanced.");
+			return;
+		}
+		if (!await finishDeletionReceipts(plugin, attempt)) return;
+		if (preparedPlan.mode === "two-way") onTwoWaySuccess();
+		if (preparedPlan.completionDate) persistLastSuccessfulSyncDate(plugin, preparedPlan.completionDate);
+	});
 }
 
 export async function runImportWithOptions(plugin: KeepSidianPlugin, options: NoteImportOptions, getErrorMessage: ErrorMessageResolver): Promise<void> {
@@ -367,7 +443,9 @@ export async function runImportNotesFlow(
 ): Promise<void> {
 	const attempt = context ?? new SyncAttempt(plugin, "import", undefined, auto ? "scheduled" : "legacy");
 	let attachmentWarnings = 0;
+	let completionDate: string | undefined;
 	await executeAttempt(plugin, attempt, async () => {
+		await assertNoUnreviewedLocalDeletions(plugin);
 		await attempt.transition("subscription");
 		const active = await getManualSupportState(plugin);
 		const effectiveOptions = !auto && active ? (options ?? plugin.settings.premiumFeatures) : undefined;
@@ -377,11 +455,14 @@ export async function runImportNotesFlow(
 			setTotalNotes: (n: number) => uiSetTotalNotes(plugin, n),
 			reportProgress: () => reportSyncProgress(plugin),
 			onAttachmentWarning: () => { attachmentWarnings += 1; },
+			deferCheckpoint: (date: string) => { completionDate = date; },
 		};
 		if (effectiveOptions !== undefined) await importGoogleKeepNotesWithOptions(plugin, effectiveOptions, callbacks);
 		else await importGoogleKeepNotes(plugin, callbacks);
 		return {};
-	}, () => attachmentWarnings);
+	}, () => attachmentWarnings, async () => {
+		if (await finishDeletionReceipts(plugin, attempt) && completionDate) persistLastSuccessfulSyncDate(plugin, completionDate);
+	});
 }
 
 export async function runPushNotesFlow(plugin: KeepSidianPlugin, _getErrorMessage: ErrorMessageResolver, context?: SyncAttempt): Promise<void> {
@@ -402,6 +483,7 @@ export async function runTwoWaySyncFlow(plugin: KeepSidianPlugin, _getErrorMessa
 	let attachmentWarnings = 0;
 	let completionDate: string | undefined;
 	await executeAttempt(plugin, attempt, async () => {
+		await assertNoUnreviewedLocalDeletions(plugin);
 		const callbacks = {
 			attempt,
 			setTotalNotes: (n: number) => uiSetTotalNotes(plugin, n),
@@ -414,11 +496,13 @@ export async function runTwoWaySyncFlow(plugin: KeepSidianPlugin, _getErrorMessa
 		plugin.currentSyncPhaseLabel = "Upload step";
 		await attempt.transition("upload");
 		await pushGoogleKeepNotes(plugin, callbacks);
-		onTwoWaySuccess();
 		plugin.throwIfSyncCancelled?.();
-		if (completionDate) persistLastSuccessfulSyncDate(plugin, completionDate);
 		return {};
-	}, () => attachmentWarnings);
+	}, () => attachmentWarnings, async () => {
+		if (!await finishDeletionReceipts(plugin, attempt)) return;
+		onTwoWaySuccess();
+		if (completionDate) persistLastSuccessfulSyncDate(plugin, completionDate);
+	});
 }
 
 export async function openLatestSyncLogFlow(plugin: KeepSidianPlugin): Promise<void> {

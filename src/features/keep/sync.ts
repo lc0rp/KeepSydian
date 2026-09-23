@@ -41,6 +41,8 @@ import { safeSyncError, type SyncAttempt } from "@app/sync-attempt";
 import { retryDownload, isTransientDownloadError } from "./download-retry";
 import { resolveDownloadDateWindow } from "./download-date-window";
 import { KEEPSIDIAN_SERVER_URL } from "../../config";
+import { getDeletionLedger } from "./local-deletions/ledger";
+import { assertDownloadIdentityPresentOrUntracked } from "./local-deletions/download";
 
 const LAST_SUCCESSFUL_SYNC_DATE_KEY = "KeepSidianLastSuccessfulSyncDate";
 const NOTE_LOG_BATCH_KEY = "sync:notes";
@@ -874,7 +876,7 @@ export async function processAndSaveNotes(
 
 					if (metrics.totalDurationMs >= NOTE_PERF_SLOW_THRESHOLD_MS) {
 						logInfoIfNotTest(
-							`[KeepSidian perf] action=${metrics.action} total=${formatDurationMs(metrics.totalDurationMs)} duplicate=${formatDurationMs(metrics.duplicateDecisionDurationMs)} ensure_parent=${formatDurationMs(metrics.ensureParentFolderDurationMs)} write=${formatDurationMs(metrics.writeNoteDurationMs)} attachments=${formatDurationMs(metrics.attachmentDurationMs)} log=${formatDurationMs(metrics.logDurationMs)}`
+							`[KeepSidian perf] action=${metrics.action} total=${formatDurationMs(metrics.totalDurationMs)} duplicate=${formatDurationMs(metrics.duplicateDecisionDurationMs)} ensure_parent=${formatDurationMs(metrics.ensureParentFolderDurationMs)} write=${formatDurationMs(metrics.writeNoteDurationMs)} attachments=${formatDurationMs(metrics.attachmentDurationMs)}`
 						);
 					}
 					await appendPerfTrace(plugin, "note-save-complete", {
@@ -990,6 +992,7 @@ export async function processAndSaveNote(
 		metrics.totalDurationMs = getNowMs() - startedAt;
 		return metrics;
 	}
+	await assertDownloadIdentityPresentOrUntracked(plugin, note);
 	const resolvedNotePath = resolveNotePath(plugin.app, plugin.settings, normalizedNote);
 	const resolveExistingPathStartedAt = getNowMs();
 	let noteFilePath =
@@ -1004,6 +1007,7 @@ export async function processAndSaveNote(
 	const noteLink = `[${noteTitle}](${normalizePathSafe(noteFilePath)})`;
 	const noteFolder = dirnameSafe(noteFilePath);
 	let retainedImageNames: string[] = [];
+	let receiptComplete = true;
 
 	const lastSyncedDate = new Date().toISOString();
 	const ensureParentFolder = async (filePath: string): Promise<void> => {
@@ -1174,6 +1178,7 @@ export async function processAndSaveNote(
 			metrics.attachmentFetchDurationMs += fetchDurationMs;
 			metrics.attachmentCompareDurationMs += compareDurationMs;
 			metrics.attachmentWriteDurationMs += writeDurationMs;
+			if (failures.length) receiptComplete = false;
 			for (const failure of failures) {
 				const statusLabel = typeof failure.status === "number" ? ` (${failure.status})` : "";
 				await logNote(`${noteLink} - attachment warning${statusLabel}: ${failure.message} (${failure.url})`);
@@ -1217,5 +1222,8 @@ export async function processAndSaveNote(
 		metrics.totalDurationMs = getNowMs() - startedAt;
 	}
 
+	if (metrics.action !== "conflict" && receiptComplete) {
+		getDeletionLedger(plugin)?.stageDownload(note, normalizePathSafe(noteFilePath));
+	}
 	return metrics;
 }
