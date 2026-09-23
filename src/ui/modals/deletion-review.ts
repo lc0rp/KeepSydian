@@ -7,12 +7,12 @@ export function deletionReviewSummary(plan: SyncPlan): string {
 		return `${selected} note${selected === 1 ? "" : "s"} will be deleted from Obsidian (moved to .trash). Uncheck any deletion to keep the local note. Attachments are retained.`;
 	}
 	const selection = deletions.some((entry) => entry.selectable && !entry.selectionLocked)
-		? "Uncheck a deletion to leave its Google Keep note unchanged."
+		? "Uncheck a removal to leave its Google Keep note unchanged."
 		: "Existing supporter selection locks apply; cancel this plan to leave all Google Keep notes unchanged.";
-	return `${selected} of ${deletions.length} local deletion${deletions.length === 1 ? "" : "s"} selected. Selected notes will be moved to Google Keep Trash, never permanently deleted. ${selection} Unchecked local removals are not downloaded again in this run.`;
+	return `${selected} of ${deletions.length} folder removal${deletions.length === 1 ? "" : "s"} selected. Rows labeled No longer in sync folder include local deletions and moves out of the configured folder. Selected notes will be moved to Google Keep Trash, never permanently deleted. Moved-out local files stay untouched. ${selection} Unchecked removals are not downloaded again in this run.`;
 }
 
-/** A refresh in the same reviewed run must not silently reselect a deletion. */
+/** A refresh in the same reviewed run must not silently reselect a removal. */
 export function retainUncheckedDeletions(previous: SyncPlan, refreshed: SyncPlan): SyncPlan {
 	const unchecked = new Set(previous.entries.filter((entry) => entry.action === "delete" && !entry.selected).map((entry) => entry.id));
 	const entries = refreshed.entries.map((entry) => entry.action === "delete" && unchecked.has(entry.id)
