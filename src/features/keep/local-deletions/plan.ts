@@ -6,7 +6,7 @@ import { normalizeNote, type PreNormalizedNote } from "../domain/note";
 import type { SyncCallbacks } from "../sync";
 import { getDeletionLedger, type LocalDeletionLedger } from "./ledger";
 import { isWithinScope, type LocalDeletionRecord } from "./state";
-import type { IdentityScan } from "./scan";
+import { contentKeepIdentity, type IdentityScan } from "./scan";
 
 export interface LocalDeletionCandidate { entryId: string; record: LocalDeletionRecord; acknowledged?: boolean; }
 export interface PreparedLocalDeletions {
@@ -35,15 +35,22 @@ function protectedIdentities(records: LocalDeletionRecord[], scan: IdentityScan)
 export async function getLocalDeletionProtection(plugin: KeepSidianPlugin): Promise<Set<string>> {
 	const ledger = getDeletionLedger(plugin);
 	if (!ledger) return new Set();
-	const records = await ledger.records();
-	if (!records.length) return new Set();
+	const uncertain: LocalDeletionRecord[] = [];
+	for (const record of await ledger.records()) {
+		plugin.throwIfSyncCancelled?.();
+		try {
+			if (contentKeepIdentity(await plugin.app.vault.adapter.read(record.path)) === record.keepUrl) continue;
+		} catch { /* A missing path may still be a move; scan outside the sync folder. */ }
+		uncertain.push(record);
+	}
+	if (!uncertain.length) return new Set();
 	const scan = await ledger.scan();
 	plugin.throwIfSyncCancelled?.();
-	return protectedIdentities(records, scan);
+	return protectedIdentities(uncertain, scan);
 }
 
-export function downloadedKeepIdentity(note: PreNormalizedNote): string | undefined {
-	return canonicalKeepUrl(normalizeNote(note).frontmatterDict.GoogleKeepUrl);
+export function downloadedKeepIdentity(note: PreNormalizedNote | undefined): string | undefined {
+	return note ? canonicalKeepUrl(normalizeNote(note).frontmatterDict.GoogleKeepUrl) : undefined;
 }
 
 export async function assertNoUnreviewedLocalDeletions(plugin: KeepSidianPlugin): Promise<void> {
@@ -141,12 +148,22 @@ async function assertContext(plugin: KeepSidianPlugin, ledger: LocalDeletionLedg
 	if (context.account !== prepared.account || context.scope !== prepared.scope) throw new Error("The account or sync folder changed. Refresh the upload plan.");
 }
 
-async function assertAbsent(plugin: KeepSidianPlugin, ledger: LocalDeletionLedger, candidate: LocalDeletionCandidate): Promise<void> {
+async function assertAbsent(plugin: KeepSidianPlugin, ledger: LocalDeletionLedger, candidate: LocalDeletionCandidate): Promise<number> {
 	await ledger.assertCurrent(candidate.record);
 	const scan = await ledger.scan();
 	plugin.throwIfSyncCancelled?.();
 	if (!scan.complete || scan.generation !== ledger.generation || scan.paths.has(candidate.record.path) || scan.identities.get(candidate.record.keepUrl)?.length) {
 		throw new Error("The local deletion is no longer proven by a complete scan. No Keep trash was authorized.");
+	}
+	return scan.generation;
+}
+
+async function requireUploadPermission(plugin: KeepSidianPlugin): Promise<void> {
+	if (typeof plugin.requireTwoWaySafeguards !== "function") throw new Error("Upload safeguards are unavailable. Keep trash is disabled.");
+	const gate = await plugin.requireTwoWaySafeguards();
+	if (!gate?.allowed) {
+		if (gate) plugin.showTwoWaySafeguardNotice?.(gate);
+		throw new Error("Upload safeguards must be satisfied before moving notes to Keep Trash.");
 	}
 }
 
@@ -161,18 +178,24 @@ export async function executeReviewedLocalDeletions(
 		prepared.entries.some((entry) => entry.id === candidate.entryId && entry.selectable && entry.action === "delete"));
 	if (!selected.length) return 0;
 	const ledger = getDeletionLedger(plugin);
-	if (!ledger || typeof plugin.requireTwoWaySafeguards !== "function" || !await plugin.requireTwoWaySafeguards()) {
-		throw new Error("Upload safeguards must be satisfied before moving notes to Keep Trash.");
+	try {
+		if (!ledger) throw new Error("The deletion ledger is unavailable. No Google Keep deletion is authorized.");
+		await requireUploadPermission(plugin);
+		// Validate every selected local witness before the first remote side effect.
+		await assertContext(plugin, ledger, prepared);
+		for (const candidate of selected) await assertAbsent(plugin, ledger, candidate);
+	} catch (error) {
+		for (const candidate of selected) callbacks?.onEntrySettled?.(candidate.entryId, false);
+		throw error;
 	}
-	// Validate every selected local witness before the first remote side effect.
-	await assertContext(plugin, ledger, prepared);
-	for (const candidate of selected) await assertAbsent(plugin, ledger, candidate);
 	let completed = 0;
 	for (const candidate of selected) {
 		try {
+			await requireUploadPermission(plugin);
 			await assertContext(plugin, ledger, prepared);
-			await assertAbsent(plugin, ledger, candidate);
+			const generation = await assertAbsent(plugin, ledger, candidate);
 			await assertContext(plugin, ledger, prepared);
+			if (generation !== ledger.generation) throw new Error("The vault changed after the deletion scan. Refresh the upload plan.");
 			const [result] = await requestKeepTrash(plugin.settings.email, plugin.settings.token,
 				[{ keep_url: candidate.record.keepUrl, expected_revision: candidate.record.revision }], true);
 			if (result.status !== "trashed" && result.status !== "already_trashed") {
