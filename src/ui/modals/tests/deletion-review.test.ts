@@ -2,18 +2,21 @@ import { createPreparedSyncPlanFixture, createSyncPlanEntryFixture } from "@test
 import { deletionReviewSummary, markDeletionConflict, retainUncheckedDeletions } from "../deletion-review";
 
 function uploadPlan() {
-	return createPreparedSyncPlanFixture("push", "upload", ["a", "b"].map((id) => createSyncPlanEntryFixture("delete", "Delete from Google Keep", {
+	return createPreparedSyncPlanFixture("push", "upload", ["a", "b"].map((id) => createSyncPlanEntryFixture("delete", "No longer in sync folder", {
 		id: `upload-delete:${id}`, path: `Keep/${id}.md`, stage: "upload", mode: "push", selected: true, selectable: true, selectionLocked: false,
 	}))).plan;
 }
 
-it("names Google Keep Trash, includes selected and total counts, and never promises permanent deletion", () => {
+it("explains folder removals, selected counts, Keep Trash and preservation of moved-out files", () => {
 	const plan = uploadPlan();
 	plan.entries[1].selected = false;
 	const summary = deletionReviewSummary(plan);
-	expect(summary).toContain("1 of 2 local deletions selected");
+	expect(summary).toContain("1 of 2 folder removals selected");
+	expect(summary).toContain("No longer in sync folder");
+	expect(summary).toContain("local deletions and moves out");
 	expect(summary).toContain("Google Keep Trash, never permanently deleted");
-	expect(summary).toContain("Uncheck a deletion");
+	expect(summary).toContain("Moved-out local files stay untouched");
+	expect(summary).toContain("Uncheck a removal");
 	expect(summary).not.toContain("deleted from Obsidian");
 });
 
@@ -31,7 +34,7 @@ it("preserves the existing reverse-direction review wording and recoverable .tra
 	expect(deletionReviewSummary(plan)).toContain("Attachments are retained");
 });
 
-it("does not silently reselect an unchecked deletion during upload review refresh", () => {
+it("does not silently reselect an unchecked removal during upload review refresh", () => {
 	const previous = uploadPlan();
 	previous.entries[0].selected = false;
 	const refreshed = uploadPlan();
