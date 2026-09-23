@@ -16,7 +16,7 @@ export async function executeTrackedInboundDeletions(
 	let count = 0;
 	try {
 		await withLocalDeletionTrackingSuppressed(plugin, async () => {
-			await executeReviewedDeletions(plugin, prepared, selectedEntryIds, {
+			await executeReviewedDeletions(plugin, prepared, new Set(selectedEntryIds), {
 				...callbacks,
 				onEntrySettled: (entryId, success, outcome) => {
 					if (success) {
