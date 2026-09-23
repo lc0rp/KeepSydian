@@ -5,13 +5,14 @@ import { MAX_TRASH_BATCH, requestKeepTrash, type KeepTrashStatus } from "@integr
 import { normalizeNote, type PreNormalizedNote } from "../domain/note";
 import type { SyncCallbacks } from "../sync";
 import { getDeletionLedger, type LocalDeletionLedger } from "./ledger";
-import { isWithinScope, type LocalDeletionRecord } from "./state";
+import { type LocalDeletionRecord } from "./state";
 import { contentKeepIdentity, type IdentityScan } from "./scan";
 
 export interface LocalDeletionCandidate { entryId: string; record: LocalDeletionRecord; acknowledged?: boolean; }
 export interface PreparedLocalDeletions {
 	account?: string;
 	scope?: string;
+	scopeGeneration?: string;
 	entries: SyncPlanEntry[];
 	candidates: LocalDeletionCandidate[];
 	protectedKeepUrls: Set<string>;
@@ -23,7 +24,7 @@ function emptyPlan(): PreparedLocalDeletions {
 }
 
 function blockedEntry(id: string, path: string, title: string, detail: string): SyncPlanEntry {
-	return { id, path, title, mode: "push", stage: "upload", action: "skipped-conflict", label: "Deletion not verified",
+	return { id, path, title, mode: "push", stage: "upload", action: "skipped-conflict", label: "Removal not verified",
 		selectable: false, selected: false, selectionLocked: false, meta: { detail } };
 }
 
@@ -31,7 +32,7 @@ function protectedIdentities(records: LocalDeletionRecord[], scan: IdentityScan)
 	return new Set(records.filter((record) => !scan.complete || !(scan.identities.get(record.keepUrl)?.length)).map((record) => record.keepUrl));
 }
 
-/** Protect all known missing identities, including unchecked and unverified ones. */
+/** Missing membership stays protected through both stages, including opt-outs. */
 export async function getLocalDeletionProtection(plugin: KeepSidianPlugin): Promise<Set<string>> {
 	const ledger = getDeletionLedger(plugin);
 	if (!ledger) return new Set();
@@ -40,7 +41,7 @@ export async function getLocalDeletionProtection(plugin: KeepSidianPlugin): Prom
 		plugin.throwIfSyncCancelled?.();
 		try {
 			if (contentKeepIdentity(await plugin.app.vault.adapter.read(record.path)) === record.keepUrl) continue;
-		} catch { /* A missing path may still be a move; scan outside the sync folder. */ }
+		} catch { /* An in-folder rename is resolved by the scoped identity scan. */ }
 		uncertain.push(record);
 	}
 	if (!uncertain.length) return new Set();
@@ -55,7 +56,7 @@ export function downloadedKeepIdentity(note: PreNormalizedNote | undefined): str
 
 export async function assertNoUnreviewedLocalDeletions(plugin: KeepSidianPlugin): Promise<void> {
 	if ((await getLocalDeletionProtection(plugin)).size) {
-		throw new Error("Known local removals require review in Sync Center. Automatic download was stopped to avoid recreating those notes.");
+		throw new Error("Tracked notes are no longer in the sync folder. Review them in Sync Center; automatic download will not recreate them.");
 	}
 }
 
@@ -71,24 +72,25 @@ export async function buildLocalDeletionPlan(
 		const context = await ledger.context();
 		prepared.account = context.account;
 		prepared.scope = context.scope;
+		prepared.scopeGeneration = context.generation;
 		const records = await ledger.records();
 		if (!records.length) return prepared;
 		const scan = await ledger.scan();
 		plugin.throwIfSyncCancelled?.();
 		prepared.protectedKeepUrls = protectedIdentities(records, scan);
 		if (!scan.complete) {
-			prepared.entries.push(blockedEntry("upload-deletions:incomplete-scan", "", "Local deletion review unavailable", scan.reason));
+			prepared.entries.push(blockedEntry("upload-deletions:incomplete-scan", "", "Folder membership review unavailable", scan.reason));
 			prepared.hasBlockingConflicts = true;
 			return prepared;
 		}
 		for (const record of records) {
-			// Presence anywhere, even outside the sync folder or under another
-			// extension, defeats deletion. An occupied original path also blocks it.
-			if (scan.identities.get(record.keepUrl)?.length || scan.paths.has(record.path)) continue;
-			const entryId = `upload-delete:${record.keepUrl}:${record.generation}`;
-			if (record.state !== "tombstone" || !record.witness || record.scope !== context.scope || !isWithinScope(record.path, context.scope)) {
-				prepared.entries.push(blockedEntry(entryId, record.path, record.path.split("/").pop() ?? "Local note",
-					"This absence has no eligible explicit Obsidian deletion witness in the current sync folder. Moves, offline removals and scope changes are not deletions."));
+			// Identity presence inside this folder defeats removal, regardless of
+			// path/extension. Outside files are outside membership and untouched.
+			if (scan.identities.get(record.keepUrl)?.length) continue;
+			const entryId = `upload-delete:${context.generation}:${record.keepUrl}:${record.generation}`;
+			if (record.baseline !== "synced") {
+				prepared.entries.push(blockedEntry(entryId, record.path, "Fresh folder baseline required",
+					"This migrated or unverified identity needs a completed in-folder sync receipt. Restore and sync it before proposing removal; old metadata cannot authorize Keep Trash."));
 				prepared.hasBlockingConflicts = true;
 				continue;
 			}
@@ -104,27 +106,28 @@ export async function buildLocalDeletionPlan(
 				const status = byUrl.get(candidate.record.keepUrl)!;
 				const eligible = status === "ready" || status === "already_trashed";
 				const entry = blockedEntry(candidate.entryId, candidate.record.path,
-					candidate.record.path.split("/").pop()?.replace(/\.md$/i, "") ?? "Local note", statusDetail(status));
+					candidate.record.path.split("/").pop()?.replace(/\.md$/i, "") ?? "Tracked note", statusDetail(status));
 				if (eligible) {
 					entry.action = "delete";
-					entry.label = "Delete from Google Keep";
+					entry.label = "No longer in sync folder";
 					entry.selectable = true;
 					entry.selected = true;
 					entry.selectionLocked = !allowPerNoteSelection;
 					entry.selectionLockedReason = allowPerNoteSelection ? undefined : selectionLockedReason;
 				} else {
-					entry.label = status === "conflict" ? "Deletion conflict" : "Deletion not verified";
+					if (status === "conflict") entry.label = "Deletion conflict";
 					prepared.hasBlockingConflicts = true;
 				}
 				prepared.entries.push(entry);
 			}
 		}
+		await assertContext(plugin, ledger, prepared);
+		if (scan.generation !== ledger.generation) throw new Error("Membership changed during remote preview.");
 		return prepared;
 	} catch {
 		plugin.throwIfSyncCancelled?.();
-		// An unavailable contract/ledger is not an empty successful deletion plan.
-		prepared.entries = [blockedEntry("upload-deletions:unavailable", "", "Local deletion review unavailable",
-			"The identity baseline, complete scan or remote preview could not be verified. No Google Keep deletion is authorized.")];
+		prepared.entries = [blockedEntry("upload-deletions:unavailable", "", "Folder membership review unavailable",
+			"The identity baseline, complete sync-folder scan or remote preview could not be verified. No Google Keep removal is authorized.")];
 		prepared.candidates = [];
 		prepared.hasBlockingConflicts = true;
 		return prepared;
@@ -133,8 +136,8 @@ export async function buildLocalDeletionPlan(
 
 function statusDetail(status: KeepTrashStatus): string {
 	switch (status) {
-		case "ready": return "Move this explicitly deleted local note to Google Keep Trash. No permanent deletion. Uncheck to leave Keep unchanged.";
-		case "already_trashed": return "Google Keep already reports this identity in Trash. Selection only acknowledges that confirmed state.";
+		case "ready": return "No longer in sync folder. Selection moves the linked note to Google Keep Trash. Any moved-out local file stays untouched. Uncheck to leave Keep unchanged.";
+		case "already_trashed": return "No longer in sync folder; Google Keep already reports this identity in Trash. Selection only acknowledges that confirmed state.";
 		case "conflict": return "Google Keep changed since the last completed sync. This note will not be trashed; review the remote change first.";
 		case "missing": return "Google Keep did not return this identity. Missing is not proof of Trash, and no fallback delete is allowed.";
 		default: return "The current remote revision or trash outcome could not be verified. Keep remains unacknowledged; refresh the plan before retrying.";
@@ -143,23 +146,24 @@ function statusDetail(status: KeepTrashStatus): string {
 
 async function assertContext(plugin: KeepSidianPlugin, ledger: LocalDeletionLedger, prepared: PreparedLocalDeletions): Promise<void> {
 	plugin.throwIfSyncCancelled?.();
-	await ledger.verify();
 	const context = await ledger.context();
-	if (context.account !== prepared.account || context.scope !== prepared.scope) throw new Error("The account or sync folder changed. Refresh the upload plan.");
+	if (context.account !== prepared.account || context.scope !== prepared.scope || context.generation !== prepared.scopeGeneration) {
+		throw new Error("The account or sync-folder baseline changed. Refresh the upload plan.");
+	}
 }
 
 async function assertAbsent(plugin: KeepSidianPlugin, ledger: LocalDeletionLedger, candidate: LocalDeletionCandidate): Promise<number> {
 	await ledger.assertCurrent(candidate.record);
 	const scan = await ledger.scan();
 	plugin.throwIfSyncCancelled?.();
-	if (!scan.complete || scan.generation !== ledger.generation || scan.paths.has(candidate.record.path) || scan.identities.get(candidate.record.keepUrl)?.length) {
-		throw new Error("The local deletion is no longer proven by a complete scan. No Keep trash was authorized.");
+	if (!scan.complete || scan.scope !== candidate.record.scope || scan.generation !== ledger.generation || scan.identities.get(candidate.record.keepUrl)?.length) {
+		throw new Error("Absence from the sync folder is no longer proven by a complete scan. No Keep Trash action was authorized.");
 	}
 	return scan.generation;
 }
 
 async function requireUploadPermission(plugin: KeepSidianPlugin): Promise<void> {
-	if (typeof plugin.requireTwoWaySafeguards !== "function") throw new Error("Upload safeguards are unavailable. Keep trash is disabled.");
+	if (typeof plugin.requireTwoWaySafeguards !== "function") throw new Error("Upload safeguards are unavailable. Keep Trash is disabled.");
 	const gate = await plugin.requireTwoWaySafeguards();
 	if (!gate?.allowed) {
 		if (gate) plugin.showTwoWaySafeguardNotice?.(gate);
@@ -179,9 +183,8 @@ export async function executeReviewedLocalDeletions(
 	if (!selected.length) return 0;
 	const ledger = getDeletionLedger(plugin);
 	try {
-		if (!ledger) throw new Error("The deletion ledger is unavailable. No Google Keep deletion is authorized.");
+		if (!ledger) throw new Error("The membership index is unavailable. No Google Keep removal is authorized.");
 		await requireUploadPermission(plugin);
-		// Validate every selected local witness before the first remote side effect.
 		await assertContext(plugin, ledger, prepared);
 		for (const candidate of selected) await assertAbsent(plugin, ledger, candidate);
 	} catch (error) {
@@ -195,7 +198,7 @@ export async function executeReviewedLocalDeletions(
 			await assertContext(plugin, ledger, prepared);
 			const generation = await assertAbsent(plugin, ledger, candidate);
 			await assertContext(plugin, ledger, prepared);
-			if (generation !== ledger.generation) throw new Error("The vault changed after the deletion scan. Refresh the upload plan.");
+			if (generation !== ledger.generation) throw new Error("The sync folder changed after its scan. Refresh the upload plan.");
 			const [result] = await requestKeepTrash(plugin.settings.email, plugin.settings.token,
 				[{ keep_url: candidate.record.keepUrl, expected_revision: candidate.record.revision }], true);
 			if (result.status !== "trashed" && result.status !== "already_trashed") {
@@ -220,7 +223,7 @@ export async function executeReviewedLocalDeletions(
 		} catch (error) {
 			const conflict = prepared.entries.some((entry) => entry.id === candidate.entryId && entry.action === "skipped-conflict");
 			callbacks?.onEntrySettled?.(candidate.entryId, false, conflict ? "skipped-conflict" : undefined);
-			throw error; // Later candidates remain untouched and retryable.
+			throw error;
 		}
 	}
 	return completed;
