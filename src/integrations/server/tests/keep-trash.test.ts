@@ -22,7 +22,7 @@ it.each([
 	[{ ...note, keep_url: "https://keep.google.com/u/1/#NOTE/fixture-a" }],
 	[{ ...note, keep_url: "https://keep.google.com/#NOTE/unsafe%2Fidentity" }],
 	[{ ...note, expected_revision: "2026-09-01" }],
-])("rejects an unsafe or unbounded request before network I/O", async (notes) => {
+].map((notes) => ({ notes })))("rejects an unsafe or unbounded request before network I/O", async ({ notes }) => {
 	await expect(requestKeepTrash("fixture@example.com", "fixture-token", notes)).rejects.toThrow();
 	expect(post).not.toHaveBeenCalled();
 });
