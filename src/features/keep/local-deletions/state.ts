@@ -4,9 +4,10 @@ import { KEEP_REVISION_PATTERN } from "@integrations/server/keepTrash";
 import { KEEPSIDIAN_SERVER_URL } from "../../../config";
 
 export const MAX_DELETION_RECORDS = 20_000;
+export const MAX_LEDGER_BYTES = 16 * 1024 * 1024;
 
 export function isSafeVaultPath(path: string, allowRoot = false): boolean {
-	return (allowRoot || path.length > 0) && !path.startsWith("/") && !/[\\\u0000]/.test(path) &&
+	return (allowRoot || path.length > 0) && !path.startsWith("/") && !/^[A-Za-z]:/.test(path) && !/[\\\u0000]/.test(path) &&
 		(path === "" || path.split("/").every((part) => part !== "" && part !== "." && part !== ".."));
 }
 
@@ -55,14 +56,22 @@ export function recordGeneration(): string {
 	return globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
+function assertLedgerSize(text: string): void {
+	if (text.length > MAX_LEDGER_BYTES || new TextEncoder().encode(text).byteLength > MAX_LEDGER_BYTES) {
+		throw new Error("Deletion metadata exceeds capacity.");
+	}
+}
+
 /** A checksum detects truncated/corrupt local metadata; it is not an auth token. */
 export async function encodeLedger(state: LocalDeletionState): Promise<string> {
 	const ledger = LedgerSchema.parse({ ...state, records: [...state.records].sort((a, b) => a.keepUrl.localeCompare(b.keepUrl)) });
-	return JSON.stringify({ ledger, digest: await sha256(JSON.stringify(ledger)) });
+	const text = JSON.stringify({ ledger, digest: await sha256(JSON.stringify(ledger)) });
+	assertLedgerSize(text);
+	return text;
 }
 
 export async function decodeLedger(text: string): Promise<LocalDeletionState> {
-	if (text.length > 16 * 1024 * 1024) throw new Error("Deletion metadata exceeds capacity.");
+	assertLedgerSize(text);
 	const envelope = z.object({ ledger: LedgerSchema, digest: z.string().regex(/^[a-f0-9]{64}$/) }).strict().parse(JSON.parse(text));
 	if (await sha256(JSON.stringify(envelope.ledger)) !== envelope.digest) throw new Error("Deletion metadata is incomplete or damaged.");
 	return envelope.ledger;
