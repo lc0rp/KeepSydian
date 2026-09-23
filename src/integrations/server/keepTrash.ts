@@ -53,8 +53,8 @@ export async function requestKeepTrash(
 	if (!apply && (!complete || results.some((result) => ["trashed", "failed", "not_processed"].includes(result.status)))) {
 		throw new Error("Keep trash preview was incomplete. No deletion is eligible without a complete preview.");
 	}
-	if (apply && (results.some((result) => result.status === "ready") ||
-		(complete && results.some((result) => result.status === "failed" || result.status === "not_processed")))) {
+	const hasUnprocessed = results.some((result) => result.status === "failed" || result.status === "not_processed");
+	if (apply && (results.some((result) => result.status === "ready") || complete === hasUnprocessed)) {
 		throw new Error("Keep trash did not confirm a consistent application result. Refresh the plan before retrying.");
 	}
 	return results;
