@@ -237,7 +237,10 @@ it.each(["account", "scope", "restored", "gate", "metadata"])("revalidates %s be
 	if (change === "account") fixture.plugin.settings.email = "other@example.com";
 	if (change === "scope") fixture.plugin.settings.saveLocation = "Other";
 	if (change === "restored") fixture.put("Elsewhere/restored.md", noteText("a"));
-	if (change === "gate") jest.mocked(fixture.plugin.requireTwoWaySafeguards).mockResolvedValue({ allowed: false, reasons: [] });
+	if (change === "gate") {
+		const gate = await fixture.plugin.requireTwoWaySafeguards();
+		jest.mocked(fixture.plugin.requireTwoWaySafeguards).mockResolvedValue({ ...gate, allowed: false, reasons: [] });
+	}
 	if (change === "metadata") fixture.stored.set(METADATA, "corrupt");
 	await expect(executeReviewedLocalDeletions(fixture.plugin, plan, new Set([plan.candidates[0].entryId]))).rejects.toThrow();
 	expect(api.requestKeepTrash).not.toHaveBeenCalled();
