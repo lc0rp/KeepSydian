@@ -21,7 +21,7 @@ import { buildDeletionPlan, type PreparedDeletions } from "@features/keep/deleti
 import { excludeDeletionUploads, getDeletionUploadPaths } from "@features/keep/deletion-upload-exclusions";
 import { getDeletionLedger } from "@features/keep/local-deletions/ledger";
 import { executeTrackedInboundDeletions } from "@features/keep/local-deletions/inbound";
-import { stageIdenticalDownloadReceipts } from "@features/keep/local-deletions/download";
+import { stageIdenticalDownloadReceipts, StaleDownloadReviewError } from "@features/keep/local-deletions/download";
 import {
 	assertNoUnreviewedLocalDeletions,
 	downloadedKeepIdentity,
@@ -145,9 +145,11 @@ async function assertPreparedDeletionContext(plugin: KeepSidianPlugin, prepared:
 }
 
 async function finishDeletionReceipts(plugin: KeepSidianPlugin, attempt: SyncAttempt): Promise<boolean> {
-	const completed = await getDeletionLedger(plugin)?.finishReceipts(attempt.id);
+	const ledger = getDeletionLedger(plugin);
+	const completed = await ledger?.finishReceipts(attempt.id);
 	if (completed === false) {
-		new Notice("Notes were processed, but a complete sync-folder membership baseline could not be recorded. No new removal eligibility or successful-sync checkpoint was advanced.");
+		new Notice(["Notes were processed, but tracking is incomplete.", ledger?.lastReceiptWarning,
+			"Confirmed notes remain tracked. The last successful sync checkpoint has not advanced."].filter(Boolean).join(" "));
 		return false;
 	}
 	return true;
@@ -316,6 +318,7 @@ async function executeAttempt(
 		return result;
 	} catch (error) {
 		getDeletionLedger(plugin)?.discardReceipts(attempt.id);
+		if (error instanceof StaleDownloadReviewError) new Notice(error.message);
 		await attempt.fail(error);
 		const canceled = isSyncCancellationError(error);
 		finishSyncUI(plugin, canceled ? "canceled" : "failed");

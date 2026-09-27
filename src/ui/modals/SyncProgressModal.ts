@@ -54,6 +54,19 @@ function modeLabel(mode: SyncMode): string {
 }
 function modeUsesDownload(mode: SyncMode): boolean { return mode !== "push"; }
 function modeRequiresTwoWayGate(mode: SyncMode): boolean { return mode === "push" || mode === "two-way"; }
+function reviewContinuationLabel(prepared: PreparedSyncPlan | null): string | undefined {
+	if (!prepared || prepared.stage !== "import") return undefined;
+	// The upload review is still required when the download stage has no selected
+	// writes, including when missing tracked identities were protected from import.
+	if (prepared.mode === "two-way") return "Continue to upload";
+	// Identical downloads still carry server receipts that can establish tracking.
+	// Keep entirely deselected actionable plans disabled.
+	if (prepared.mode === "import" && (prepared.importNotes?.length ?? 0) > 0 &&
+		prepared.plan.entries.length > 0 && prepared.plan.entries.every((entry) => !entry.selectable && entry.action === "skipped-identical")) {
+		return "Complete review";
+	}
+	return undefined;
+}
 function formatGeneratedAt(timestamp: number): string {
 	try { return new Date(timestamp).toLocaleString(); } catch { return new Date(timestamp).toISOString(); }
 }
@@ -760,9 +773,11 @@ export class SyncProgressModal extends Modal {
 				await this.activeAttempt?.finish("abandoned"); this.preparedPlan = null; this.executionSnapshot = null; this.showExecutionResult = false; this.reviewFilterKey = "notes"; await this.refreshUI();
 			}).classList.add("keepsidian-modal-action--back");
 			this.createActionButton(this.planActionsEl, "↻ Refresh", async () => { await this.refreshCurrentReview(); }).classList.add("keepsidian-modal-action--refresh-review");
-			const runButton = this.createActionButton(this.planActionsEl, "Execute ▶︎", async () => { await this.runReviewedPlan(); });
+			const hasSelection = this.preparedPlan?.plan.entries.some((entry) => entry.selectable && entry.selected) ?? false;
+			const continuationLabel = hasSelection ? undefined : reviewContinuationLabel(this.preparedPlan);
+			const runButton = this.createActionButton(this.planActionsEl, continuationLabel ?? "Execute ▶︎", async () => { await this.runReviewedPlan(); });
 			runButton.classList.add("mod-cta", "keepsidian-modal-action--primary");
-			runButton.disabled = this.isGeneratingReview || !this.preparedPlan || this.preparedPlan.plan.entries.every((entry) => !entry.selectable || !entry.selected);
+			runButton.disabled = this.isGeneratingReview || !this.preparedPlan || (!hasSelection && !continuationLabel);
 		}
 		clearElement(this.planSummaryEl);
 		if (surface === "review" && this.preparedPlan) {

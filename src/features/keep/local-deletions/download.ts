@@ -1,10 +1,17 @@
 import type KeepSidianPlugin from "@app/main";
 import type { SyncPlanEntry } from "@types";
-import { normalizeNote, type PreNormalizedNote } from "../domain/note";
-import { handleDuplicateNotes } from "../domain/compare";
+import { extractFrontmatter, normalizeNote, type PreNormalizedNote } from "../domain/note";
+import { stripManagedImageEmbeds } from "../domain/attachmentEmbeds";
 import { canonicalKeepUrl } from "@integrations/server/keepDeletions";
 import { contentKeepIdentity } from "./scan";
 import { getDeletionLedger } from "./ledger";
+
+export class StaleDownloadReviewError extends Error {
+	constructor() {
+		super("A previously up-to-date note changed after review. Refresh the download review before completing it. No new tracking baseline or successful-sync checkpoint was saved for this attempt.");
+		this.name = "StaleDownloadReviewError";
+	}
+}
 
 /** Recheck folder membership at the write boundary, including offline changes. */
 export async function assertDownloadIdentityPresentOrUntracked(plugin: KeepSidianPlugin, note: PreNormalizedNote): Promise<void> {
@@ -46,9 +53,14 @@ export async function stageIdenticalDownloadReceipts(
 		const normalized = normalizeNote(note);
 		const keepUrl = canonicalKeepUrl(normalized.frontmatterDict.GoogleKeepUrl);
 		if (!keepUrl) continue;
-		const content = await plugin.app.vault.adapter.read(entry.path);
-		if (contentKeepIdentity(content) !== keepUrl) continue;
-		if (await handleDuplicateNotes(plugin.settings.saveLocation, normalized, plugin.app, entry.path) !== "skip") continue;
+		let content: string;
+		try { content = await plugin.app.vault.adapter.read(entry.path); }
+		catch { throw new StaleDownloadReviewError(); }
+		if (contentKeepIdentity(content) !== keepUrl) throw new StaleDownloadReviewError();
+		// Duplicate decisions can skip differing bodies based on timestamps. A
+		// receipt needs actual content equality, even when an edit preserved mtime.
+		const [, body] = extractFrontmatter(content);
+		if (stripManagedImageEmbeds(body) !== normalized.textWithoutFrontmatter) throw new StaleDownloadReviewError();
 		ledger.stageDownload(note, entry.path);
 	}
 }

@@ -53,7 +53,8 @@ it("does not enroll new uploads, unknown receipts, or abandoned downloads", asyn
 	expect(await fixture.ledger.records()).toEqual([]);
 	await fixture.ledger.beginReceipts("unknown");
 	fixture.ledger.stageDownload({ title: "a", text: noteText("a") }, "Keep/a.md");
-	await fixture.ledger.finishReceipts("unknown");
+	expect(await fixture.ledger.finishReceipts("unknown")).toBe(false);
+	expect(fixture.ledger.lastReceiptWarning).toContain("missing Google Keep version (1)");
 	expect(await fixture.ledger.records()).toEqual([]);
 	await fixture.ledger.beginReceipts("abandoned");
 	fixture.ledger.stageDownload({ title: "a", text: noteText("a"), remote_revision: REVISION }, "Keep/a.md");
@@ -83,8 +84,28 @@ it("enrolls one selected receipt despite unchecked actionable rows", async () =>
 
 it("requires unique in-folder identities for enrollment", async () => {
 	fixture.put("Keep/nested/copy.txt", noteText("a"));
-	await fixture.download("a");
+	fixture.put("Keep/a.md", noteText("a"));
+	await fixture.ledger.beginReceipts("duplicate");
+	fixture.ledger.stageDownload({ title: "a", text: noteText("a"), remote_revision: REVISION }, "Keep/a.md");
+	expect(await fixture.ledger.finishReceipts("duplicate")).toBe(false);
+	expect(fixture.ledger.lastReceiptWarning).toContain("missing or duplicate folder identity (1)");
 	expect(await fixture.ledger.records()).toEqual([]);
+});
+
+it("retains valid receipts while reporting missing versions and ambiguous or absent identities", async () => {
+	for (const id of ["valid", "unknown", "duplicate"]) fixture.put(`Keep/${id}.md`, noteText(id));
+	fixture.put("Keep/copy.md", noteText("duplicate"));
+	await fixture.ledger.beginReceipts("mixed");
+	for (const id of ["valid", "unknown", "duplicate", "absent"]) {
+		fixture.ledger.stageDownload({ title: id, text: noteText(id), remote_revision: id === "unknown" ? undefined : REVISION }, `Keep/${id}.md`);
+	}
+	expect(await fixture.ledger.finishReceipts("mixed")).toBe(false);
+	expect((await fixture.ledger.records()).map((record) => record.keepUrl)).toEqual([keepUrl("valid")]);
+	expect(fixture.ledger.lastReceiptWarning).toBe("Tracking could not be confirmed for 3 notes: missing Google Keep version (1); missing or duplicate folder identity (2).");
+	await fixture.ledger.beginReceipts("retry-confirmed");
+	fixture.ledger.stageDownload({ title: "valid", text: noteText("valid"), remote_revision: REVISION }, "Keep/valid.md");
+	expect(await fixture.ledger.finishReceipts("retry-confirmed")).toBe(true);
+	expect(fixture.ledger.lastReceiptWarning).toBeUndefined();
 });
 
 it("ignores unrelated outside copies and unreadable files during membership scans", async () => {

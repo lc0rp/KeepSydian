@@ -3,12 +3,14 @@ jest.mock("@app/sync-ui");
 
 import { webcrypto } from "crypto";
 import { TextEncoder } from "util";
+import { Notice } from "obsidian";
 import { buildManualSyncPlan, runPreparedSyncPlan, runImportNotesFlow } from "@app/main-sync-flows";
 import { createPreparedSyncPlanFixture, createSyncPlanEntryFixture } from "@test-utils/fixtures/sync-plan";
 import * as imports from "@features/keep/sync";
 import * as collector from "@features/keep/push/collectNotes";
 import * as trashApi from "@integrations/server/keepTrash";
 import * as inboundApi from "@integrations/server/keepDeletions";
+import * as downloadApi from "@integrations/server/keepApi";
 import { deletionFixture, keepUrl, noteText, REVISION } from "@features/keep/local-deletions/tests/support";
 
 const cryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto");
@@ -148,4 +150,81 @@ it("enrolls only the selected download with 124 unchecked actionable rows", asyn
 	expect((await fixture.ledger.records()).map((record) => record.keepUrl)).toEqual([keepUrl(ids[0])]);
 	expect(fixture.stored.has(`Keep/${ids[1]}.md`)).toBe(false);
 	expect(fixture.plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(completionDate);
+});
+
+it.each(["plain", "managed-image"] as const)("enrolls an identical-only completed download review without rewriting the note (%s)", async (kind) => {
+	const path = "Keep/a.md";
+	fixture.put(path, noteText("a") + (kind === "managed-image" ? "\n\n![[media/image.png]]" : ""));
+	const entry = createSyncPlanEntryFixture("skipped-identical", "Already up to date", {
+		id: "import:0", path, selectable: false, selected: false,
+	});
+	jest.spyOn(imports, "buildImportSyncPlan").mockResolvedValue({
+		plan: createPreparedSyncPlanFixture("import", "import", [entry]).plan,
+		notes: [{ title: "a", text: noteText("a"), remote_revision: REVISION }],
+		noteEntryIds: [entry.id], completionDate,
+	});
+	const before = fixture.stored.get(path);
+	const prepared = (await buildManualSyncPlan(fixture.plugin, "import"))!;
+	expect(await fixture.ledger.records()).toEqual([]);
+	await expect(runPreparedSyncPlan(fixture.plugin, prepared, String, jest.fn())).resolves.toEqual({});
+	expect(await fixture.ledger.records()).toEqual([
+		expect.objectContaining({ keepUrl: keepUrl("a"), path, revision: REVISION, baseline: "synced" }),
+	]);
+	expect(fixture.stored.get(path)).toBe(before);
+	expect(fixture.vault.adapter.write.mock.calls.some(([writtenPath]) => writtenPath === path)).toBe(false);
+	expect(fixture.plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(completionDate);
+});
+
+it.each(["missing-version", "duplicate-identity", "mixed"] as const)("reports incomplete %s receipts without advancing the checkpoint", async (scenario) => {
+	const ids = scenario === "mixed" ? ["valid", "missing", "duplicate"] : [scenario === "missing-version" ? "missing" : "duplicate"];
+	const entries = ids.map((id, index) => {
+		fixture.put(`Keep/${id}.md`, noteText(id));
+		return createSyncPlanEntryFixture("skipped-identical", "Already up to date", {
+			id: `import:${index}`, path: `Keep/${id}.md`, selectable: false, selected: false,
+		});
+	});
+	if (ids.includes("duplicate")) fixture.put("Keep/copy.md", noteText("duplicate"));
+	jest.spyOn(imports, "buildImportSyncPlan").mockResolvedValue({
+		plan: createPreparedSyncPlanFixture("import", "import", entries).plan,
+		notes: ids.map((id) => ({ title: id, text: noteText(id), remote_revision: id === "missing" ? undefined : REVISION })),
+		noteEntryIds: entries.map((entry) => entry.id), completionDate,
+	});
+	const finish = jest.spyOn(fixture.ledger, "finishReceipts");
+	const checkpoint = fixture.plugin.settings.keepSidianLastSuccessfulSyncDate;
+	jest.mocked(Notice).mockClear();
+	const prepared = (await buildManualSyncPlan(fixture.plugin, "import"))!;
+	await expect(runPreparedSyncPlan(fixture.plugin, prepared, String, jest.fn())).resolves.toEqual({});
+	await expect(finish.mock.results[0].value).resolves.toBe(false);
+	expect(fixture.plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(checkpoint);
+	expect((await fixture.ledger.records()).map((record) => record.keepUrl)).toEqual(scenario === "mixed" ? [keepUrl("valid")] : []);
+	expect(Notice).toHaveBeenCalledWith(expect.stringContaining("tracking is incomplete"));
+	expect(Notice).toHaveBeenCalledWith(expect.stringContaining("Confirmed notes remain tracked. The last successful sync checkpoint has not advanced."));
+	if (ids.includes("missing")) expect(Notice).toHaveBeenCalledWith(expect.stringContaining("missing Google Keep version (1)"));
+	if (ids.includes("duplicate")) expect(Notice).toHaveBeenCalledWith(expect.stringContaining("missing or duplicate folder identity (1)"));
+});
+
+it.each(["body", "body-preserved-time", "identity", "removed"] as const)("rejects a stale identical review (%s)", async (change) => {
+	const path = "Keep/a.md";
+	fixture.put(path, noteText("a"));
+	const response = { notes: [{ title: "a", text: noteText("a"), remote_revision: REVISION,
+		updated: change === "body-preserved-time" ? "2026-08-01T00:00:00.000Z" : undefined }], total_notes: 1 };
+	jest.spyOn(downloadApi, "getReplayEpoch").mockResolvedValue(undefined);
+	jest.spyOn(downloadApi, "fetchNotes").mockResolvedValueOnce(response).mockResolvedValue({ notes: [] });
+	jest.spyOn(downloadApi, "fetchNotesWithPremiumFeatures").mockResolvedValueOnce(response).mockResolvedValue({ notes: [] });
+	const checkpoint = fixture.plugin.settings.keepSidianLastSuccessfulSyncDate;
+	const prepared = (await buildManualSyncPlan(fixture.plugin, "import"))!;
+	expect(prepared.plan.entries).toEqual([expect.objectContaining({ action: "skipped-identical", selectable: false })]);
+	const priorMtime = (await fixture.vault.adapter.stat(path))?.mtime;
+	if (change === "removed") fixture.remove(path);
+	else fixture.put(path, change === "body" || change === "body-preserved-time" ? noteText("a") + "\nLocal edit" : noteText("different-identity"));
+	if (change === "body-preserved-time") expect((await fixture.vault.adapter.stat(path))?.mtime).toBe(priorMtime);
+	const editedContent = fixture.stored.get(path);
+	jest.mocked(Notice).mockClear();
+	fixture.vault.adapter.write.mockClear();
+	await expect(runPreparedSyncPlan(fixture.plugin, prepared, String, jest.fn())).resolves.toEqual({ failed: true });
+	expect(await fixture.ledger.records()).toEqual([]);
+	expect(fixture.plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(checkpoint);
+	expect(fixture.stored.get(path)).toBe(editedContent);
+	expect(fixture.vault.adapter.write.mock.calls.some(([writtenPath]) => writtenPath === path)).toBe(false);
+	expect(Notice).toHaveBeenCalledWith(expect.stringContaining("Refresh the download review before completing it"));
 });

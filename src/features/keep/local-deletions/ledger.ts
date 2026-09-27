@@ -30,6 +30,7 @@ export class LocalDeletionLedger {
 	private revision = 0;
 	private session?: ReceiptSession;
 	private invalidatedSession?: string;
+	private receiptWarning?: string;
 
 	constructor(readonly plugin: KeepSidianPlugin, readonly metadataPath: string) {
 		if (!isSafeVaultPath(metadataPath)) throw new Error("Unsafe deletion metadata path.");
@@ -44,6 +45,7 @@ export class LocalDeletionLedger {
 	}
 
 	get generation(): number { return this.revision; }
+	get lastReceiptWarning(): string | undefined { return this.receiptWarning; }
 	changed(): void { this.revision += 1; }
 
 	private async settingsContext(): Promise<{ account: string; scope: string }> {
@@ -193,6 +195,7 @@ export class LocalDeletionLedger {
 
 	/** Selection may be partial; the independent folder inventory must be complete. */
 	async finishReceipts(id: string): Promise<boolean> {
+		this.receiptWarning = undefined;
 		if (this.invalidatedSession === id) throw new Error("The receipt session's account or folder changed. No checkpoint may advance.");
 		const session = this.session;
 		if (!session || session.id !== id) return !this.blocked;
@@ -200,13 +203,19 @@ export class LocalDeletionLedger {
 		if (!sameContext(context, session)) throw new Error("The account or sync folder changed before the baseline completed.");
 		if (!session.receipts.size) { this.session = undefined; return true; }
 		const scan = await this.scan();
-		if (!scan.complete) { this.session = undefined; return false; }
+		if (!scan.complete) { this.receiptWarning = scan.reason; this.session = undefined; return false; }
+		let missingRevision = 0;
+		let unconfirmedIdentity = 0;
 		await this.mutate(context, (records) => {
 			const next = new Map(records.map((record) => [record.keepUrl, record]));
 			for (const receipt of session.receipts.values()) {
 				const paths = scan.identities.get(receipt.keepUrl) ?? [];
-				if (paths.length !== 1 || !isWithinScope(paths[0], context.scope)) continue;
+				if (paths.length !== 1 || !isWithinScope(paths[0], context.scope)) {
+					unconfirmedIdentity += 1;
+					continue;
+				}
 				if (!receipt.revision) {
+					missingRevision += 1;
 					const old = next.get(receipt.keepUrl);
 					if (old) next.set(receipt.keepUrl, { ...old, path: paths[0], baseline: "legacy", generation: recordGeneration() });
 					continue;
@@ -219,6 +228,15 @@ export class LocalDeletionLedger {
 			if (scan.generation !== this.generation) throw new Error("The sync folder changed before its baseline completed.");
 		});
 		this.session = undefined;
+		const unconfirmed = missingRevision + unconfirmedIdentity;
+		if (unconfirmed > 0) {
+			const reasons = [
+				missingRevision ? `missing Google Keep version (${missingRevision})` : undefined,
+				unconfirmedIdentity ? `missing or duplicate folder identity (${unconfirmedIdentity})` : undefined,
+			].filter(Boolean);
+			this.receiptWarning = `Tracking could not be confirmed for ${unconfirmed} note${unconfirmed === 1 ? "" : "s"}: ${reasons.join("; ")}.`;
+			return false;
+		}
 		return true;
 	}
 
