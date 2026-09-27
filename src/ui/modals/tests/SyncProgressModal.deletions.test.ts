@@ -71,6 +71,54 @@ it("bulk deselection leaves a deletion-only plan with zero deletions and Execute
 	expect(button(modal, "Execute").disabled).toBe(true);
 });
 
+it("allows an identical-only download review to finish its tracking receipts", async () => {
+	const prepared = createPreparedSyncPlanFixture("import", "import", [
+		createSyncPlanEntryFixture("skipped-identical", "Already up to date", {
+			id: "identical", selectable: false, selected: false,
+		}),
+	]);
+	prepared.importNotes = [{ id: "one", title: "One", remote_revision: "keep-v1:" + "a".repeat(64) }];
+	prepared.importEntryIds = ["identical"];
+	const { modal, runSyncPlan } = setup(prepared);
+	await modal.beginReview();
+	expect(button(modal, "Complete review").disabled).toBe(false);
+	button(modal, "Complete review").click();
+	await flushUI();
+	expect(runSyncPlan).toHaveBeenCalledWith(prepared, expect.any(Object));
+});
+
+it("continues a protected-removal-only two-way download to the upload deletion review", async () => {
+	const prepared = createPreparedSyncPlanFixture("two-way", "import", [
+		createSyncPlanEntryFixture("skipped-conflict", "Preserved local removal", {
+			id: "protected", selectable: false, selected: false,
+		}),
+	]);
+	const upload = createPreparedSyncPlanFixture("two-way", "upload", [
+		createSyncPlanEntryFixture("delete", "No longer in sync folder", { id: "outbound-removal" }),
+	]);
+	const { modal, runSyncPlan } = setup(prepared);
+	runSyncPlan.mockResolvedValue({ nextPlan: upload });
+	await modal.beginReview("two-way");
+	expect(button(modal, "Continue to upload").disabled).toBe(false);
+	button(modal, "Continue to upload").click();
+	await flushUI();
+	expect(runSyncPlan).toHaveBeenCalledTimes(1);
+	expect(modal.contentEl.textContent).toContain("No longer in sync folder");
+	expect(button(modal, "Execute").disabled).toBe(false);
+});
+
+it.each(["import", "push"] as const)("does not enable an entirely deselected %s plan", async (mode) => {
+	const prepared = createPreparedSyncPlanFixture(mode, mode === "push" ? "upload" : "import", [
+		createSyncPlanEntryFixture(mode === "push" ? "upload" : "create", "Change", { selected: false }),
+	]);
+	const { modal, runSyncPlan } = setup(prepared);
+	await modal.beginReview(mode);
+	expect(button(modal, "Execute").disabled).toBe(true);
+	button(modal, "Execute").click();
+	await flushUI();
+	expect(runSyncPlan).not.toHaveBeenCalled();
+});
+
 it("counts only successful deletions as Deleted while showing failed rows honestly", async () => {
 	const { modal, runSyncPlan } = setup(createPreparedSyncPlanFixture("import", "import", [deletion("One"), deletion("Two")]));
 	runSyncPlan.mockImplementation(async (_prepared, callbacks) => {

@@ -12,6 +12,7 @@ import { excludeDeletionUploads, getDeletionUploadPaths } from "@features/keep/d
 import { normalizeMergeAction } from "@features/keep/domain/merge-action";
 import { renderMergeActionSelector } from "./merge-action-selector";
 import { parseCustomScopeRange, renderCustomScopeInputs } from "./sync-date-range";
+import { deletionReviewSummary, markDeletionConflict, retainUncheckedDeletions } from "./deletion-review";
 
 interface CreateElOptions { text?: string; cls?: string | string[]; }
 type MaybeObsidianElement = HTMLElement & { empty?: () => void; setText?: (text: string) => void; };
@@ -53,6 +54,19 @@ function modeLabel(mode: SyncMode): string {
 }
 function modeUsesDownload(mode: SyncMode): boolean { return mode !== "push"; }
 function modeRequiresTwoWayGate(mode: SyncMode): boolean { return mode === "push" || mode === "two-way"; }
+function reviewContinuationLabel(prepared: PreparedSyncPlan | null): string | undefined {
+	if (!prepared || prepared.stage !== "import") return undefined;
+	// The upload review is still required when the download stage has no selected
+	// writes, including when missing tracked identities were protected from import.
+	if (prepared.mode === "two-way") return "Continue to upload";
+	// Identical downloads still carry server receipts that can establish tracking.
+	// Keep entirely deselected actionable plans disabled.
+	if (prepared.mode === "import" && (prepared.importNotes?.length ?? 0) > 0 &&
+		prepared.plan.entries.length > 0 && prepared.plan.entries.every((entry) => !entry.selectable && entry.action === "skipped-identical")) {
+		return "Complete review";
+	}
+	return undefined;
+}
 function formatGeneratedAt(timestamp: number): string {
 	try { return new Date(timestamp).toLocaleString(); } catch { return new Date(timestamp).toISOString(); }
 }
@@ -131,7 +145,7 @@ function getResultTitle(plan: SyncPlan, status: SyncRunStatus | null): string {
 }
 function getRuntimeStatusLabel(entry: SyncPlanEntry, state: EntryRunState): string {
 	if (state === "unchecked") return "Unchecked";
-	if (state === "failed") return "Failed";
+	if (state === "failed") return entry.action === "skipped-conflict" && entry.label === "Deletion conflict" ? "Deletion conflict" : "Failed";
 	if (state === "pending") return "Pending";
 	return getExecutionChipLabel(getChipKeyForEntry(entry));
 }
@@ -438,6 +452,11 @@ export class SyncProgressModal extends Modal {
 		if (!current || current === "unchecked" || current === "instant") return;
 		this.executionSnapshot.entryStates.set(entryId, success ? "done" : "failed");
 		const entry = this.executionSnapshot.plan.entries.find((candidate) => candidate.id === entryId);
+		if (!success && outcome === "skipped-conflict" && entry?.action === "delete") {
+			markDeletionConflict(entry);
+			void this.refreshUI();
+			return;
+		}
 		if (success && outcome && entry && entry.action !== outcome) {
 			entry.action = outcome;
 			void this.refreshUI();
@@ -754,19 +773,18 @@ export class SyncProgressModal extends Modal {
 				await this.activeAttempt?.finish("abandoned"); this.preparedPlan = null; this.executionSnapshot = null; this.showExecutionResult = false; this.reviewFilterKey = "notes"; await this.refreshUI();
 			}).classList.add("keepsidian-modal-action--back");
 			this.createActionButton(this.planActionsEl, "↻ Refresh", async () => { await this.refreshCurrentReview(); }).classList.add("keepsidian-modal-action--refresh-review");
-			const runButton = this.createActionButton(this.planActionsEl, "Execute ▶︎", async () => { await this.runReviewedPlan(); });
+			const hasSelection = this.preparedPlan?.plan.entries.some((entry) => entry.selectable && entry.selected) ?? false;
+			const continuationLabel = hasSelection ? undefined : reviewContinuationLabel(this.preparedPlan);
+			const runButton = this.createActionButton(this.planActionsEl, continuationLabel ?? "Execute ▶︎", async () => { await this.runReviewedPlan(); });
 			runButton.classList.add("mod-cta", "keepsidian-modal-action--primary");
-			runButton.disabled = this.isGeneratingReview || !this.preparedPlan || this.preparedPlan.plan.entries.every((entry) => !entry.selectable || !entry.selected);
+			runButton.disabled = this.isGeneratingReview || !this.preparedPlan || (!hasSelection && !continuationLabel);
 		}
 		clearElement(this.planSummaryEl);
 		if (surface === "review" && this.preparedPlan) {
 			createChild(this.planSummaryEl, "div", { text: `${this.preparedPlan.plan.actionableCount} changes found.` }).classList.add("keepsidian-sync-plan-summary-copy");
 			const deletions = this.preparedPlan.plan.entries.filter((entry) => entry.action === "delete");
 			if (deletions.length > 0) {
-				const selected = deletions.filter((entry) => entry.selectable && entry.selected).length;
-				const warning = createChild(this.planSummaryEl, "div", {
-					text: `${selected} note${selected === 1 ? "" : "s"} will be deleted from Obsidian (moved to .trash). Uncheck any deletion to keep the local note. Attachments are retained.`,
-				});
+				const warning = createChild(this.planSummaryEl, "div", { text: deletionReviewSummary(this.preparedPlan.plan) });
 				warning.classList.add("keepsidian-sync-plan-summary-copy");
 				warning.setAttribute("aria-live", "polite");
 				warning.setAttribute("data-keepsidian-role", "deletion-summary");
@@ -800,7 +818,9 @@ export class SyncProgressModal extends Modal {
 				if (!refreshedPlan) { this.preparedPlan = null; return; }
 				refreshedPlan.attempt = original.attempt; refreshedPlan.completionDate = original.completionDate; refreshedPlan.attachmentWarnings = original.attachmentWarnings;
 				refreshedPlan.deletions = original.deletions;
-				refreshedPlan.plan = excludeDeletionUploads(refreshedPlan.plan, original.deletions);
+				refreshedPlan.deletionContext = original.deletionContext;
+				refreshedPlan.protectedLocalKeepUrls = original.protectedLocalKeepUrls;
+				refreshedPlan.plan = retainUncheckedDeletions(original.plan, excludeDeletionUploads(refreshedPlan.plan, original.deletions));
 				refreshedPlan.unresolvedConflictPaths = original.unresolvedConflictPaths; refreshedPlan.forceUploadPaths = original.forceUploadPaths; refreshedPlan.mode = "two-way";
 				refreshedPlan.plan = {
 					...refreshedPlan.plan, mode: "two-way", mergeAction: normalizeMergeAction(original.plan.mergeAction),
@@ -816,7 +836,12 @@ export class SyncProgressModal extends Modal {
 			}
 			return;
 		}
-		await this.beginReview(this.preparedPlan.mode, normalizeMergeAction(this.preparedPlan.plan.mergeAction));
+		const previous = this.preparedPlan.plan;
+		await this.beginReview(this.preparedPlan.mode, normalizeMergeAction(previous.mergeAction));
+		if (this.preparedPlan) {
+			this.preparedPlan.plan = retainUncheckedDeletions(previous, this.preparedPlan.plan);
+			await this.refreshUI();
+		}
 	}
 	private renderChips(containerEl: HTMLElement, surface: "review" | "running" | "result") {
 		const countsEl = createChild(containerEl, "div"); countsEl.classList.add("keepsidian-sync-plan-counts");

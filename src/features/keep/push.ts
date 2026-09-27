@@ -11,6 +11,9 @@ import { getReviewedPushAction, prepareReviewedUploads, reviewPushNotes, type Pu
 import { DEFAULT_MERGE_ACTION } from "./domain/merge-action";
 import { bodyBaseline, hasPendingUpload, localKeepKey, stripSyncState, withSyncState } from "./domain/sync-state";
 import { pushNotes as apiPushNotes, PushNotePayload, PushNoteResult } from "@integrations/server/keepApi";
+import { canonicalKeepUrl } from "@integrations/server/keepDeletions";
+import { getDeletionLedger } from "./local-deletions/ledger";
+import { buildLocalDeletionPlan, type PreparedLocalDeletions } from "./local-deletions/plan";
 import type { SyncPlan, SyncPlanEntry } from "@types";
 import { safeSyncError } from "@app/sync-attempt";
 import { AppError } from "@services/errors";
@@ -24,7 +27,7 @@ function mapResultsByPath(results?: PushNoteResult[]): Map<string, PushNoteResul
 	if (results) for (const result of results) if (result?.path) map.set(normalizePathSafe(result.path), result);
 	return map;
 }
-export interface BuiltPushSyncPlan { plan: SyncPlan; notesToPush: ReviewedPushNote[]; }
+export interface BuiltPushSyncPlan { plan: SyncPlan; notesToPush: ReviewedPushNote[]; localDeletions?: PreparedLocalDeletions; }
 
 function buildPushPlanEntry(note: ReviewedPushNote, index: number, allowPerNoteSelection: boolean, selectionLockedReason?: string): SyncPlanEntry {
 	const attachmentCount = note.updatedAttachmentNames.length, missingAttachmentCount = note.missingAttachments.length;
@@ -55,8 +58,10 @@ export async function buildPushSyncPlan(plugin: KeepSidianPlugin, allowPerNoteSe
 		.map((note, index) => ({ ...note, planEntryId: `upload:${index}:${normalizePathSafe(note.fullPath)}` }));
 	if (options?.reviewMerges) notesToPush = await reviewPushNotes(plugin, notesToPush);
 	const skippedNotes = [...collected.skippedNotes, ...protectedNotes.map((note) => ({ path: note.fullPath, reason: "unresolved-conflict" }))];
+	const localDeletions = await buildLocalDeletionPlan(plugin, allowPerNoteSelection, selectionLockedReason);
 	const entries: SyncPlanEntry[] = [
 		...notesToPush.map((note, index) => buildPushPlanEntry(note, index, allowPerNoteSelection, selectionLockedReason)),
+		...localDeletions.entries,
 		...skippedNotes.map((skipped, index): SyncPlanEntry => ({
 			id: `upload-skipped:${index}:${normalizePathSafe(skipped.path)}`, mode: "push", stage: "upload",
 			title: skipped.path.split("/").pop() || skipped.path, path: normalizePathSafe(skipped.path),
@@ -69,8 +74,11 @@ export async function buildPushSyncPlan(plugin: KeepSidianPlugin, allowPerNoteSe
 	];
 	const counts = entries.reduce<Record<string, number>>((acc, entry) => { acc[entry.label] = (acc[entry.label] ?? 0) + 1; return acc; }, {});
 	return {
-		plan: { id: `push-plan:${Date.now()}`, mode: "push", stage: "upload", generatedAt: Date.now(), title: "Review upload changes", entries, counts, selectedCount: notesToPush.length, actionableCount: notesToPush.length },
+		plan: { id: `push-plan:${Date.now()}`, mode: "push", stage: "upload", generatedAt: Date.now(), title: "Review upload changes", entries, counts,
+			selectedCount: entries.filter((entry) => entry.selectable && entry.selected).length,
+			actionableCount: entries.filter((entry) => entry.selectable).length },
 		notesToPush,
+		localDeletions,
 	};
 }
 
@@ -144,6 +152,11 @@ export async function pushGoogleKeepNotes(plugin: KeepSidianPlugin, callbacks?: 
 					// Body, baseline and pending state change together. A failed local
 					// write leaves the original pending marker available for retry.
 					await plugin.app.vault.adapter.write(note.fullPath, wrapMarkdown(frontmatter, note.body));
+					getDeletionLedger(plugin)?.stageUpload(
+						canonicalKeepUrl(result?.keep_url ?? localKeepKey(frontmatter)),
+						normalizePathSafe(note.fullPath),
+						result?.success === true && typeof result.remote_revision === "string" ? result.remote_revision : undefined
+					);
 					const attachmentSuffix = note.updatedAttachmentNames.length > 0 ? ` (updated ${note.updatedAttachmentNames.length === 1 ? "1 attachment" : `${note.updatedAttachmentNames.length} attachments`})` : "";
 					await logSync(plugin, `${noteLabel} - pushed${attachmentSuffix}`, batchOptions);
 					for (const missing of note.missingAttachments) await logSync(plugin, `${noteLabel} - missing attachment${callbacks?.attempt ? "" : ` ${missing}`}`, batchOptions);
