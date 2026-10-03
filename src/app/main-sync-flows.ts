@@ -161,6 +161,12 @@ export async function buildManualSyncPlan(
 	callbacks?: SyncPlanBuildCallbacks,
 	downloadScope?: DownloadScope
 ): Promise<PreparedSyncPlan | null> {
+	const premiumFeatures = {
+		...plugin.settings.premiumFeatures,
+		includeNotesTerms: [...plugin.settings.premiumFeatures.includeNotesTerms],
+		excludeNotesTerms: [...plugin.settings.premiumFeatures.excludeNotesTerms],
+		includeColors: [...plugin.settings.premiumFeatures.includeColors],
+	};
 	const attempt = callbacks?.attempt ?? new SyncAttempt(plugin, mode, downloadScope);
 	await attempt.start();
 	try {
@@ -172,7 +178,13 @@ export async function buildManualSyncPlan(
 			return null;
 		}
 		await attempt.transition("storage");
-		const prepared = await buildManualSyncPlanCore(plugin, mode, { ...callbacks, attempt }, downloadScope);
+		const prepared = await buildManualSyncPlanCore(
+			plugin,
+			mode,
+			{ ...callbacks, attempt },
+			downloadScope,
+			premiumFeatures
+		);
 		if (attempt.finished) return null;
 		if (!prepared) {
 			await attempt.finish("canceled");
@@ -192,12 +204,13 @@ async function buildManualSyncPlanCore(
 	plugin: KeepSidianPlugin,
 	mode: SyncMode,
 	callbacks: SyncPlanBuildCallbacks,
-	downloadScope?: DownloadScope
+	downloadScope: DownloadScope | undefined,
+	premiumFeatures: KeepSidianPlugin["settings"]["premiumFeatures"]
 ): Promise<PreparedSyncPlan | null> {
 	await ensureStoragePathsOrThrow(plugin);
 	await callbacks.attempt?.transition("subscription");
 	const isSupporterActive = await getManualSupportState(plugin);
-	callbacks.attempt?.setFeatures(isSupporterActive ? plugin.settings.premiumFeatures : undefined);
+	callbacks.attempt?.setFeatures(isSupporterActive ? premiumFeatures : undefined);
 	const allowPerNoteSelection = isSupporterActive;
 	const selectionLockedReason = allowPerNoteSelection ? undefined : SUPPORTER_LOCK_REASON;
 	if (mode === "push" || mode === "two-way") {
@@ -231,7 +244,7 @@ async function buildManualSyncPlanCore(
 	const protectedKeepUrls = await getLocalDeletionProtection(plugin);
 	const builtImportPlan = await buildImportSyncPlan(
 		plugin,
-		isSupporterActive ? plugin.settings.premiumFeatures : undefined,
+		isSupporterActive ? premiumFeatures : undefined,
 		allowPerNoteSelection,
 		selectionLockedReason,
 		callbacks,
