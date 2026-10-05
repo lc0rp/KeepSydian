@@ -92,6 +92,7 @@ export async function resolveDownloadMerge(
 	const lastSynced = normalizeDate(getFrontmatterStringValue(properties(frontmatter), FRONTMATTER_KEEP_SIDIAN_LAST_SYNCED_DATE_KEY));
 	// The body hash excludes managed image references. It cannot prove that
 	// those references are unchanged; keep their existing merge protection.
+	// An older or undated snapshot also cannot replace acknowledged content.
 	if (comparableLocalBody.trim() === localBody.trim() &&
 		!hasPendingUpload(frontmatter) && localKey && remoteKey === localKey &&
 		lastSynced && normalizedRemote.updated && normalizedRemote.updated > lastSynced &&

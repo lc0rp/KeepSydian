@@ -1141,7 +1141,6 @@ export async function processAndSaveNote(
 			const existingMarkdownFileContent =
 				typeof existingMarkdownFileContentRaw === "string" ? existingMarkdownFileContentRaw : "";
 			const [existingFrontmatter, existingTextWithoutFrontmatterRaw] = extractFrontmatter(existingMarkdownFileContent);
-			const existingTextWithoutFrontmatter = stripManagedImageEmbeds(existingTextWithoutFrontmatterRaw);
 			let mdFrontmatter = withSyncState(
 				buildFrontmatterWithSyncDate(existingFrontmatter, lastSyncedDate, newFrontmatter),
 				hasPendingUpload(existingFrontmatter),
