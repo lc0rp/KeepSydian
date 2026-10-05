@@ -1,4 +1,6 @@
 import { normalizePathSafe } from "@services/paths";
+import { canonicalKeepUrl } from "@integrations/server/keepDeletions";
+import { sha256 } from "../local-deletions/state";
 import { extractFrontmatter, getFrontmatterStringValue, normalizeKeepNoteUrl, type NormalizedNote } from "./note";
 import {
 	CONFLICT_FILE_SUFFIX,
@@ -33,6 +35,7 @@ type MetadataBackedApp = {
 export interface ExistingKeepNoteIndex {
 	pathByKeepUrl: Map<string, string>;
 	existingPaths: Set<string>;
+	plannedPathIdentities?: Map<string, string>;
 }
 
 function normalizeVaultPathForScope(path: string): string {
@@ -104,9 +107,7 @@ export async function buildExistingKeepNoteIndex(
 	const metadataBackedFiles = app.vault.getMarkdownFiles?.();
 	if (Array.isArray(metadataBackedFiles) && metadataBackedFiles.length > 0) {
 		const existingPaths = new Set(
-			metadataBackedFiles
-				.map((file) => normalizePathSafe(file.path))
-				.filter((path) => path.length > 0)
+			metadataBackedFiles.map((file) => normalizePathSafe(file.path)).filter((path) => path.length > 0)
 		);
 		const pathByKeepUrl = new Map<string, string>();
 
@@ -165,6 +166,48 @@ export function updateExistingKeepNoteIndex(
 	}
 }
 
+/** A filename match never proves that two Google Keep notes are the same note. */
+async function resolveIdentitySafePath(
+	adapter: ListableAdapter,
+	preferredPath: string,
+	incomingKeepUrl: string | undefined,
+	index?: ExistingKeepNoteIndex
+): Promise<string> {
+	const identity = canonicalKeepUrl(incomingKeepUrl);
+	if (!identity) return preferredPath;
+	const exists = async (path: string) => index?.existingPaths.has(path) || (await adapter.exists?.(path)) || false;
+	const matches = async (path: string) => {
+		const [, , properties] = extractFrontmatter(await adapter.read(path));
+		return canonicalKeepUrl(getFrontmatterStringValue(properties, FRONTMATTER_GOOGLE_KEEP_URL_KEY)) === identity;
+	};
+	// Reservations stay separate from files that exist on disk. Parallel planners can
+	// await the same vacant path, so claim it only after rechecking its owner.
+	const claims = index ? (index.plannedPathIdentities ??= new Map<string, string>()) : new Map<string, string>();
+	const claim = async (path: string): Promise<boolean> => {
+		const owner = claims.get(path);
+		if (owner && owner !== identity) return false;
+		if ((await exists(path)) && !(await matches(path))) return false;
+		const currentOwner = claims.get(path);
+		if (currentOwner && currentOwner !== identity) return false;
+		claims.set(path, identity);
+		return true;
+	};
+	if (await claim(preferredPath)) return preferredPath;
+
+	const separator = preferredPath.lastIndexOf("/");
+	const directory = preferredPath.slice(0, separator + 1);
+	let stem = preferredPath.slice(separator + 1).replace(/\.md$/i, "");
+	// Leave room for the full identity hash and collision counter, including UTF-8 titles.
+	const encoder = new TextEncoder();
+	while (encoder.encode(stem).length > 160) stem = Array.from(stem).slice(0, -1).join("");
+	const suffix = await sha256(identity);
+	for (let counter = 1; counter <= 1000; counter++) {
+		const candidate = `${directory}${stem || "Keep note"}--keep-${suffix}${counter === 1 ? "" : `-${counter}`}.md`;
+		if (await claim(candidate)) return candidate;
+	}
+	throw new Error("Unable to allocate a separate filename for a distinct Google Keep identity.");
+}
+
 export async function findExistingKeepNotePath(
 	app: { vault: { adapter: ListableAdapter } },
 	incomingNote: NormalizedNote,
@@ -175,6 +218,7 @@ export async function findExistingKeepNotePath(
 	const adapter = app.vault.adapter;
 	const normalizedPreferredPath = preferredPath ? normalizePathSafe(preferredPath) : null;
 	const incomingKeepUrl = getFrontmatterStringValue(incomingNote.frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
+	if (incomingKeepUrl && !index) index = await buildExistingKeepNoteIndex(app, rootFolder);
 
 	// A renamed linked note takes precedence over a different note with the expected filename.
 	if (incomingKeepUrl && index) {
@@ -184,18 +228,8 @@ export async function findExistingKeepNotePath(
 	}
 
 	if (normalizedPreferredPath) {
-		if (index?.existingPaths.has(normalizedPreferredPath)) {
-			return normalizedPreferredPath;
-		}
-		if (!index && typeof adapter.exists === "function" && (await adapter.exists(normalizedPreferredPath))) {
-			return normalizedPreferredPath;
-		}
+		return resolveIdentitySafePath(adapter, normalizedPreferredPath, incomingKeepUrl, index);
 	}
 
-	if (!incomingKeepUrl || index) {
-		return normalizedPreferredPath;
-	}
-
-	const builtIndex = await buildExistingKeepNoteIndex(app, rootFolder);
-	return builtIndex.pathByKeepUrl.get(normalizeKeepNoteUrl(incomingKeepUrl)) ?? normalizedPreferredPath;
+	return null;
 }
