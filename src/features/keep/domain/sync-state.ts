@@ -81,5 +81,17 @@ export async function resolveDownloadMerge(
 	if (normalizeMergeAction(action) !== "overwrite-all" && await isRemoteBodyUnchanged(frontmatter, remote)) {
 		return { action: "merge", text: localBody, hasConflict: false };
 	}
+	// Upload acknowledgement writes sync metadata after capturing its timestamp.
+	// A matching identity-bound body baseline proves that local content was not
+	// edited, even when that metadata write makes the filesystem time newer.
+	const localKey = localKeepKey(frontmatter);
+	const normalizedRemote = normalizeNote(remote);
+	const remoteKey = remote.id || localKeepKey(normalizedRemote.frontmatter);
+	const stored = getFrontmatterStringValue(properties(frontmatter), REMOTE_BASELINE_KEY);
+	if (!hasPendingUpload(frontmatter) && localKey && remoteKey === localKey &&
+		stored && /^sha256:[a-f0-9]{64}$/.test(stored) &&
+		await bodyBaseline(localKey, localBody) === stored) {
+		return { action: "overwrite", text: normalizedRemote.textWithoutFrontmatter, hasConflict: false };
+	}
 	return resolveMergeAction(localBody, normalizeNote(remote).textWithoutFrontmatter, action);
 }
