@@ -85,6 +85,40 @@ it("protects offline removals before two-way download and presents upload review
 	expect((await fixture.ledger.records()).map((record) => record.keepUrl)).toEqual([keepUrl("b")]);
 });
 
+it.each([false, true])("finishes an unchecked upload review without writes and preserves conflict checkpoint gating (%s)", async (conflict) => {
+	const { prepared } = await prepareTwoWay();
+	const checkpoint = fixture.plugin.settings.keepSidianLastSuccessfulSyncDate;
+	const success = jest.fn();
+	const { nextPlan } = await runPreparedSyncPlan(fixture.plugin, prepared, String, success);
+	const path = "Keep/unchecked.md";
+	const content = "Unlinked synthetic upload";
+	fixture.put(path, content);
+	nextPlan!.pushNotes = [{ fullPath: path, relativePath: "unchecked.md", title: "Unchecked", content,
+		body: content, frontmatter: "", lastSyncedDate: null, modifiedSinceLastSync: true,
+		attachments: [], updatedAttachmentNames: [], missingAttachments: [] }];
+	nextPlan!.plan.entries.push(createSyncPlanEntryFixture("upload", "Upload", {
+		id: `upload:0:${path}`, mode: "two-way", stage: "upload", path,
+	}));
+	for (const entry of nextPlan!.plan.entries) entry.selected = false;
+	if (conflict) nextPlan!.unresolvedConflictPaths = ["Keep/conflict.md"];
+	const push = jest.spyOn(downloadApi, "pushNotes");
+	jest.mocked(trashApi.requestKeepTrash).mockClear();
+	fixture.vault.adapter.write.mockClear();
+
+	await expect(runPreparedSyncPlan(fixture.plugin, nextPlan!, String, success)).resolves.toEqual({});
+	expect(nextPlan!.attempt?.outcome).toBe("success");
+	expect(push).not.toHaveBeenCalled();
+	expect(trashApi.requestKeepTrash).not.toHaveBeenCalled();
+	expect(fixture.vault.trash).not.toHaveBeenCalled();
+	expect(fixture.vault.adapter.write.mock.calls.some(([writtenPath]) => ["Keep/a.md", "Keep/b.md", path].includes(writtenPath))).toBe(false);
+	expect(fixture.stored.get(path)).toBe(content);
+	expect(fixture.stored.has("Keep/a.md")).toBe(false);
+	expect(fixture.stored.has("Keep/b.md")).toBe(false);
+	expect((await fixture.ledger.records()).map((record) => record.keepUrl)).toEqual([keepUrl("a"), keepUrl("b")]);
+	expect(fixture.plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(conflict ? checkpoint : completionDate);
+	expect(success).toHaveBeenCalledTimes(conflict ? 0 : 1);
+});
+
 it("does not advance a two-way checkpoint after partial trash failure", async () => {
 	const { prepared } = await prepareTwoWay();
 	const checkpoint = fixture.plugin.settings.keepSidianLastSuccessfulSyncDate;

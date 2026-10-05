@@ -55,7 +55,11 @@ function modeLabel(mode: SyncMode): string {
 function modeUsesDownload(mode: SyncMode): boolean { return mode !== "push"; }
 function modeRequiresTwoWayGate(mode: SyncMode): boolean { return mode === "push" || mode === "two-way"; }
 function reviewContinuationLabel(prepared: PreparedSyncPlan | null): string | undefined {
-	if (!prepared || prepared.stage !== "import") return undefined;
+	if (!prepared) return undefined;
+	// An unchecked upload review still settles the attempt and its download
+	// receipts through the normal runner, including conflict/checkpoint guards.
+	if (prepared.stage === "upload") return "Complete review";
+	if (prepared.stage !== "import") return undefined;
 	// The upload review is still required when the download stage has no selected
 	// writes, including when missing tracked identities were protected from import.
 	if (prepared.mode === "two-way") return "Continue to upload";
