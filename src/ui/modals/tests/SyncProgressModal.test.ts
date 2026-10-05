@@ -959,6 +959,35 @@ describe("SyncProgressModal", () => {
 		expect(modal.contentEl.textContent).toContain("Refreshed upload row");
 	});
 
+	test.each(["push", "two-way"] as const)("completes a %s upload review after deselecting every upload and deletion", async (mode) => {
+		const uploadPlan = createPreparedSyncPlanFixture(mode, "upload", [
+			createSyncPlanEntryFixture("upload", "Upload", { id: "upload-1", mode, stage: "upload" }),
+			createSyncPlanEntryFixture("delete", "Delete", { id: "delete-1", mode, stage: "upload" }),
+		]);
+		modalOptions.buildSyncPlan.mockResolvedValueOnce(uploadPlan);
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		modal.setSelectedMode(mode);
+		getButton(modal, "Start sync").click();
+		await flushUI();
+		expect(getButton(modal, "Execute").disabled).toBe(false);
+
+		const selectAll = modal.contentEl.querySelector<HTMLInputElement>(".keepsidian-sync-plan-select-all input")!;
+		expect(selectAll).toBeTruthy();
+		selectAll.checked = false;
+		selectAll.dispatchEvent(new Event("change", { bubbles: true }));
+		await flushUI();
+
+		const complete = getButton(modal, "Complete review");
+		expect(complete.disabled).toBe(false);
+		complete.click();
+		await flushUI();
+		expect(modalOptions.runSyncPlan).toHaveBeenCalledTimes(1);
+		const executed = modalOptions.runSyncPlan.mock.calls[0][0] as PreparedSyncPlan;
+		expect(executed.plan.entries.every((entry) => !entry.selected)).toBe(true);
+		expect(modal.contentEl.textContent).toContain("Upload complete");
+	});
+
 	test("setup mode still shows live sync status for background sync monitoring", async () => {
 		const modal = new SyncProgressModal(app, modalOptions);
 		modal.onOpen();

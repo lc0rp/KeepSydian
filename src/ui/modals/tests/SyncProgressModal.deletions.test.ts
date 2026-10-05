@@ -107,12 +107,12 @@ it("continues a protected-removal-only two-way download to the upload deletion r
 	expect(button(modal, "Execute").disabled).toBe(false);
 });
 
-it.each(["import", "push"] as const)("does not enable an entirely deselected %s plan", async (mode) => {
-	const prepared = createPreparedSyncPlanFixture(mode, mode === "push" ? "upload" : "import", [
-		createSyncPlanEntryFixture(mode === "push" ? "upload" : "create", "Change", { selected: false }),
+it("does not enable an entirely deselected actionable import plan", async () => {
+	const prepared = createPreparedSyncPlanFixture("import", "import", [
+		createSyncPlanEntryFixture("create", "Change", { selected: false }),
 	]);
 	const { modal, runSyncPlan } = setup(prepared);
-	await modal.beginReview(mode);
+	await modal.beginReview("import");
 	expect(button(modal, "Execute").disabled).toBe(true);
 	button(modal, "Execute").click();
 	await flushUI();

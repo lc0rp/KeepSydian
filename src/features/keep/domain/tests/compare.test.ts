@@ -90,7 +90,7 @@ describe("handleDuplicateNotes", () => {
 	});
 
 	it("finds existing notes by GoogleKeepUrl when the filename no longer matches the title inside saveLocation", async () => {
-		adapter.exists.mockResolvedValue(false);
+		adapter.exists.mockImplementation(async (path) => path === "/save/location/old-name.md");
 		adapter.list.mockResolvedValue({ files: ["/save/location/old-name.md"], folders: [] });
 		adapter.read.mockResolvedValue("---\nGoogleKeepUrl: https://keep.google.com/u/0/#NOTE/123\n---\nExisting content");
 		adapter.stat.mockResolvedValue({
@@ -124,7 +124,7 @@ describe("handleDuplicateNotes", () => {
 		const result = await handleDuplicateNotes("/save/location", incomingNote, mockApp);
 		expect(["skip", "merge", "overwrite"]).toContain(result);
 		expect(adapter.list).toHaveBeenCalledWith("save/location");
-		expect(adapter.exists).toHaveBeenCalledWith("/save/location/Renamed title.md");
+		expect(adapter.stat).toHaveBeenCalledWith("/save/location/old-name.md");
 	});
 
 	it("reuses a prebuilt Keep-note index instead of rescanning saveLocation", async () => {
@@ -180,10 +180,7 @@ describe("handleDuplicateNotes", () => {
 	});
 
 	it("scans only the scoped saveLocation instead of the whole vault", async () => {
-		const getMarkdownFiles = jest.fn(() => [
-			{ path: "Archive/old-name.md" },
-			{ path: "/save/location/unrelated.md" },
-		]);
+		const getMarkdownFiles = jest.fn(() => [{ path: "Archive/old-name.md" }, { path: "/save/location/unrelated.md" }]);
 		(mockApp.vault as unknown as { getMarkdownFiles: typeof getMarkdownFiles }).getMarkdownFiles = getMarkdownFiles;
 		adapter.list.mockResolvedValue({
 			files: ["/save/location/unrelated.md"],

@@ -1,6 +1,6 @@
 import type { MergeAction } from "@types";
-import { FRONTMATTER_GOOGLE_KEEP_URL_KEY } from "../constants";
-import { extractFrontmatter, getFrontmatterStringValue, normalizeNote, type PreNormalizedNote } from "./note";
+import { FRONTMATTER_GOOGLE_KEEP_URL_KEY, FRONTMATTER_KEEP_SIDIAN_LAST_SYNCED_DATE_KEY } from "../constants";
+import { extractFrontmatter, getFrontmatterStringValue, normalizeDate, normalizeNote, type PreNormalizedNote } from "./note";
 import { stripManagedImageEmbeds } from "./attachmentEmbeds";
 import { normalizeMergeAction, resolveMergeAction, type MergeDecision } from "./merge-action";
 
@@ -76,10 +76,29 @@ export async function resolveDownloadMerge(
 	remote: PreNormalizedNote,
 	action?: MergeAction
 ): Promise<MergeDecision> {
+	const comparableLocalBody = stripManagedImageEmbeds(localBody);
 	// Preserve genuine local-only edits, including deletions, when the captured
 	// remote body is still the confirmed baseline. Explicit overwrite still wins.
 	if (normalizeMergeAction(action) !== "overwrite-all" && await isRemoteBodyUnchanged(frontmatter, remote)) {
-		return { action: "merge", text: localBody, hasConflict: false };
+		return { action: "merge", text: comparableLocalBody, hasConflict: false };
 	}
-	return resolveMergeAction(localBody, normalizeNote(remote).textWithoutFrontmatter, action);
+	// Upload acknowledgement writes sync metadata after capturing its timestamp.
+	// A matching identity-bound body baseline proves that local content was not
+	// edited, even when that metadata write makes the filesystem time newer.
+	const localKey = localKeepKey(frontmatter);
+	const normalizedRemote = normalizeNote(remote);
+	const remoteKey = remote.id || localKeepKey(normalizedRemote.frontmatter);
+	const stored = getFrontmatterStringValue(properties(frontmatter), REMOTE_BASELINE_KEY);
+	const lastSynced = normalizeDate(getFrontmatterStringValue(properties(frontmatter), FRONTMATTER_KEEP_SIDIAN_LAST_SYNCED_DATE_KEY));
+	// The body hash excludes managed image references. It cannot prove that
+	// those references are unchanged; keep their existing merge protection.
+	// An older or undated snapshot also cannot replace acknowledged content.
+	if (comparableLocalBody.trim() === localBody.trim() &&
+		!hasPendingUpload(frontmatter) && localKey && remoteKey === localKey &&
+		lastSynced && normalizedRemote.updated && normalizedRemote.updated > lastSynced &&
+		stored && /^sha256:[a-f0-9]{64}$/.test(stored) &&
+		await bodyBaseline(localKey, comparableLocalBody) === stored) {
+		return { action: "overwrite", text: normalizedRemote.textWithoutFrontmatter, hasConflict: false };
+	}
+	return resolveMergeAction(comparableLocalBody, normalizedRemote.textWithoutFrontmatter, action);
 }

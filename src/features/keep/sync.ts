@@ -22,7 +22,7 @@ import { resolveNoteFolder, resolveNotePath } from "@services/note-path-resolver
 import { flushLogSync, logSync } from "@app/logging";
 import type { GoogleKeepImportResponse, PremiumFeatureFlags, SyncFilters } from "@integrations/server/keepApi";
 import type { DownloadScope, MergeAction, SyncPlan, SyncPlanAction, SyncPlanEntry } from "@types";
-import { NetworkError } from "@services/errors";
+import { NetworkError, ParseError } from "@services/errors";
 import { SyncCancellationError } from "@app/sync-cancel";
 import {
 	fetchNotes as apiFetchNotes,
@@ -36,7 +36,7 @@ import {
 	type ExistingKeepNoteIndex,
 } from "./domain/noteLookup";
 import { appendPerfTrace } from "@app/perf-trace";
-import { stripManagedImageEmbeds, withManagedImageEmbeds } from "./domain/attachmentEmbeds";
+import { withManagedImageEmbeds } from "./domain/attachmentEmbeds";
 import { safeSyncError, type SyncAttempt } from "@app/sync-attempt";
 import { retryDownload, isTransientDownloadError } from "./download-retry";
 import { resolveDownloadDateWindow } from "./download-date-window";
@@ -60,9 +60,12 @@ interface Preparation {
 	completionDate?: string;
 	page: number;
 	usingCursor: boolean;
+	total?: number;
+	seenCursors: Set<string>;
 	active: boolean;
 }
 const preparations = new WeakMap<KeepSidianPlugin, Preparation>();
+const preparingPlugins = new WeakSet<KeepSidianPlugin>();
 export class RecoverablePreparationError extends NetworkError {
 	constructor(cause: NetworkError) {
 		super(
@@ -336,6 +339,8 @@ async function fetchImportNotesBase(
 	let usingCursorPagination = preparation?.usingCursor ?? false;
 	let hasReportedTotal = false;
 	const fetchedNotes: PreNormalizedNote[] = preparation?.notes ?? [];
+	let expectedTotal = preparation?.total;
+	const seenCursors = preparation?.seenCursors ?? new Set<string>();
 	attempt?.setCutoff(syncFilters?.changed_gt);
 	while (true) {
 		throwIfSyncCancelled(plugin);
@@ -361,9 +366,23 @@ async function fetchImportNotesBase(
 			},
 			retryEnabled
 		);
-		if (typeof response.total_notes === "number" && callbacks?.setTotalNotes && !hasReportedTotal) {
+		if (response.total_notes !== undefined) {
+			if (
+				!Number.isInteger(response.total_notes) ||
+				response.total_notes < 0 ||
+				(expectedTotal !== undefined && response.total_notes !== expectedTotal)
+			) {
+				throw new ParseError("Download snapshot total is inconsistent. Start sync again. No notes were imported.");
+			}
+			expectedTotal = response.total_notes;
+			if (preparation) preparation.total = expectedTotal;
+		}
+		if (response.next_cursor && (!response.notes.length || seenCursors.has(response.next_cursor))) {
+			throw new ParseError("Download snapshot did not advance. Start sync again. No notes were imported.");
+		}
+		if (expectedTotal !== undefined && callbacks?.setTotalNotes && !hasReportedTotal) {
 			try {
-				callbacks.setTotalNotes(response.total_notes);
+				callbacks.setTotalNotes(expectedTotal);
 				hasReportedTotal = true;
 			} catch {
 				/* Progress presentation must not interrupt the download. */
@@ -379,14 +398,21 @@ async function fetchImportNotesBase(
 			if (id) ids.add(id);
 			fetchedNotes.push(note);
 		}
-		await attempt?.pageEvent("page-fetched", { fetchedCount: fetchedNotes.length, total: response.total_notes });
+		if (
+			expectedTotal !== undefined &&
+			(fetchedNotes.length > expectedTotal || (response.next_cursor && fetchedNotes.length >= expectedTotal))
+		) {
+			throw new ParseError("Download snapshot exceeds its total. Start sync again. No notes were imported.");
+		}
+		await attempt?.pageEvent("page-fetched", { fetchedCount: fetchedNotes.length, total: expectedTotal });
 		if (preparation && JSON.stringify(fetchedNotes).length * 2 > 16 * 1024 * 1024)
 			throw new Error("Preparation storage limit reached. Select a narrower date range.");
-		callbacks?.reportPlanProgress?.(fetchedNotes.length, response.total_notes);
+		callbacks?.reportPlanProgress?.(fetchedNotes.length, expectedTotal);
 		if (response.next_cursor) {
+			seenCursors.add(response.next_cursor);
 			cursor = response.next_cursor;
 			usingCursorPagination = true;
-		} else if (usingCursorPagination) {
+		} else if (usingCursorPagination || fetchedNotes.length === expectedTotal) {
 			break;
 		} else {
 			offset += limit;
@@ -394,6 +420,9 @@ async function fetchImportNotesBase(
 		pageOrdinal += 1;
 		if (preparation)
 			Object.assign(preparation, { offset, cursor, page: pageOrdinal, usingCursor: usingCursorPagination });
+	}
+	if (expectedTotal !== undefined && fetchedNotes.length !== expectedTotal) {
+		throw new ParseError("Download snapshot is incomplete. Start sync again. No notes were imported.");
 	}
 	return { notes: fetchedNotes, completionDate };
 }
@@ -450,7 +479,7 @@ function buildImportPlanEntry(
 				const [existingFrontmatter, existingBody] = extractFrontmatter(existingContent);
 				const { hasConflict } = await resolveDownloadMerge(
 					existingFrontmatter,
-					stripManagedImageEmbeds(existingBody),
+					existingBody,
 					note
 				);
 				action = hasConflict ? "conflict-copy" : "merge";
@@ -505,10 +534,36 @@ export async function buildImportSyncPlan(
 	callbacks?: Pick<SyncCallbacks, "setTotalNotes" | "reportPlanProgress" | "attempt">,
 	downloadScope?: DownloadScope
 ): Promise<BuiltImportSyncPlan> {
+	// Reserve before asynchronous capability discovery, including the first preparation.
+	if (preparingPlugins.has(plugin)) throw new Error("A download preparation is already running.");
+	preparingPlugins.add(plugin);
+	try {
+		return await buildImportSyncPlanBase(
+			plugin,
+			options,
+			allowPerNoteSelection,
+			selectionLockedReason,
+			callbacks,
+			downloadScope
+		);
+	} finally {
+		preparingPlugins.delete(plugin);
+	}
+}
+
+async function buildImportSyncPlanBase(
+	plugin: KeepSidianPlugin,
+	options: NoteImportOptions | undefined,
+	allowPerNoteSelection: boolean,
+	selectionLockedReason: string | undefined,
+	callbacks: Pick<SyncCallbacks, "setTotalNotes" | "reportPlanProgress" | "attempt"> | undefined,
+	downloadScope: DownloadScope | undefined
+): Promise<BuiltImportSyncPlan> {
 	const startedAt = callbacks?.attempt?.startedAt ?? Date.now();
 	const { email, token } = plugin.settings;
 	const supporterKey = plugin.settings.supporterKeyConfigured ? (plugin.settings.supporterKey ?? "") : undefined;
 	const archivedStatus = options?.archivedStatus ?? "active-only";
+	const featureFlags = options === undefined ? undefined : convertOptionsToFeatureFlags(options);
 	const identity = JSON.stringify([
 		email,
 		token,
@@ -538,6 +593,7 @@ export async function buildImportSyncPlan(
 			offset: 0,
 			page: 1,
 			usingCursor: false,
+			seenCursors: new Set(),
 			filters: dateWindow.filters,
 			completionDate: dateWindow.checkpoint,
 			active: false,
@@ -556,12 +612,12 @@ export async function buildImportSyncPlan(
 	preparation.active = true;
 	const operationId = preparation.operationId;
 	const fetchFunction =
-		options !== undefined
+		featureFlags !== undefined
 			? (offset: number, limit: number, filters?: SyncFilters, cursor?: string) =>
 					apiFetchNotesWithPremium(
 						email,
 						token,
-						convertOptionsToFeatureFlags(options),
+						featureFlags,
 						offset,
 						limit,
 						filters,
@@ -721,19 +777,19 @@ export function convertOptionsToFeatureFlags(options: NoteImportOptions): Premiu
 
 	if (options.includeNotesTerms && options.includeNotesTerms.length > 0) {
 		featureFlags.filter_notes = {
-			terms: options.includeNotesTerms,
+			terms: [...options.includeNotesTerms],
 		};
 	}
 
 	if (options.excludeNotesTerms && options.excludeNotesTerms.length > 0) {
 		featureFlags.skip_notes = {
-			terms: options.excludeNotesTerms,
+			terms: [...options.excludeNotesTerms],
 		};
 	}
 
 	const keepStateFilter: NonNullable<PremiumFeatureFlags["keep_state_filter"]> = {};
 	if (options.includeColors && options.includeColors.length > 0) {
-		keepStateFilter.colors = options.includeColors;
+		keepStateFilter.colors = [...options.includeColors];
 	}
 	if (options.pinnedStatus && options.pinnedStatus !== "all") {
 		keepStateFilter.pinned = options.pinnedStatus;
@@ -1085,7 +1141,6 @@ export async function processAndSaveNote(
 			const existingMarkdownFileContent =
 				typeof existingMarkdownFileContentRaw === "string" ? existingMarkdownFileContentRaw : "";
 			const [existingFrontmatter, existingTextWithoutFrontmatterRaw] = extractFrontmatter(existingMarkdownFileContent);
-			const existingTextWithoutFrontmatter = stripManagedImageEmbeds(existingTextWithoutFrontmatterRaw);
 			let mdFrontmatter = withSyncState(
 				buildFrontmatterWithSyncDate(existingFrontmatter, lastSyncedDate, newFrontmatter),
 				hasPendingUpload(existingFrontmatter),
@@ -1094,7 +1149,7 @@ export async function processAndSaveNote(
 
 			if (duplicateNotesAction === "merge") {
 				const originalNoteFilePath = noteFilePath;
-				const decision = await resolveDownloadMerge(existingFrontmatter, existingTextWithoutFrontmatter, note, mergeAction);
+				const decision = await resolveDownloadMerge(existingFrontmatter, existingTextWithoutFrontmatterRaw, note, mergeAction);
 				if (decision.action === "skipped-conflict") {
 					metrics.action = "skipped-conflict";
 					onMergeConflict?.(normalizePathSafe(noteFilePath));
