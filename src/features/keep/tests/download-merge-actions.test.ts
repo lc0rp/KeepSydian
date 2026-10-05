@@ -65,10 +65,11 @@ afterAll(() => {
 	if (encoderDescriptor) Object.defineProperty(globalThis, "TextEncoder", encoderDescriptor);
 });
 
-it.each(["unchanged", "edited", "pending", "missing", "malformed", "wrong-identity", "crypto-unavailable"] as const)(
+it.each(["unchanged", "edited", "pending", "missing", "malformed", "wrong-identity", "crypto-unavailable", "local-image", "managed-image", "older-remote", "missing-remote-time", "invalid-remote-time"] as const)(
 	"uses the acknowledged body rather than post-upload metadata writes to resolve a remote edit (%s)",
 	async (scenario) => {
-		const localBody = scenario === "edited" ? "Local edit after upload" : "Synthetic marker A";
+		const localBody = scenario === "edited" ? "Local edit after upload" : "Synthetic marker A" +
+		(scenario === "local-image" ? "\n![[media/local.png]]" : scenario === "managed-image" ? "\n<!-- keepsidian-embedded-images:start -->\n![[media/local.png]]\n<!-- keepsidian-embedded-images:end -->" : "");
 		const baseline =
 			scenario === "missing"
 				? undefined
@@ -101,6 +102,7 @@ it.each(["unchanged", "edited", "pending", "missing", "malformed", "wrong-identi
 		} as unknown as KeepSidianPlugin;
 		const conflict = jest.fn();
 		const remote = {
+			updated: scenario === "older-remote" ? "2026-10-05T18:00:00.000Z" : scenario === "missing-remote-time" ? undefined : scenario === "invalid-remote-time" ? "invalid" : "2026-10-05T18:28:00.000Z",
 			id: scenario === "wrong-identity" ? "another-server-id" : "assigned-server-id",
 			title: "note",
 			text: "Synthetic marker B",

@@ -479,7 +479,7 @@ function buildImportPlanEntry(
 				const [existingFrontmatter, existingBody] = extractFrontmatter(existingContent);
 				const { hasConflict } = await resolveDownloadMerge(
 					existingFrontmatter,
-					stripManagedImageEmbeds(existingBody),
+					existingBody,
 					note
 				);
 				action = hasConflict ? "conflict-copy" : "merge";
@@ -1150,7 +1150,7 @@ export async function processAndSaveNote(
 
 			if (duplicateNotesAction === "merge") {
 				const originalNoteFilePath = noteFilePath;
-				const decision = await resolveDownloadMerge(existingFrontmatter, existingTextWithoutFrontmatter, note, mergeAction);
+				const decision = await resolveDownloadMerge(existingFrontmatter, existingTextWithoutFrontmatterRaw, note, mergeAction);
 				if (decision.action === "skipped-conflict") {
 					metrics.action = "skipped-conflict";
 					onMergeConflict?.(normalizePathSafe(noteFilePath));
