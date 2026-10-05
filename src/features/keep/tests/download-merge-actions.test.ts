@@ -56,13 +56,18 @@ it.each<MergeAction>(["merge-save-conflicts", "merge-skip-conflicts", "merge-ove
 
 const cryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto");
 const encoderDescriptor = Object.getOwnPropertyDescriptor(globalThis, "TextEncoder");
+// Node 18's Jest VM can retain the installed global despite redefinition.
+// Mutate one shared provider so the production module sees unavailable crypto.
+const cryptoProvider: { subtle: typeof webcrypto.subtle | undefined } = { subtle: webcrypto.subtle };
 beforeAll(() => {
-	Object.defineProperty(globalThis, "crypto", { configurable: true, value: webcrypto });
+	Object.defineProperty(globalThis, "crypto", { configurable: true, value: cryptoProvider });
 	Object.defineProperty(globalThis, "TextEncoder", { configurable: true, value: TextEncoder });
 });
 afterAll(() => {
 	if (cryptoDescriptor) Object.defineProperty(globalThis, "crypto", cryptoDescriptor);
+	else Reflect.deleteProperty(globalThis, "crypto");
 	if (encoderDescriptor) Object.defineProperty(globalThis, "TextEncoder", encoderDescriptor);
+	else Reflect.deleteProperty(globalThis, "TextEncoder");
 });
 
 it.each(["unchanged", "edited", "pending", "missing", "malformed", "wrong-identity", "crypto-unavailable", "local-image", "managed-image", "older-remote", "missing-remote-time", "invalid-remote-time"] as const)(
@@ -107,10 +112,15 @@ it.each(["unchanged", "edited", "pending", "missing", "malformed", "wrong-identi
 			title: "note",
 			text: "Synthetic marker B",
 		};
-		if (scenario === "crypto-unavailable")
-			Object.defineProperty(globalThis, "crypto", { configurable: true, value: {} });
+		if (scenario === "crypto-unavailable") {
+			cryptoProvider.subtle = undefined;
+		}
 		let result: Awaited<ReturnType<typeof processAndSaveNote>>;
 		try {
+			if (scenario === "crypto-unavailable") {
+				expect(globalThis.crypto?.subtle).toBeUndefined();
+				expect(await bodyBaseline("assigned-server-id", "Synthetic marker A")).toBeUndefined();
+			}
 			result = await processAndSaveNote(
 				plugin,
 				remote,
@@ -126,7 +136,7 @@ it.each(["unchanged", "edited", "pending", "missing", "malformed", "wrong-identi
 				conflict
 			);
 		} finally {
-			Object.defineProperty(globalThis, "crypto", { configurable: true, value: webcrypto });
+			cryptoProvider.subtle = webcrypto.subtle;
 		}
 		if (scenario === "unchanged") {
 			expect(result.action).toBe("overwritten");
