@@ -36,7 +36,7 @@ import {
 	type ExistingKeepNoteIndex,
 } from "./domain/noteLookup";
 import { appendPerfTrace } from "@app/perf-trace";
-import { stripManagedImageEmbeds, withManagedImageEmbeds } from "./domain/attachmentEmbeds";
+import { withManagedImageEmbeds } from "./domain/attachmentEmbeds";
 import { safeSyncError, type SyncAttempt } from "@app/sync-attempt";
 import { retryDownload, isTransientDownloadError } from "./download-retry";
 import { resolveDownloadDateWindow } from "./download-date-window";
