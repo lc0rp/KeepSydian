@@ -35,7 +35,7 @@ def command(args: list[str]) -> Any:
 
 def backend(get: Callable[[str], bytes] | None = None) -> None:
     def fetch(url: str) -> bytes:
-        with urlopen(url, timeout=10) as response:
+        with urlopen(url, timeout=45) as response:
             if response.status != 200:
                 raise RuntimeError("Backend check did not return HTTP 200")
             return response.read(65536)
