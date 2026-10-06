@@ -100,8 +100,17 @@ def reconcile(source: str, root: Path, run: Callable[[list[str]], Any] = command
         ref = run(["gh", "api", ref_path])
         if not ref or ref["object"].get("sha") != source:
             raise RuntimeError("Client source tag readback mismatch")
-    release_path = f"{prefix}/releases/tags/{TAG}"
-    release = run(["gh", "api", release_path])
+    # The release-by-tag endpoint only returns published releases. Authenticated
+    # listings also include drafts for this repository's contents-write token.
+    def find_release() -> dict[str, Any] | None:
+        pages = run(["gh", "api", f"{prefix}/releases?per_page=100", "--paginate", "--slurp"])
+        if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+            raise RuntimeError("Cannot discover draft/published release metadata")
+        matches = [item for page in pages for item in page if item.get("tag_name") == TAG]
+        if len(matches) > 1:
+            raise RuntimeError("Multiple releases use the beta.6b tag; stop for review")
+        return matches[0] if matches else None
+    release = find_release()
     if release is None:
         notes = f"KeepSydian {VERSION}\n\nClient source: {source}\nBackend: {BACKEND}/\nUses verified server beta.6; replay remains disabled.\n"
         with tempfile.TemporaryDirectory() as temp:
@@ -110,7 +119,7 @@ def reconcile(source: str, root: Path, run: Callable[[list[str]], Any] = command
             run(["gh", "release", "create", TAG, "--repo", REPO,
                  "--verify-tag", "--draft", "--prerelease", "--latest=false",
                  "--title", TAG, "--notes-file", str(notes_path)])
-        release = run(["gh", "api", release_path])
+        release = find_release()
     if not release or release.get("tag_name") != TAG or not release.get("prerelease"):
         raise RuntimeError("Expected beta.6b prerelease metadata")
     assets_path = f"{prefix}/releases/{int(release['id'])}/assets?per_page=100"
@@ -137,7 +146,7 @@ def reconcile(source: str, root: Path, run: Callable[[list[str]], Any] = command
     if release.get("draft"):
         run(["gh", "release", "edit", TAG, "--repo", REPO,
              "--draft=false", "--prerelease", "--latest=false", "--verify-tag"])
-    final = run(["gh", "api", release_path])
+    final = find_release()
     if not final or final.get("draft") or not final.get("prerelease"):
         raise RuntimeError("Prerelease publication readback failed")
     receipt = {"source": source, "tag": TAG, "backend": BACKEND,

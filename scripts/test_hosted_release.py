@@ -32,6 +32,7 @@ class ReleaseTests(unittest.TestCase):
         self.ref = None
         self.release = None
         self.assets = {}
+        self.duplicate_release = None
 
     def get(self, url):
         self.gets.append(url)
@@ -56,7 +57,13 @@ class ReleaseTests(unittest.TestCase):
             if "/git/ref/" in path:
                 return copy.deepcopy(self.ref)
             if "/releases/tags/" in path:
-                return copy.deepcopy(self.release)
+                return copy.deepcopy(self.release) if self.release and not self.release["draft"] else None
+            if "/releases?" in path:
+                matches = [copy.deepcopy(self.release)] if self.release else []
+                if self.duplicate_release:
+                    matches.append(copy.deepcopy(self.duplicate_release))
+                # Include another tag on a separate page to exercise pagination.
+                return [[{"id": 1, "tag_name": "v1.0.0"}], matches]
             if "/assets?" in path:
                 return [copy.deepcopy(list(self.assets.values()))]
             raise AssertionError(args)
@@ -88,6 +95,21 @@ class ReleaseTests(unittest.TestCase):
         self.assertFalse(self.release["draft"])
         self.assertEqual(len(self.gets), 2)
         self.assertTrue((self.root / "release-receipt.json").exists())
+        self.assertFalse(any("/releases/tags/" in arg for args in self.calls for arg in args))
+
+    def test_draft_is_discovered_when_release_by_tag_returns_not_found(self):
+        self.complete_release(draft=True)
+        self.assertIsNone(self.run_cli(["gh", "api", f"repos/{m.REPO}/releases/tags/{m.TAG}"]))
+        m.reconcile(SOURCE, self.root, self.run_cli, self.get)
+        self.assertFalse(self.release["draft"])
+        self.assertFalse(any("create" in args for args in self.writes()))
+
+    def test_duplicate_draft_and_published_tag_refuses_writes(self):
+        self.complete_release()
+        self.duplicate_release = {**self.release, "id": 43, "draft": True}
+        with self.assertRaisesRegex(RuntimeError, "Multiple releases"):
+            m.reconcile(SOURCE, self.root, self.run_cli, self.get)
+        self.assertEqual(self.writes(), [])
 
     def test_partial_draft_retry_uploads_only_missing_asset(self):
         self.complete_release(draft=True)
