@@ -1,0 +1,102 @@
+name: Build and publish reviewed beta.6b
+on:
+  workflow_call:
+permissions:
+  contents: read
+concurrency:
+  group: keepsidian-client-hosted-release
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.repository_id == '822100323' && github.actor_id == '2609441' && github.triggering_actor == 'lc0rp' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      attestations: write
+      id-token: write
+    outputs:
+      artifact_id: ${{ steps.release-assets.outputs.artifact-id }}
+    env:
+      KEEPSIDIAN_SERVER_URL: https://v2-1-0-beta-6b---keepsidianserver-i55qr5tvea-uc.a.run.app
+      KEEPSIDIAN_RECOVERY_UAT: "false"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 2b5cf04eb5c0c2f66c7b3af1f7879f4d907359f9
+          persist-credentials: false
+      - name: Verify frozen source and backend before build
+        run: |
+          test "$(git rev-parse HEAD)" = '2b5cf04eb5c0c2f66c7b3af1f7879f4d907359f9'
+          python3 scripts/hosted-release.py backend
+          python3 -B scripts/test_hosted_release.py
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22.x"
+      - name: Install locked dependencies and build
+        run: |
+          cutoff="$(python3 -c 'from datetime import datetime, timedelta, timezone; print((datetime.now(timezone.utc) - timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
+          npm ci --before="$cutoff"
+          node --test scripts/release-version.test.mjs
+          npm run build
+      - name: Verify release asset contract and bounded upload size
+        run: |
+          python3 - <<'PY'
+          import importlib.util
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('release', 'scripts/hosted-release.py')
+          release = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(release)
+          release.validate(Path.cwd())
+          if sum(Path(name).stat().st_size for name in release.ASSETS) > 20 * 1024 * 1024:
+              raise RuntimeError('Release assets exceed the approved 20 MiB upload cap')
+          PY
+      - name: Attest the three built assets
+        uses: actions/attest@36051bcae73b7c2a8a6945a48cbf80953c6baa35
+        with:
+          subject-path: |
+            main.js
+            manifest.json
+            styles.css
+      - id: release-assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: keepsidian-beta6b-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            main.js
+            manifest.json
+            styles.css
+          if-no-files-found: error
+          retention-days: 1
+  publish:
+    if: github.repository_id == '822100323' && github.actor_id == '2609441' && github.triggering_actor == 'lc0rp' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 2b5cf04eb5c0c2f66c7b3af1f7879f4d907359f9
+          persist-credentials: false
+      - name: Require the successful build's single artifact ID
+        env:
+          ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          if not re.fullmatch(r'[1-9][0-9]*', os.environ['ARTIFACT_ID']):
+              raise RuntimeError('A single successful build artifact ID is required')
+          PY
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          merge-multiple: true
+          path: .
+      - name: Reconcile source tag, asset hashes and prerelease publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/hosted-release.py publish --source 2b5cf04eb5c0c2f66c7b3af1f7879f4d907359f9
+          cat release-receipt.json >> "$GITHUB_STEP_SUMMARY"
