@@ -25,7 +25,7 @@ it.each<MergeAction>(["merge-save-conflicts", "merge-skip-conflicts", "merge-ove
 	const plugin = {
 		settings: { saveLocation: "Keep", email: "test@example.com", token: "test-token" },
 		app: { vault: {
-			adapter: { read: jest.fn(async (path: string) => files.get(path) ?? ""), write, exists: jest.fn(async () => true) },
+			adapter: { read: jest.fn(async (path: string) => files.get(path) ?? ""), write, exists: jest.fn(async (path: string) => files.has(path) || path === "Keep") },
 			createFolder: jest.fn(async () => {}),
 		} },
 		throwIfSyncCancelled: jest.fn(),
@@ -98,7 +98,7 @@ it.each(["unchanged", "edited", "pending", "missing", "malformed", "wrong-identi
 					adapter: {
 						read: jest.fn(async (path: string) => files.get(path) ?? ""),
 						write,
-						exists: jest.fn(async () => true),
+						exists: jest.fn(async (path: string) => files.has(path) || path === "Keep"),
 					},
 					createFolder: jest.fn(async () => {}),
 				},

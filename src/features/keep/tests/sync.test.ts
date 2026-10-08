@@ -761,7 +761,8 @@ describe("Google Keep Import Functions", () => {
 				normalizedNote,
 				mockPlugin.app,
 				`${mockPlugin.settings.saveLocation}/${note.title}.md`,
-				undefined
+				undefined,
+				expect.any(Function)
 			);
 			expect(mockPlugin.app.vault.adapter.read).not.toHaveBeenCalled();
 			expect(ensureParentSpy).toHaveBeenCalledWith(
@@ -786,7 +787,7 @@ describe("Google Keep Import Functions", () => {
 			});
 
 			expect(duplicateSpy).not.toHaveBeenCalled();
-			expect(mockPlugin.app.vault.adapter.exists).not.toHaveBeenCalled();
+			expect(mockPlugin.app.vault.adapter.exists).toHaveBeenCalledWith("Test Folder/Note 1.md");
 			expect(ensureParentSpy).toHaveBeenCalledWith(
 				mockPlugin.app,
 				`${mockPlugin.settings.saveLocation}/${note.title}.md`
@@ -905,6 +906,7 @@ describe("Google Keep Import Functions", () => {
 
 			jest.spyOn(noteModule, "normalizeNote").mockReturnValue(normalizedNoteWithAttachments);
 			jest.spyOn(compareModule, "handleDuplicateNotes").mockResolvedValue("overwrite");
+			(mockPlugin.app.vault.adapter.read as jest.Mock).mockResolvedValue("---\n---\nOld body");
 			const processAttachmentsSpy = jest.spyOn(attachmentsModule, "processAttachments").mockResolvedValue({
 				downloaded: 2,
 				skippedIdentical: 0,
@@ -927,7 +929,8 @@ describe("Google Keep Import Functions", () => {
 				{
 					email: mockPlugin.settings.email,
 					token: mockPlugin.settings.token,
-				}
+				},
+				false
 			);
 			expect(logSpy).toHaveBeenCalledWith(
 				mockPlugin,
@@ -1014,7 +1017,8 @@ describe("Google Keep Import Functions", () => {
 				{
 					email: mockPlugin.settings.email,
 					token: mockPlugin.settings.token,
-				}
+				},
+				false
 			);
 			expect(logSpy).toHaveBeenCalledWith(
 				mockPlugin,
