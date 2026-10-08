@@ -7,17 +7,39 @@ import type KeepSidianPlugin from "@app/main";
 import { collectNotesToPush } from "../push/collectNotes";
 import { pushGoogleKeepNotes } from "../push";
 import { pushNotes } from "@integrations/server/keepApi";
-import { localStateBaseline, stampLocalBaseline, storedLocalBaseline } from "../domain/local-state";
+import { digest, localStateBaseline, stampLocalBaseline, storedLocalBaseline } from "../domain/local-state";
 import { stripSyncState } from "../domain/sync-state";
 import { getExistingFileInfo, checkForDuplicateData } from "../domain/compare";
 
-const originalCrypto = globalThis.crypto;
+const cryptoDescriptor = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+const encoderDescriptor = Object.getOwnPropertyDescriptor(globalThis, "TextEncoder");
+// Node 18 Jest retains global bindings; mutate one installed provider instead.
+const cryptoProvider: { subtle: typeof webcrypto.subtle | undefined } = { subtle: webcrypto.subtle };
 beforeAll(() => {
-	Object.defineProperty(globalThis, "crypto", { configurable: true, value: webcrypto });
+	Object.defineProperty(globalThis, "crypto", { configurable: true, value: cryptoProvider });
 	Object.defineProperty(globalThis, "TextEncoder", { configurable: true, value: TextEncoder });
 });
-afterAll(() => Object.defineProperty(globalThis, "crypto", { configurable: true, value: originalCrypto }));
+afterAll(() => {
+	if (cryptoDescriptor) Object.defineProperty(globalThis, "crypto", cryptoDescriptor);
+	else Reflect.deleteProperty(globalThis, "crypto");
+	if (encoderDescriptor) Object.defineProperty(globalThis, "TextEncoder", encoderDescriptor);
+	else Reflect.deleteProperty(globalThis, "TextEncoder");
+});
 beforeEach(() => jest.clearAllMocks());
+
+it("hashes only the requested byte view with the installed crypto implementation", async () => {
+	const bytes = new Uint8Array([0, 1, 2, 3, 4]);
+	expect(await digest(bytes.subarray(1, 4))).toBe("sha256:039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81");
+});
+
+it("returns an unknown baseline when asynchronous hashing fails", async () => {
+	const f = await fixture();
+	const hash = jest.spyOn(webcrypto.subtle, "digest").mockRejectedValueOnce(new Error("Synthetic crypto failure"));
+	try {
+		expect(await localStateBaseline(f.adapter, f.path, f.content)).toBeUndefined();
+		expect(storedLocalBaseline(f.content)).toMatch(/^sha256:/);
+	} finally { hash.mockRestore(); }
+});
 
 async function fixture(media = false) {
 	const path = "Keep/note.md";
@@ -79,12 +101,12 @@ it("preserves a legacy note edited while its upload is in flight and leaves it e
 
 it("falls back at millisecond precision when crypto is unavailable; never invents a hash", async () => {
 	const f = await fixture();
-	Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+	cryptoProvider.subtle = undefined;
 	try {
 		f.edit(f.content + "\nNew edit");
 		expect(await localStateBaseline(f.adapter, f.path, f.content)).toBeUndefined();
 		expect((await collectNotesToPush(f.plugin)).notesToPush).toHaveLength(1);
-	} finally { Object.defineProperty(globalThis, "crypto", { configurable: true, value: webcrypto }); }
+	} finally { cryptoProvider.subtle = webcrypto.subtle; }
 	expect(storedLocalBaseline(f.content)).toMatch(/^sha256:/);
 });
 
@@ -150,11 +172,11 @@ it.each([false, true])("retains a newly created Keep identity when in-flight %s 
 
 it("unknown hashing/media state stays eligible even if its timestamp is preserved", async () => {
 	const f = await fixture();
-	Object.defineProperty(globalThis, "crypto", { configurable: true, value: undefined });
+	cryptoProvider.subtle = undefined;
 	try {
 		f.adapter.stat.mockResolvedValue({ ctime: 0, mtime: Date.parse("2024-01-01T00:00:00.100Z"), size: 0, type: "file" });
 		expect((await collectNotesToPush(f.plugin)).notesToPush).toHaveLength(1);
-	} finally { Object.defineProperty(globalThis, "crypto", { configurable: true, value: webcrypto }); }
+	} finally { cryptoProvider.subtle = webcrypto.subtle; }
 });
 
 it("keeps locally edited Keep state pending while merging a newer remote body", async () => {

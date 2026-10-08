@@ -17,7 +17,8 @@ export function storedLocalBaseline(content: string): string | undefined {
 }
 
 export async function digest(bytes: Uint8Array): Promise<string> {
-	const hash = await globalThis.crypto.subtle.digest("SHA-256", new Uint8Array(bytes).buffer);
+	// A byte view also works with older crypto implementations across JS realms.
+	const hash = await globalThis.crypto.subtle.digest("SHA-256", new Uint8Array(bytes));
 	return `sha256:${Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
@@ -37,7 +38,7 @@ export async function localStateBaseline(adapter: LocalAdapter, path: string, co
 			return [reference, hash];
 		}) : await captureLocalMedia(adapter, path, content);
 		const effectiveName = getFrontmatterStringValue(properties, "Title") || path.split("/").pop()?.replace(/\.md$/i, "");
-		return digest(new TextEncoder().encode(JSON.stringify(["keep-local-v1", effectiveName, userProperties, body, media])));
+		return await digest(new TextEncoder().encode(JSON.stringify(["keep-local-v1", effectiveName, userProperties, body, media])));
 	} catch { return undefined; }
 }
 
