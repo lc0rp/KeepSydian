@@ -1,5 +1,6 @@
 import KeepSidianPlugin from "main";
 import { ensurePascalCaseFrontmatter } from "../migrations/fixFrontmatterCasing";
+import { ambiguousMigrationCases } from "./frontmatterFixtures";
 
 describe("ensurePascalCaseFrontmatter", () => {
 	function createPlugin(content: string) {
@@ -57,6 +58,34 @@ describe("ensurePascalCaseFrontmatter", () => {
 		);
 		expect(plugin.settings.frontmatterPascalCaseFixApplied).toBe(true);
 		expect(plugin.saveSettings).toHaveBeenCalled();
+	});
+
+	it.each(ambiguousMigrationCases)("leaves ambiguous $kind byte-for-byte unchanged", async ({ body }) => {
+		const original = `---\n${body}\n---\nLocal content\n`;
+		const { plugin, adapter } = createPlugin(original);
+		await ensurePascalCaseFrontmatter(plugin);
+		expect(adapter.write).not.toHaveBeenCalled();
+		expect(plugin.settings.frontmatterPascalCaseFixApplied).toBe(true);
+		await ensurePascalCaseFrontmatter(plugin);
+		expect(adapter.read).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([
+		'google-keep-url: https://keep.google.com/#NOTE/n1\nmetadata: "first\ngoogle-keep-url: literal text\nlast"',
+		'google-keep-created-date: "first\ngoogle-keep-created-date: literal text\nlast"',
+		'google-keep-url: https://keep.google.com/#NOTE/n1\nmetadata: &cycle\n  self: *cycle',
+		'google-keep-url: https://keep.google.com/#NOTE/n1\nmetadata: !!binary aGVsbG8=',
+	])("skips an unproven candidate without modifying its original: %s", async (body) => {
+		const { plugin, adapter } = createPlugin(`---\n${body}\n---\nBody`);
+		await ensurePascalCaseFrontmatter(plugin);
+		expect(adapter.write).not.toHaveBeenCalled();
+	});
+
+	it("allows a root-key rename while preserving arrays, dates and shared metadata", async () => {
+		const original = "---\ngoogle-keep-url: https://keep.google.com/#NOTE/n1\nmetadata: &shared\n  values: [2024-01-01, null, .nan, true, text]\ncopy: *shared\n---\nBody";
+		const { plugin, adapter } = createPlugin(original);
+		await ensurePascalCaseFrontmatter(plugin);
+		expect(adapter.write).toHaveBeenCalledWith("Keep/note.md", original.replace("google-keep-url:", "GoogleKeepUrl:"));
 	});
 
 	it("does nothing when already applied", async () => {

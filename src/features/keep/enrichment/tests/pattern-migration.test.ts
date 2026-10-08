@@ -16,6 +16,7 @@ import { resolveNoteFolder } from "@services/note-path-resolver";
 import { hash } from "../state";
 import { chooseLegacyTags, type LegacyTagConsent } from "../consent";
 import { EnrichmentLedger, getEnrichmentLedger } from "../ledger";
+import { ambiguousMigrationCases } from "../../tests/frontmatterFixtures";
 
 beforeAll(() => {
 	Object.defineProperty(globalThis, "crypto", { configurable: true, value: webcrypto });
@@ -134,6 +135,26 @@ const invalidIdentities = [
 const invalidIdentityCases = invalidIdentities.flatMap(([kind, value]) =>
 	[false, true].flatMap((ai) => ["legacy", "review"].map((caller) => ({ kind, value, ai, caller })))
 );
+
+it.each(ambiguousMigrationCases.flatMap((shape) =>
+	[false, true].flatMap((ai) => ["legacy", "review"].map((caller) => ({ ...shape, ai, caller })))
+))("defers ambiguous $kind through $caller import (AI=$ai)", async ({ body, ai, caller }) => {
+	const f = await fixture("Keep", ai);
+	f.plugin.settings.frontmatterPascalCaseFixApplied = false;
+	await f.mkdir("Keep");
+	const path = "Keep/Manual.md";
+	const original = `---\n${body}\n---\nBody`;
+	f.disk.set(path, original);
+	await initializeLocalDeletionTracking(f.plugin);
+	if (caller === "review") await f.run();
+	else await runImportNotesFlow(f.plugin, false, () => "failed");
+	expect(f.plugin.settings.lastSyncAttempt?.outcome).toBe("success");
+	expect(f.disk.get(path)).toBe(original);
+	if (body.includes("https://keep.google.com/#NOTE/n1")) {
+		expect(f.provider).not.toHaveBeenCalled();
+		expect([...f.disk.keys()].filter((key) => key.endsWith(".md"))).toEqual([path]);
+	}
+});
 
 it.each(invalidIdentityCases)("holds invalid identity $kind through $caller import (AI=$ai)", async ({ value, ai, caller }) => {
 	const f = await fixture("Keep/{note.year}", ai);
