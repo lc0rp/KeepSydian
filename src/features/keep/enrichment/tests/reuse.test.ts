@@ -58,7 +58,7 @@ function fixture() {
 		}),
 		list: jest.fn(async (_path: string) => ({
 			files: [...stored.keys()].filter((path) => path.startsWith("Keep/") && path.endsWith(".md")),
-			folders: [],
+			folders: [] as string[],
 		})),
 	};
 	const plugin = {
