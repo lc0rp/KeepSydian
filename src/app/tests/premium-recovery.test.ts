@@ -312,6 +312,48 @@ describe("premium recovery through the manual sync caller", () => {
 		assertNoImport();
 	});
 
+	it("resumes a slow 650-note preparation after its original fourteen-minute window", async () => {
+		plugin.settings.premiumFeatures.updateTitle = true;
+		plugin.settings.premiumFeatures.suggestTags = true;
+		const server = replayServer(650);
+		server.beforeResponse(() => now.mockReturnValue(startedAt + server.requests.length * 35_000));
+		server.fail(163, 3, 504, true);
+		await expect(prepare()).rejects.toBeInstanceOf(RecoverablePreparationError);
+		expect(Date.now() - startedAt).toBeGreaterThan(14 * 60_000);
+		const original = server.requests[0];
+		const plan = (await prepare())!;
+		expect(plan.importNotes).toHaveLength(650);
+		expect(new Set(plan.importNotes?.map((note) => note.id)).size).toBe(650);
+		expect(server.generatedPages).toHaveLength(163);
+		expect(server.enrichedNotes).toBe(650);
+		expect(
+			server.requests.every(
+				(request) => request.headers?.["X-Sync-Operation"] === original.headers?.["X-Sync-Operation"]
+			)
+		).toBe(true);
+		assertNoImport();
+	});
+
+	it("retains the resolved vault tag allowlist when resuming a lost initial response", async () => {
+		plugin.settings.premiumFeatures.suggestTags = true;
+		plugin.settings.premiumFeatures.limitToExistingTags = true;
+		const lookup = jest.fn().mockReturnValue([]);
+		plugin.app.vault.getMarkdownFiles = lookup;
+		const server = replayServer(8);
+		server.fail(1, 3, 504, true);
+		const prepareImport = () => buildImportSyncPlan(plugin, plugin.settings.premiumFeatures);
+		await expect(prepareImport()).rejects.toBeInstanceOf(RecoverablePreparationError);
+		lookup.mockImplementation(() => {
+			throw new Error("A retained preparation must not reread the vault allowlist");
+		});
+		const plan = await prepareImport();
+		expect(plan.notes).toHaveLength(8);
+		expect(lookup).toHaveBeenCalledTimes(1);
+		expect(server.requests.every((request) => request.body === server.requests[0].body)).toBe(true);
+		expect(server.enrichedNotes).toBe(8);
+		assertNoImport();
+	});
+
 	it.each([400, 401, 403, 410, 413])(
 		"does not retry permanent HTTP %s and discards retained preparation",
 		async (status) => {

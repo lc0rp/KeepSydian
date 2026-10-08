@@ -25,6 +25,8 @@ interface NormalizedNote {
 
 interface PreNormalizedNote {
 	id?: string;
+	tags?: string[];
+	processing_warnings?: string[];
 	title: string;
 	text?: string;
 	created?: string;
@@ -92,17 +94,56 @@ function normalizeNote(note: PreNormalizedNote): NormalizedNote {
 	normalizedNote.textWithoutFrontmatter = textWithoutFrontmatter;
 	normalizedNote.frontmatterDict = frontmatterDict;
 
+	if (note.tags?.length) {
+		normalizedNote.frontmatter = mergeSuggestedTags(frontmatter, note.tags);
+		const [, , merged] = extractFrontmatter(`---\n${normalizedNote.frontmatter}\n---\n`);
+		frontmatterDict.tags = merged.tags;
+		frontmatterDict.Tags = merged.tags;
+	}
+
 	const keepId = note.id?.trim();
-	if (!getFrontmatterStringValue(frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY)?.trim() && keepId && /^[A-Za-z0-9._-]+$/.test(keepId)) {
+	if (
+		!getFrontmatterStringValue(frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY)?.trim() &&
+		keepId &&
+		/^[A-Za-z0-9._-]+$/.test(keepId)
+	) {
 		const url = `https://keep.google.com/#NOTE/${keepId}`;
 		const line = `${FRONTMATTER_GOOGLE_KEEP_URL_KEY}: ${url}`;
 		const urlProperty = /^(["']?)(?:GoogleKeepUrl|googleKeepUrl|google-keep-url)\1[\t ]*:[^\r\n]*/gm;
-		const replaced = frontmatter.replace(urlProperty, line);
-		normalizedNote.frontmatter = replaced !== frontmatter ? replaced : [frontmatter, line].filter(Boolean).join("\n");
+		const replaced = normalizedNote.frontmatter.replace(urlProperty, line);
+		normalizedNote.frontmatter =
+			replaced !== normalizedNote.frontmatter
+				? replaced
+				: [normalizedNote.frontmatter, line].filter(Boolean).join("\n");
 		frontmatterDict[FRONTMATTER_GOOGLE_KEEP_URL_KEY] = url;
 	}
 
 	return normalizedNote;
+}
+
+/** Union AI additions with manual tags, preserving all other frontmatter bytes. */
+export function mergeSuggestedTags(frontmatter: string, suggestions?: string[]): string {
+	if (!suggestions?.length) return frontmatter;
+	const [, , properties] = extractFrontmatter(`---\n${frontmatter}\n---\n`);
+	const value = properties.tags;
+	const prior = Array.isArray(value) ? normalizeStringArray(value) : typeof value === "string" ? [value] : [];
+	const tags = [...new Set([...prior, ...suggestions])];
+	if (tags.length === prior.length) return frontmatter;
+	const line = `tags: ${JSON.stringify(tags)}`;
+	const tagProperty = /^(["']?)tags\1[ \t]*:[^\r\n]*(?:\r?\n(?:[ \t]+[^\r\n]*|-[^\r\n]*))*/m;
+	return tagProperty.test(frontmatter)
+		? frontmatter.replace(tagProperty, line)
+		: [frontmatter, line].filter(Boolean).join("\n");
+}
+
+export function getSuggestedTagUpdate(note: PreNormalizedNote, markdown: string): string | undefined {
+	if (!note.tags?.length) return undefined;
+	const match = /^---[\t ]*\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/.exec(markdown);
+	if (!match) return undefined;
+	const frontmatter = mergeSuggestedTags(match[1], note.tags);
+	if (frontmatter === match[1]) return undefined;
+	const openingLength = match[0].indexOf("\n") + 1;
+	return markdown.slice(0, openingLength) + frontmatter + markdown.slice(openingLength + match[1].length);
 }
 
 function extractFrontmatter(text: string): [string, string, FrontmatterDict] {

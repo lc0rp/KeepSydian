@@ -6,6 +6,16 @@ import { normalizeMergeAction, resolveMergeAction, type MergeDecision } from "./
 
 export const PENDING_UPLOAD_KEY = "KeepSidianPendingUpload";
 export const REMOTE_BASELINE_KEY = "KeepSidianRemoteBaseline";
+export const REMOTE_REVISION_KEY = "KeepSidianRemoteRevision";
+
+export function storedRemoteRevision(frontmatter: string): string | undefined {
+	return /^KeepSidianRemoteRevision: (keep-v1:[a-f0-9]{64})$/m.exec(frontmatter)?.[1];
+}
+
+export function withRemoteRevision(frontmatter: string, revision?: string): string {
+	const cleaned = frontmatter.replace(/^KeepSidianRemoteRevision:[^\r\n]*(?:\r?\n|$)/gm, "").trim();
+	return revision && /^keep-v1:[a-f0-9]{64}$/.test(revision) ? `${cleaned}\n${REMOTE_REVISION_KEY}: ${revision}` : cleaned;
+}
 
 /** Account indices are not part of Keep note identity. */
 export function keepKey(value: string | undefined): string | undefined {
@@ -33,7 +43,7 @@ export function hasPendingUpload(frontmatter: string): boolean {
 
 /** These properties belong to the vault only and must never be sent to Keep. */
 export function stripSyncState(frontmatter: string): string {
-	return frontmatter.replace(/^KeepSidian(?:PendingUpload|RemoteBaseline):[^\r\n]*(?:\r?\n|$)/gm, "").trim();
+	return frontmatter.replace(/^KeepSidian(?:PendingUpload|RemoteBaseline|LocalBaseline|RemoteRevision):[^\r\n]*(?:\r?\n|$)/gm, "").trim();
 }
 
 export function withSyncState(frontmatter: string, pending: boolean, baseline?: string): string {

@@ -3,12 +3,17 @@ import { z } from "zod";
 // Schema for a pre-normalized note as returned by the server
 export const PreNormalizedNoteSchema = z.object({
 	id: z.string().optional(),
+	tags: z.array(z.string()).optional(),
+	processing_warnings: z.array(z.string()).optional(),
 	title: z.string().optional(),
 	text: z.string().optional(),
 	body: z.string().optional(),
 	created: z.string().nullable().optional(),
 	updated: z.string().nullable().optional(),
-	remote_revision: z.string().regex(/^keep-v1:[a-f0-9]{64}$/).optional(),
+	remote_revision: z
+		.string()
+		.regex(/^keep-v1:[a-f0-9]{64}$/)
+		.optional(),
 	color: z.string().optional(),
 	pinned: z.boolean().optional(),
 	frontmatter: z.string().optional(),
@@ -46,7 +51,7 @@ export const PremiumFeatureFlagsSchema = z.object({
 	suggest_tags: z
 		.object({
 			max_tags: z.number(),
-			restrict_tags: z.boolean(),
+			restrict_tags: z.union([z.boolean(), z.array(z.string())]),
 			prefix: z.string(),
 		})
 		.optional(),

@@ -107,6 +107,11 @@ The Sync Center shows planned changes for your approval.
 - The review groups changes by status and action, with the exact affected notes shown below.
 - During execution, the review screen, notices, and status bar show sync progress.
 
+Smart title and tag suggestions use one request per note when both are enabled on the updated server.
+Failed suggestions appear in review; you can still import the original note.
+Suggested tags are added alongside existing manual tags. Restricting tags to existing tags uses the
+vault's tag list, preserved while a paused download resumes.
+
 (Deprecated) There are legacy `download`, `upload`, and `two-way` commands, which are a hold-over from older versions.
 They open the same sync center flow, and will be removed in future versions.
 
