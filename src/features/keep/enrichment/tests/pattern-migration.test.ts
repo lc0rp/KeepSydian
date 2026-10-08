@@ -171,6 +171,45 @@ it.each(["---\n---\nBody", "---\n# empty mapping\n---\nBody", "Body"])(
 	}
 );
 
+it.each(["google-keep-url: null", "GoogleKeepUrl: https://keep.google.com/#NOTE/n1\ngoogle-keep-url: null"].flatMap((identity) =>
+	[false, true].flatMap((ai) => ["legacy", "review"].map((caller) => ({ identity, ai, caller })))
+))("preserves invalid identity before pending migration through $caller (AI=$ai): $identity", async ({ identity, ai, caller }) => {
+	const f = await fixture("Keep", ai);
+	f.plugin.settings.frontmatterPascalCaseFixApplied = false;
+	await f.mkdir("Keep");
+	const path = "Keep/Manual.md";
+	const text = `---\n${identity}\n---\nLocal body\n`;
+	f.disk.set(path, text);
+	await initializeLocalDeletionTracking(f.plugin);
+	f.plugin.settings.keepSidianLastSuccessfulSyncDate = "2023-01-01T00:00:00.000Z";
+	if (caller === "review") await expect(f.run()).rejects.toThrow(/GoogleKeepUrl/);
+	else {
+		await runImportNotesFlow(f.plugin, false, () => "failed");
+		expect(f.plugin.settings.lastSyncAttempt?.outcome).toBe("failed");
+	}
+	expect(f.disk.get(path)).toBe(text);
+	expect([...f.disk.keys()].filter((key) => key.endsWith(".md"))).toEqual([path]);
+	expect(f.provider).not.toHaveBeenCalled();
+	expect(f.plugin.settings.keepSidianLastSuccessfulSyncDate).toBe("2023-01-01T00:00:00.000Z");
+});
+
+it.each([false, true].flatMap((ai) => ["legacy", "review"].map((caller) => ({ ai, caller }))))(
+	"preserves equivalent aliases during pending migration through $caller (AI=$ai)", async ({ ai, caller }) => {
+		const f = await fixture("Keep", ai);
+		f.plugin.settings.frontmatterPascalCaseFixApplied = false;
+		await f.mkdir("Keep");
+		const path = "Keep/Manual.md";
+		f.disk.set(path, f.note.text.replace("\n---\nBody", '\ngoogle-keep-url: https://keep.google.com/u/0/#NOTE/%6E1\nTitle: "Manual title"\ntags: ["manual"]\n---\nBody'));
+		await initializeLocalDeletionTracking(f.plugin);
+		if (caller === "review") await f.run();
+		else await runImportNotesFlow(f.plugin, false, () => "failed");
+		expect(f.plugin.settings.lastSyncAttempt?.outcome).toBe("success");
+		expect(extractFrontmatter(f.disk.get(path)!, true)[2]).toMatchObject({ Title: "Manual title", tags: ["manual"] });
+		expect([...f.disk.keys()].filter((key) => key.endsWith(".md"))).toEqual([path]);
+		expect(f.provider).not.toHaveBeenCalled();
+	}
+);
+
 it.each([
 	["n1", "https://keep.google.com/u/7/?source=fixture#NOTE/%6E1"],
 	["part-one", "https://keep.google.com/u/7/#NOTE/part%2Done"],

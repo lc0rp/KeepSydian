@@ -908,11 +908,7 @@ export async function processAndSaveNotes(
 ) {
 	throwIfSyncCancelled(plugin);
 	const batchStartedAt = getNowMs();
-	const frontmatterFixStartedAt = getNowMs();
-	await ensurePascalCaseFrontmatter(plugin);
-	await appendPerfTrace(plugin, "save-batch-frontmatter-fix-complete", {
-		durationMs: getNowMs() - frontmatterFixStartedAt,
-	});
+	// Admission must hold uncertain identities before the migration can write any note.
 	const existingIndexStartedAt = getNowMs();
 	const existingKeepNoteIndex = await buildExistingKeepNoteIndex(plugin.app, plugin.settings.saveLocation);
 	throwIfSyncCancelled(plugin);
@@ -920,6 +916,11 @@ export async function processAndSaveNotes(
 		durationMs: getNowMs() - existingIndexStartedAt,
 		existingPaths: existingKeepNoteIndex.existingPaths.size,
 		indexedKeepUrls: existingKeepNoteIndex.pathByKeepUrl.size,
+	});
+	const frontmatterFixStartedAt = getNowMs();
+	await ensurePascalCaseFrontmatter(plugin);
+	await appendPerfTrace(plugin, "save-batch-frontmatter-fix-complete", {
+		durationMs: getNowMs() - frontmatterFixStartedAt,
 	});
 	const ensuredFolders = new Map<string, Promise<void>>();
 	const noteLocks = new Map<string, Promise<void>>();
