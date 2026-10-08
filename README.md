@@ -32,8 +32,12 @@ Relevant content or prompt changes can request a new result. Prefix changes and
 lower tag limits use the same raw tags. Review preparation does no AI work; a
 missing suggestion is requested only when its note is selected for execution.
 
-Existing titles and tags start as manual. The plugin protects edited titles,
-keeps deliberately removed AI tags removed, and preserves manual tags. Competing
+Existing titles and tags start as manual. Saved AI settings do not start tag
+generation for previously imported notes. A default-off choice in each download
+can admit selected notes to tag generation; those notes then reuse accepted
+results until relevant content changes. Existing titles stay manual.
+The plugin protects edited titles, keeps deliberately removed AI tags removed,
+and preserves manual tags. Competing
 Keep and Obsidian field edits hold uploads until those fields are resolved.
 The ledger also guards uncertain requests so losing a reply cannot cause an
 automatic repeat charge. A failed larger-tag request keeps its earlier result.
@@ -44,8 +48,14 @@ UI yet. Missing or damaged initialized metadata stops AI work.
 After an unconfirmed upload, AI work pauses until a reviewed upload produces a
 confirmed source receipt. This conservative recovery can require manual conflict
 resolution; it does not infer ownership from an ambiguous remote snapshot.
-Simultaneous apps or separate devices do not have a shared durable claim. The ledger contains
-private titles, labels and outputs; keep it under the vault's normal protection.
+The main ledger is limited to 8 MiB. A separate application journal is limited to
+256 KiB and holds at most 15 note receipts before a checked snapshot checkpoint.
+Both files must stay together when the vault is backed up or restored. Interrupted
+writes either recover a confirmed receipt or stop AI work; this does not promise
+power-loss atomicity from the vault adapter.
+Simultaneous apps or separate devices do not have a shared durable claim. These
+files contain private titles, labels and outputs; keep them under the vault's
+normal protection.
 Installed desktop/mobile UAT and any release remain separate approval steps.
 
 I built KeepSydian because I use Keep for quick capture and Obsidian for everything else.
