@@ -275,6 +275,7 @@ export class EnrichmentLedger {
 		return this.transaction(async (state, save) => {
 			const record = state.records[note.local_enrichment!.receipt];
 			if (!record) throw new Error("Enrichment receipt unavailable.");
+			const previouslyAdmitted = record.tagsAdmitted;
 			if (note.local_enrichment!.receipt !== (await this.key(record.source)))
 				throw new Error("Enrichment account changed before application.");
 			const source = EnrichmentSourceSchema.parse(note.enrichment_source);
@@ -352,7 +353,11 @@ export class EnrichmentLedger {
 				tags: tags(content),
 				owned: nextOwned,
 			};
-			if (before === content && record.local && (await hash(receipt)) === (await hash(record.local))) return content;
+			if (before === content && record.local && (await hash(receipt)) === (await hash(record.local))) {
+				// Consent is durable even when every suggestion already exists as a manual tag.
+				if (record.tagsAdmitted !== previouslyAdmitted) await save();
+				return content;
+			}
 			record.journal = {
 				before: before === undefined ? undefined : await hash(before),
 				after: await hash(content),

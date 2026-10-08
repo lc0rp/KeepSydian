@@ -156,6 +156,9 @@ export function getSuggestedTagUpdate(note: PreNormalizedNote, markdown: string)
 }
 
 function extractFrontmatter(text: string, strict = false): [string, string, FrontmatterDict] {
+	// Title/tag writers do not share BOM support; never infer a new note from it.
+	if (strict && text.startsWith("\uFEFF"))
+		throw new Error("Cannot determine Keep identity with a byte-order marker. Save the file as UTF-8 without BOM and retry.");
 	// Frontmatter is between --- and --- at the start of the text if it exists
 	let frontmatter = "";
 	let frontmatterDict: FrontmatterDict = {};
