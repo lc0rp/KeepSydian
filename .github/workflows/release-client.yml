@@ -1,4 +1,4 @@
-name: "Client: publish beta.6b prerelease"
+name: "Client: publish beta.7 after server verification"
 on:
   workflow_dispatch:
 permissions:
@@ -8,6 +8,6 @@ jobs:
     if: github.repository_id == '822100323' && github.actor_id == '2609441' && github.triggering_actor == 'lc0rp' && github.ref == 'refs/heads/main'
     permissions:
       contents: write
-      attestations: write
       id-token: write
-    uses: lc0rp/KeepSydian/.github/workflows/release-client-core.yml@59585026b1be87f0a7f9507b2bb1a1d4a7a7c570
+      attestations: write
+    uses: lc0rp/KeepSydian/.github/workflows/release-client-core.yml@a5646b0a61a98742fbe8441c3d162d15cfb73db6
