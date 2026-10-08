@@ -123,7 +123,7 @@ describe("Sync attempt observability in installed Obsidian", function () {
 			await button("Start sync").click();
 			const alert = browser.$(".keepsidian-modal-alert");
 			await browser.waitUntil(async () => (await alert.getText()).includes("HTTP 504"), { timeout: 20000 });
-			expect(await alert.getText()).toContain("Download preparation failed");
+			expect(await alert.getText()).toContain("Download paused");
 			const result = await browser.executeObsidian(async ({ app }) => {
 				const plugin = app.plugins.getPlugin("keepsidian") as KeepSidianPlugin;
 				const persisted = await plugin.loadData();

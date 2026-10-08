@@ -27,7 +27,7 @@ export interface PremiumFeatureFlags {
 	suggest_title?: Record<string, never>;
 	suggest_tags?: {
 		max_tags: number;
-		restrict_tags: boolean;
+		restrict_tags: boolean | string[];
 		prefix: string;
 	};
 }
@@ -43,6 +43,7 @@ export interface PushNotePayload {
 	title?: string;
 	content: string;
 	attachments?: PushAttachmentPayload[];
+	expected_revision?: string;
 }
 
 export interface PushNoteResult {
@@ -52,6 +53,7 @@ export interface PushNoteResult {
 	error?: string;
 	keep_url?: string;
 	remote_revision?: string;
+	remote_updated?: string;
 }
 
 export interface PushNotesResponse {

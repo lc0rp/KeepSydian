@@ -1,3 +1,4 @@
+import { digest, type MediaBaseline } from "../domain/local-state";
 import { KEEPSIDIAN_SERVER_URL } from "../../../config";
 import { NetworkError } from "../../../services/errors";
 import { httpGetArrayBuffer } from "../../../services/http";
@@ -25,6 +26,7 @@ export interface ProcessAttachmentsResult {
 	compareDurationMs: number;
 	writeDurationMs: number;
 	fileNames: string[];
+	mediaBaselines?: MediaBaseline;
 }
 
 export interface AttachmentFailure {
@@ -214,7 +216,8 @@ export async function processAttachments(
 	blobUrls: string[],
 	saveLocation: string,
 	blobNames?: string[],
-	requestHeaders?: AttachmentRequestHeaders
+	requestHeaders?: AttachmentRequestHeaders,
+	preserveExisting = false
 ): Promise<ProcessAttachmentsResult> {
 	const result: ProcessAttachmentsResult = {
 		downloaded: 0,
@@ -225,6 +228,7 @@ export async function processAttachments(
 		compareDurationMs: 0,
 		writeDurationMs: 0,
 		fileNames: [],
+		mediaBaselines: [],
 	};
 
 	if (!blobUrls || blobUrls.length === 0) {
@@ -251,6 +255,9 @@ export async function processAttachments(
 				continue;
 			}
 
+			const initialPath = buildMediaPath(saveLocation, fileName);
+			const existedInitially = await adapter.exists?.(initialPath);
+			const initialBytes = existedInitially && adapter.readBinary ? await adapter.readBinary(initialPath) : undefined;
 			const fetchStartedAt = getNowMs();
 			const requestUrlHeaders =
 				requestHeaders && resolvedUrl.href.startsWith(KEEPSIDIAN_SERVER_URL)
@@ -271,6 +278,10 @@ export async function processAttachments(
 					const alreadyExists = await adapter.exists(blobFilePath);
 					if (alreadyExists && typeof adapter.readBinary === "function") {
 						const existingData = await adapter.readBinary(blobFilePath);
+						if (blobFilePath !== initialPath && !arrayBuffersAreEqual(existingData, blobData)) throw new Error("Existing media at an inferred filename was preserved. Review it before replacing it.");
+						if (initialBytes && blobFilePath === initialPath && !arrayBuffersAreEqual(existingData, initialBytes)) throw new Error("Local media changed during download. Its bytes were preserved.");
+						if (preserveExisting && !arrayBuffersAreEqual(existingData, blobData)) throw new Error("Local media has unsent changes. Its bytes were preserved.");
+						if (!initialBytes && blobFilePath === initialPath && !existedInitially) throw new Error("Local media was created during download. Its bytes were preserved.");
 						if (existingData && arrayBuffersAreEqual(existingData, blobData)) {
 							shouldWrite = false;
 							result.skippedIdentical += 1;
@@ -290,6 +301,7 @@ export async function processAttachments(
 				result.downloaded += 1;
 			}
 			result.fileNames.push(resolvedFileName);
+			try { result.mediaBaselines?.push([blobFilePath, await digest(new Uint8Array(blobData))]); } catch { /* Crypto unavailable: leave acknowledgement unknown. */ }
 		} catch (error) {
 			console.error(error);
 			result.failures.push(toAttachmentFailure(blob_url, error));
