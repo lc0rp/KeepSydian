@@ -8,13 +8,14 @@ import { webcrypto } from "node:crypto";
 import { TextEncoder } from "node:util";
 import type KeepSidianPlugin from "@app/main";
 import { DEFAULT_SETTINGS } from "../../../../types/keepsidian-plugin-settings";
-import { buildManualSyncPlan, runPreparedSyncPlan } from "@app/main-sync-flows";
+import { buildManualSyncPlan, runPreparedSyncPlan, runImportNotesFlow } from "@app/main-sync-flows";
 import * as keepApi from "@integrations/server/keepApi";
 import { extractFrontmatter } from "../../domain/note";
 import { initializeLocalDeletionTracking } from "../../local-deletions/tracking";
 import { resolveNoteFolder } from "@services/note-path-resolver";
 import { hash } from "../state";
 import { chooseLegacyTags, type LegacyTagConsent } from "../consent";
+import { getEnrichmentLedger } from "../ledger";
 
 beforeAll(() => {
 	Object.defineProperty(globalThis, "crypto", { configurable: true, value: webcrypto });
@@ -22,7 +23,7 @@ beforeAll(() => {
 });
 afterEach(() => jest.restoreAllMocks());
 
-async function fixture(pattern: string) {
+async function fixture(pattern: string, ai = true) {
 	const source = {
 		version: 1 as const,
 		id: "n1",
@@ -74,7 +75,7 @@ async function fixture(pattern: string) {
 			saveLocationMode: "custom",
 			noteFileNamePattern: "{title}",
 			frontmatterPascalCaseFixApplied: true,
-			premiumFeatures: { ...DEFAULT_SETTINGS.premiumFeatures, updateTitle: true, suggestTags: true },
+			premiumFeatures: { ...DEFAULT_SETTINGS.premiumFeatures, updateTitle: ai, suggestTags: ai },
 		},
 		manifest: { id: "keepsidian" },
 		app: {
@@ -82,6 +83,7 @@ async function fixture(pattern: string) {
 				adapter,
 				configDir: ".obsidian",
 				createFolder: mkdir,
+				read: async (file: { path: string }) => adapter.read(file.path),
 				getMarkdownFiles: () => [...disk.keys()].filter((path) => path.endsWith(".md")).map((path) => ({ path })),
 			},
 			metadataCache: { getFileCache: () => null },
@@ -103,6 +105,7 @@ async function fixture(pattern: string) {
 	jest
 		.spyOn(keepApi, "fetchNotesWithPremiumFeatures")
 		.mockImplementation(async () => ({ notes: [note], total_notes: 1 }));
+	jest.spyOn(keepApi, "fetchNotes").mockImplementation(async () => ({ notes: [note], total_notes: 1 }));
 	jest.spyOn(keepApi, "getReplayEpoch").mockResolvedValue(undefined);
 	jest.spyOn(keepApi, "enrichLocalNotes").mockImplementation(provider);
 	const run = async (legacyTagConsent?: LegacyTagConsent) => {
@@ -116,6 +119,111 @@ async function fixture(pattern: string) {
 	};
 	return { note, disk, directories, adapter, plugin, provider, run, mkdir };
 }
+
+it.each(["review", "legacy"])("holds duplicate identities with AI disabled through %s", async (caller) => {
+	const f = await fixture("Keep/{note.year}", false);
+	for (const year of ["2024", "2025"]) {
+		await f.mkdir(`Keep/${year}`);
+		f.disk.set(`Keep/${year}/Manual.md`, f.note.text.replace("Body", "Earlier body"));
+	}
+	await initializeLocalDeletionTracking(f.plugin);
+	const before = [...f.disk.entries()].filter(([path]) => path.endsWith(".md"));
+	if (caller === "review") await expect(f.run()).rejects.toThrow("Multiple local notes share a Keep identity");
+	else {
+		await runImportNotesFlow(f.plugin, false, () => "failed");
+		expect(f.plugin.settings.lastSyncAttempt?.outcome).toBe("failed");
+	}
+	expect([...f.disk.entries()].filter(([path]) => path.endsWith(".md"))).toEqual(before);
+	expect(f.provider).not.toHaveBeenCalled();
+});
+
+it.each([false, true])("finds linked notes at the literal vault root with cold metadata (AI=%s)", async (ai) => {
+	const f = await fixture("/", ai);
+	await f.mkdir("Elsewhere");
+	const path = "Elsewhere/Manual.md";
+	f.disk.set(path, f.note.text.replace("\n---\nBody", '\nTitle: "Manual title"\ntags: ["manual"]\n---\nBody'));
+	await initializeLocalDeletionTracking(f.plugin);
+	await f.run();
+	expect([...f.disk.keys()].filter((key) => key.endsWith(".md"))).toEqual([path]);
+	expect(extractFrontmatter(f.disk.get(path)!)[2]).toMatchObject({ Title: "Manual title", tags: ["manual"] });
+	expect(f.provider).not.toHaveBeenCalled();
+});
+
+it.each([false, true])(
+	"rechecks legacy tag admission for a manual import during AI (fresh choice=%s)",
+	async (consent) => {
+		const f = await fixture("Keep/{note.year}");
+		await initializeLocalDeletionTracking(f.plugin);
+		const path = "Keep/2025/Manual.md";
+		f.provider.mockImplementationOnce(async (_email, _token, rows) => {
+			await f.mkdir("Keep/2025");
+			f.disk.set(path, f.note.text.replace("\n---\nBody", '\nTitle: "Manual title"\ntags: ["manual"]\n---\nBody'));
+			return {
+				results: rows.map((row) => ({
+					source: row.source,
+					status: "ready" as const,
+					outputs: { title: "AI title", tags: ["topic"] },
+				})),
+			};
+		});
+		await f.run(consent ? chooseLegacyTags() : undefined);
+		expect(f.provider).toHaveBeenCalledTimes(1);
+		expect([...f.disk.keys()].filter((key) => key.endsWith(".md"))).toEqual([path]);
+		expect(extractFrontmatter(f.disk.get(path)!)[2]).toMatchObject({
+			Title: "Manual title",
+			tags: consent ? ["manual", "auto-topic"] : ["manual"],
+		});
+		const ledger = getEnrichmentLedger(f.plugin);
+		await ledger.transaction(async (state) => {
+			expect(Object.values(state.records)).toEqual([
+				expect.objectContaining({
+					manualTitle: true,
+					tagsAdmitted: consent,
+					owned: consent ? { topic: "auto-topic" } : {},
+				}),
+			]);
+		});
+		if (!consent) {
+			await f.run();
+			expect(f.provider).toHaveBeenCalledTimes(1);
+		}
+	}
+);
+
+it("holds a stale linked path that changed ownership after enumeration", async () => {
+	const f = await fixture("Keep/{note.year}", false);
+	await f.mkdir("Keep/2025");
+	const path = "Keep/2025/Manual.md";
+	const original = f.note.text.replace("Body", "Earlier body");
+	f.disk.set(path, original);
+	await initializeLocalDeletionTracking(f.plugin);
+	const plan = await buildManualSyncPlan(f.plugin, "import", undefined, { kind: "all" });
+	let moved = false;
+	const createFolder = f.plugin.app.vault.createFolder;
+	f.plugin.app.vault.createFolder = async (folder) => {
+		const created = await createFolder(folder);
+		if (folder === "Keep/2024" && !moved) {
+			moved = true;
+			f.disk.set("Keep/2025/Moved.md", original);
+			f.disk.set(path, original.replace("#NOTE/n1", "#NOTE/n2").replace("Earlier body", "Other Keep note body"));
+		}
+		return created;
+	};
+	await expect(
+		runPreparedSyncPlan(
+			f.plugin,
+			plan!,
+			() => "failed",
+			() => {}
+		)
+	).resolves.toMatchObject({ failed: true });
+	expect(f.plugin.settings.lastSyncAttempt?.outcome).toBe("failed");
+	expect(moved).toBe(true);
+	expect(f.disk.get(path)).toContain("#NOTE/n2");
+	expect(f.disk.get(path)).toContain("Other Keep note body");
+	expect(f.disk.get("Keep/2025/Moved.md")).toBe(original);
+	expect(f.provider).not.toHaveBeenCalled();
+});
 
 it.each(["Keep/{note.year}", "Keep/{now.date}", "Keep/{title}", "{note.year}/Keep", "Keep:Archive/{note.year}"])(
 	"holds legacy AI and preserves the linked path for %s",

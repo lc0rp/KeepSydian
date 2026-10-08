@@ -1,6 +1,7 @@
 jest.mock("obsidian");
 jest.mock("@features/keep/domain/compare", () => ({ handleDuplicateNotes: jest.fn(async () => "merge") }));
 jest.mock("@features/keep/domain/noteLookup", () => ({
+	...jest.requireActual("@features/keep/domain/noteLookup"),
 	findExistingKeepNotePath: jest.fn(async () => "Keep/note.md"),
 	buildExistingKeepNoteIndex: jest.fn(), updateExistingKeepNoteIndex: jest.fn(),
 }));

@@ -36,7 +36,24 @@ type MetadataBackedApp = {
 export interface ExistingKeepNoteIndex {
 	pathByKeepUrl: Map<string, string>;
 	existingPaths: Set<string>;
+	ambiguousKeepUrls?: Set<string>;
 	plannedPathIdentities?: Map<string, string>;
+}
+
+function indexIdentity(index: ExistingKeepNoteIndex, url: string, path: string): void {
+	const identity = normalizeKeepNoteUrl(url);
+	const previous = index.pathByKeepUrl.get(identity);
+	if (previous && previous !== path) (index.ambiguousKeepUrls ??= new Set()).add(identity);
+	else index.pathByKeepUrl.set(identity, path);
+}
+
+/** A content comparison cannot protect a path that already belongs to another note. */
+export function assertKeepNoteIdentity(incomingNote: NormalizedNote, content: string): void {
+	const identity = canonicalKeepUrl(getFrontmatterStringValue(incomingNote.frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY));
+	if (!identity) return;
+	const [, , properties] = extractFrontmatter(content);
+	if (canonicalKeepUrl(getFrontmatterStringValue(properties, FRONTMATTER_GOOGLE_KEEP_URL_KEY)) !== identity)
+		throw new Error("Keep identity changed after lookup. The local file was preserved; sync again after resolving its identity.");
 }
 
 function normalizeVaultPathForScope(path: string): string {
@@ -115,6 +132,7 @@ export async function buildExistingKeepNoteIndex(
 		const markdownFiles = await listMarkdownFilesRecursively(adapter, normalizedRootFolder, strict);
 		const existingPaths = new Set(markdownFiles.map((filePath) => normalizePathSafe(filePath)));
 		const pathByKeepUrl = new Map<string, string>();
+		const index = { pathByKeepUrl, existingPaths, ambiguousKeepUrls: new Set<string>() };
 
 		for (const filePath of existingPaths) {
 			try {
@@ -122,17 +140,14 @@ export async function buildExistingKeepNoteIndex(
 				const [, , frontmatterDict] = extractFrontmatter(content);
 				const existingKeepUrl = getFrontmatterStringValue(frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
 				if (existingKeepUrl && !filePath.includes(CONFLICT_FILE_SUFFIX)) {
-					pathByKeepUrl.set(normalizeKeepNoteUrl(existingKeepUrl), filePath);
+					indexIdentity(index, existingKeepUrl, filePath);
 				}
 			} catch {
 				// Ignore unreadable candidates during lookup.
 			}
 		}
 
-		return {
-			pathByKeepUrl,
-			existingPaths,
-		};
+		return index;
 	}
 
 	// Pattern roots can span old dates/titles. Cold metadata must not turn a
@@ -143,28 +158,26 @@ export async function buildExistingKeepNoteIndex(
 			metadataBackedFiles.map((file) => normalizePathSafe(file.path)).filter((path) => path.length > 0)
 		);
 		const pathByKeepUrl = new Map<string, string>();
+		const index = { pathByKeepUrl, existingPaths, ambiguousKeepUrls: new Set<string>() };
 
 		for (const file of metadataBackedFiles) {
 			const normalizedPath = normalizePathSafe(file.path);
-			const frontmatterDict = app.metadataCache?.getFileCache?.(file)?.frontmatter;
-			if (!frontmatterDict) {
-				continue;
-			}
+			// Metadata is an optimization, never evidence that a cold file has no identity.
+			const frontmatterDict = app.metadataCache?.getFileCache?.(file)?.frontmatter ??
+				extractFrontmatter(await adapter.read(normalizedPath))[2];
 			const existingKeepUrl = getFrontmatterStringValue(frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
 			if (existingKeepUrl && !normalizedPath.includes(CONFLICT_FILE_SUFFIX)) {
-				pathByKeepUrl.set(normalizeKeepNoteUrl(existingKeepUrl), normalizedPath);
+				indexIdentity(index, existingKeepUrl, normalizedPath);
 			}
 		}
 
-		return {
-			pathByKeepUrl,
-			existingPaths,
-		};
+		return index;
 	}
 
 	const markdownFiles = await listMarkdownFilesRecursively(adapter, normalizedRootFolder, strict);
 	const existingPaths = new Set(markdownFiles.map((filePath) => normalizePathSafe(filePath)));
 	const pathByKeepUrl = new Map<string, string>();
+	const index = { pathByKeepUrl, existingPaths, ambiguousKeepUrls: new Set<string>() };
 
 	for (const filePath of existingPaths) {
 		try {
@@ -172,17 +185,14 @@ export async function buildExistingKeepNoteIndex(
 			const [, , frontmatterDict] = extractFrontmatter(content);
 			const existingKeepUrl = getFrontmatterStringValue(frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
 			if (existingKeepUrl && !filePath.includes(CONFLICT_FILE_SUFFIX)) {
-				pathByKeepUrl.set(normalizeKeepNoteUrl(existingKeepUrl), filePath);
+				indexIdentity(index, existingKeepUrl, filePath);
 			}
 		} catch {
 			// Ignore unreadable candidates during lookup.
 		}
 	}
 
-	return {
-		pathByKeepUrl,
-		existingPaths,
-	};
+	return index;
 }
 
 export function updateExistingKeepNoteIndex(
@@ -255,9 +265,14 @@ export async function findExistingKeepNotePath(
 
 	// A renamed linked note takes precedence over a different note with the expected filename.
 	if (incomingKeepUrl && index) {
+		if (index.ambiguousKeepUrls?.has(normalizeKeepNoteUrl(incomingKeepUrl)))
+			throw new Error("Multiple local notes share a Keep identity. Resolve them before importing.");
 		const linkedPath =
 			index.pathByKeepUrl.get(normalizeKeepNoteUrl(incomingKeepUrl)) ?? index.pathByKeepUrl.get(incomingKeepUrl);
-		if (linkedPath) return linkedPath;
+		if (linkedPath) {
+			assertKeepNoteIdentity(incomingNote, await adapter.read(linkedPath));
+			return linkedPath;
+		}
 	}
 
 	if (normalizedPreferredPath) {
