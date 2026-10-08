@@ -50,6 +50,8 @@ import { resolveDownloadDateWindow } from "./download-date-window";
 import { KEEPSIDIAN_SERVER_URL } from "../../config";
 import { getDeletionLedger } from "./local-deletions/ledger";
 import { assertDownloadIdentityPresentOrUntracked } from "./local-deletions/download";
+import { enrichImportNotes, fetchFirstFlags } from "./enrichment/reuse";
+import { getEnrichmentLedger } from "./enrichment/ledger";
 
 const LAST_SUCCESSFUL_SYNC_DATE_KEY = "KeepSidianLastSuccessfulSyncDate";
 const NOTE_LOG_BATCH_KEY = "sync:notes";
@@ -538,6 +540,11 @@ function buildImportPlanEntry(
 		if (note.processing_warnings?.length) {
 			detail = `${detail ? `${detail} ` : ""}AI suggestions failed; original content retained.`;
 		}
+		if (note.enrichment_pending && duplicateAction === "skip") {
+			action = "overwrite"; label = "Update suggestions"; selectable = true;
+			detail = "Applies available suggestions while preserving your manual edits.";
+		}
+		if (note.enrichment_pending) detail = `${detail ? `${detail} ` : ""}New AI suggestions are requested only for selected notes.`;
 
 		return {
 			id: `import:${index}:${normalizePathSafe(noteFilePath)}`,
@@ -654,7 +661,7 @@ async function buildImportSyncPlanBase(
 					apiFetchNotesWithPremium(
 						email,
 						token,
-						featureFlags,
+						fetchFirstFlags(featureFlags),
 						offset,
 						limit,
 						filters,
@@ -697,6 +704,7 @@ async function buildImportSyncPlanBase(
 			preparations.delete(plugin);
 	}
 	await callbacks?.attempt?.transition("plan");
+	if (featureFlags) fetched.notes = await enrichImportNotes(plugin, fetched.notes, featureFlags, undefined, undefined, false);
 	const existingKeepNoteIndex = await buildExistingKeepNoteIndex(plugin.app, plugin.settings.saveLocation);
 	const entries = await Promise.all(
 		fetched.notes.map((note, index) =>
@@ -743,6 +751,8 @@ export async function importSelectedGoogleKeepNotes(
 	completionDate?: string,
 	noteEntryIds?: string[]
 ): Promise<number> {
+	const requested = notes.find((note) => note.enrichment_requested)?.enrichment_requested;
+	if (requested) notes = await enrichImportNotes(plugin, notes, requested);
 	await processAndSaveNotes(plugin, notes, callbacks, noteEntryIds);
 	throwIfSyncCancelled(plugin);
 	if (completionDate) {
@@ -811,8 +821,10 @@ export async function importGoogleKeepNotesWithOptions(
 	const supporterKey = plugin.settings.supporterKeyConfigured ? (plugin.settings.supporterKey ?? "") : undefined;
 	return await importGoogleKeepNotesBase(
 		plugin,
-		(offset, limit, filters, cursor) =>
-			apiFetchNotesWithPremium(email, token, featureFlags, offset, limit, filters, cursor, supporterKey),
+		async (offset, limit, filters, cursor) => {
+			const response = await apiFetchNotesWithPremium(email, token, fetchFirstFlags(featureFlags), offset, limit, filters, cursor, supporterKey);
+			return { ...response, notes: response.notes.map((note) => ({ ...note, enrichment_requested: featureFlags })) };
+		},
 		{ ...callbacks, archivedStatus: options.archivedStatus ?? "active-only" },
 		downloadScope,
 		false
@@ -1127,10 +1139,13 @@ export async function processAndSaveNote(
 	let preserveLocalMedia = false;
 	const writeKnownContent = async (path: string, content: string, expected?: string): Promise<void> => {
 		const [frontmatter, body] = extractFrontmatter(content);
-		const stamped = await stampLocalBaseline(plugin.app.vault.adapter, path, wrapMarkdown(withRemoteRevision(frontmatter, note.remote_revision), body), acknowledgedMedia);
+		const input = wrapMarkdown(withRemoteRevision(frontmatter, note.remote_revision), body);
+		const finalize = (value: string) => stampLocalBaseline(plugin.app.vault.adapter, path, value, acknowledgedMedia);
+		const stamped = note.local_enrichment ? await getEnrichmentLedger(plugin).stage(note, path, expected, input, finalize) : await finalize(input);
 		if (expected !== undefined && (await plugin.app.vault.adapter.read(path) ?? "") !== expected) throw new Error("A local note changed during download. Local edits were preserved.");
 		if (expected === undefined && await plugin.app.vault.adapter.exists(path)) throw new Error("A local file appeared at the download destination. It was preserved.");
 		await plugin.app.vault.adapter.write(path, stamped);
+		if (note.local_enrichment) await getEnrichmentLedger(plugin).finish(note);
 		expectedMarkdown = stamped;
 	};
 	const writeMetadata = async (path: string, content: string, expected: string, options: { ctime: number; mtime: number }): Promise<void> => {
@@ -1138,9 +1153,11 @@ export async function processAndSaveNote(
 		let media: MediaBaseline | undefined;
 		try { media = await captureLocalMedia(plugin.app.vault.adapter, path, expected); } catch { /* Cannot acknowledge unknown media. */ }
 		const unchanged = known !== undefined && media !== undefined && await localStateBaseline(plugin.app.vault.adapter, path, expected, media) === known;
-		const updated = unchanged ? await stampLocalBaseline(plugin.app.vault.adapter, path, content, media) : content;
+		const finalize = async (value: string) => unchanged ? await stampLocalBaseline(plugin.app.vault.adapter, path, value, media) : value;
+		const updated = note.local_enrichment ? await getEnrichmentLedger(plugin).stage(note, path, expected, content, finalize) : await finalize(content);
 		if ((await plugin.app.vault.adapter.read(path) ?? "") !== expected) throw new Error("A local note changed during metadata update. Local edits were preserved.");
-		await plugin.app.vault.adapter.write(path, updated, options);
+		if (updated !== expected) await plugin.app.vault.adapter.write(path, updated, options);
+		if (note.local_enrichment) await getEnrichmentLedger(plugin).finish(note);
 		if (unchanged) expectedMarkdown = updated;
 	};
 
@@ -1225,6 +1242,12 @@ export async function processAndSaveNote(
 					await writeMetadata(noteFilePath, updated, content, { ctime: stat.ctime, mtime: stat.mtime });
 					tagged = true;
 				}
+			}
+			if (note.local_enrichment && !tagged) {
+				const content = await plugin.app.vault.adapter.read(noteFilePath);
+				const stat = await plugin.app.vault.adapter.stat(noteFilePath);
+				if (!stat) throw new Error("Cannot preserve note modification time.");
+				await writeMetadata(noteFilePath, content, content, { ctime: stat.ctime, mtime: stat.mtime });
 			}
 			// Enrichment metadata is an own write, not a downloaded body merge
 			// that must be uploaded again in the two-way stage.

@@ -22,6 +22,7 @@ export interface LastSyncSummary {
 }
 
 export interface KeepSidianPluginSettings {
+	enrichmentLedgerInitialized?: boolean;
 	email: string;
 	token: string;
 	syncTokenSecretId: string;

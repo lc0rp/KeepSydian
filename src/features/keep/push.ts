@@ -15,6 +15,7 @@ import { bodyBaseline, hasPendingUpload, localKeepKey, stripSyncState, storedRem
 import { pushNotes as apiPushNotes, PushNotePayload, PushNoteResult } from "@integrations/server/keepApi";
 import { canonicalKeepUrl } from "@integrations/server/keepDeletions";
 import { getDeletionLedger } from "./local-deletions/ledger";
+import { getEnrichmentLedger } from "./enrichment/ledger";
 import { buildLocalDeletionPlan, type PreparedLocalDeletions } from "./local-deletions/plan";
 import type { SyncPlan, SyncPlanEntry } from "@types";
 import { safeSyncError } from "@app/sync-attempt";
@@ -114,6 +115,7 @@ export async function pushGoogleKeepNotes(plugin: KeepSidianPlugin, callbacks?: 
 			throwIfSyncCancelled(plugin);
 			const batch = notesToPush.slice(index, index + PUSH_PAYLOAD_BATCH_SIZE);
 			for (const note of batch) {
+				if (plugin.settings.enrichmentLedgerInitialized) await getEnrichmentLedger(plugin).assertUploadAllowed(note.fullPath);
 				if ((await plugin.app.vault.adapter.read(note.fullPath)) !== (note.mergeReview?.sourceContent ?? note.content)) throw new Error("A local note changed during upload. Refresh the plan.");
 				await assertPendingAttachmentsUnchanged(plugin, note);
 				if (note.localState && await localStateBaseline(plugin.app.vault.adapter, note.fullPath, note.mergeReview?.sourceContent ?? note.content) !== note.localState) throw new Error("Local media changed during upload. Refresh the plan.");
@@ -165,6 +167,7 @@ export async function pushGoogleKeepNotes(plugin: KeepSidianPlugin, callbacks?: 
 					const acknowledged = await stampLocalBaseline(plugin.app.vault.adapter, note.fullPath, wrapMarkdown(frontmatter, note.body), note.localMedia);
 					if (await plugin.app.vault.adapter.read(note.fullPath) !== (note.mergeReview?.sourceContent ?? note.content)) throw new Error("A local note changed while acknowledging its upload. Local edits were preserved.");
 					await plugin.app.vault.adapter.write(note.fullPath, acknowledged);
+					if (plugin.settings.enrichmentLedgerInitialized) await getEnrichmentLedger(plugin).acknowledgeUpload(note.fullPath, acknowledged, result.enrichment_source);
 					getDeletionLedger(plugin)?.stageUpload(
 						canonicalKeepUrl(result?.keep_url ?? localKeepKey(frontmatter)),
 						normalizePathSafe(note.fullPath),
