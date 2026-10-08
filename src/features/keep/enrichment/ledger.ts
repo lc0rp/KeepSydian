@@ -5,6 +5,7 @@ import { isSafeVaultPath } from "../local-deletions/state";
 import { extractFrontmatter, getFrontmatterStringValue, normalizeNote, type PreNormalizedNote } from "../domain/note";
 import { CONFLICT_FILE_SUFFIX } from "../constants";
 import { KEEPSIDIAN_SERVER_URL } from "../../../config";
+import { permitsLegacyTags } from "./consent";
 import {
 	StateSchema,
 	ApplicationJournalSchema,
@@ -284,8 +285,26 @@ export class EnrichmentLedger {
 			)
 				throw new Error("Enrichment source changed before application.");
 			await this.recover(record);
+			const newlyObservedManual = before !== undefined && !record.local;
+			if (newlyObservedManual) {
+				// A file appearing during the provider await is not an AI application.
+				// Recovery above first recognizes our own completed journal image.
+				record.manualTitle = true;
+				record.tagsAdmitted = permitsLegacyTags(
+					note.enrichment_legacy_consent,
+					await this.namespace(),
+					`${note.local_enrichment!.receipt}:${source.source_hash}`
+				);
+				record.owned = {};
+			}
 			if (before !== undefined) observeLocal(record, path, before);
-			const plan = note.local_enrichment!;
+			const plan = { ...note.local_enrichment! };
+			if (newlyObservedManual) {
+				plan.title = undefined;
+				plan.titleSource = false;
+				plan.removeValues = [];
+				if (!record.tagsAdmitted) plan.tags = {};
+			}
 			let content = proposed;
 			if (
 				plan.title !== undefined &&

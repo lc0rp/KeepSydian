@@ -176,7 +176,8 @@ describe("handleDuplicateNotes", () => {
 
 		expect(resolvedPath).toBe("/save/location/old-name.md");
 		expect(adapter.list).toHaveBeenCalledTimes(1);
-		expect(adapter.read).toHaveBeenCalledTimes(readCallsAfterIndexBuild);
+		// Reuse the directory inventory, but revalidate the current linked owner.
+		expect(adapter.read).toHaveBeenCalledTimes(readCallsAfterIndexBuild + 1);
 	});
 
 	it("scans only the scoped saveLocation instead of the whole vault", async () => {

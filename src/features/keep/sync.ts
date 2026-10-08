@@ -40,6 +40,7 @@ import { findExistingKeepNotePath } from "./domain/noteLookup";
 import {
 	buildExistingKeepNoteIndex,
 	updateExistingKeepNoteIndex,
+	assertKeepNoteIdentity,
 	type ExistingKeepNoteIndex,
 } from "./domain/noteLookup";
 import { appendPerfTrace } from "@app/perf-trace";
@@ -1153,6 +1154,7 @@ export async function processAndSaveNote(
 	let acknowledgedMedia: MediaBaseline | undefined;
 	let preserveLocalMedia = false;
 	const writeKnownContent = async (path: string, content: string, expected?: string): Promise<void> => {
+		if (expected !== undefined) assertKeepNoteIdentity(normalizedNote, expected);
 		const [frontmatter, body] = extractFrontmatter(content);
 		const input = wrapMarkdown(withRemoteRevision(frontmatter, note.remote_revision), body);
 		const finalize = (value: string) => stampLocalBaseline(plugin.app.vault.adapter, path, value, acknowledgedMedia);
@@ -1164,6 +1166,7 @@ export async function processAndSaveNote(
 		expectedMarkdown = stamped;
 	};
 	const writeMetadata = async (path: string, content: string, expected: string, options: { ctime: number; mtime: number }): Promise<void> => {
+		assertKeepNoteIdentity(normalizedNote, expected);
 		const known = storedLocalBaseline(expected);
 		let media: MediaBaseline | undefined;
 		try { media = await captureLocalMedia(plugin.app.vault.adapter, path, expected); } catch { /* Cannot acknowledge unknown media. */ }
