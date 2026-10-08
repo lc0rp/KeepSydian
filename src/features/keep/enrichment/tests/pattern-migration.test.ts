@@ -121,6 +121,91 @@ async function fixture(pattern: string, ai = true) {
 	return { note, disk, directories, adapter, plugin, provider, run, mkdir, metadataCache };
 }
 
+const invalidIdentities = [
+	["sequence", '["https://keep.google.com/#NOTE/n1"]'],
+	["mapping", '{url: "https://keep.google.com/#NOTE/n1"}'],
+	["null", "null"],
+	["empty", '""'],
+	["number", "1"],
+	["boolean", "true"],
+	["missing-id", '"https://keep.google.com/#NOTE/"'],
+	["foreign-host", '"https://example.test/#NOTE/n1"'],
+];
+const invalidIdentityCases = invalidIdentities.flatMap(([kind, value]) =>
+	[false, true].flatMap((ai) => ["legacy", "review"].map((caller) => ({ kind, value, ai, caller })))
+);
+
+it.each(invalidIdentityCases)("holds invalid identity $kind through $caller import (AI=$ai)", async ({ value, ai, caller }) => {
+	const f = await fixture("Keep/{note.year}", ai);
+	await f.mkdir("Keep/2020");
+	const path = "Keep/2020/Manual.md";
+	const text = f.note.text.replace("GoogleKeepUrl: https://keep.google.com/#NOTE/n1", `GoogleKeepUrl: ${value}`);
+	f.disk.set(path, text);
+	await initializeLocalDeletionTracking(f.plugin);
+	f.plugin.settings.keepSidianLastSuccessfulSyncDate = "2024-01-01T00:00:00.000Z";
+	const cutoff = f.plugin.settings.keepSidianLastSuccessfulSyncDate;
+	if (caller === "review") await expect(f.run()).rejects.toThrow(/GoogleKeepUrl/);
+	else {
+		await runImportNotesFlow(f.plugin, false, () => "failed");
+		expect(f.plugin.settings.lastSyncAttempt?.outcome).toBe("failed");
+	}
+	expect(f.plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(cutoff);
+	expect(f.provider).not.toHaveBeenCalled();
+	expect([...f.disk.keys()].filter((key) => key.endsWith(".md"))).toEqual([path]);
+	expect(f.disk.get(path)).toBe(text);
+});
+
+it.each(["---\n---\nBody", "---\n# empty mapping\n---\nBody", "Body"])(
+	"preserves legitimate unlinked Markdown during import: %j",
+	async (text) => {
+		const f = await fixture("Keep/{note.year}", false);
+		await f.mkdir("Keep/2020");
+		const path = "Keep/2020/Unrelated.md";
+		f.disk.set(path, text);
+		await initializeLocalDeletionTracking(f.plugin);
+		await runImportNotesFlow(f.plugin, false, () => "failed");
+		expect(f.plugin.settings.lastSyncAttempt?.outcome).toBe("success");
+		expect(f.disk.get(path)).toBe(text);
+		expect([...f.disk.keys()].filter((key) => key.endsWith(".md"))).toHaveLength(2);
+		expect(f.provider).not.toHaveBeenCalled();
+	}
+);
+
+it.each([
+	["n1", "https://keep.google.com/u/7/?source=fixture#NOTE/%6E1"],
+	["part-one", "https://keep.google.com/u/7/#NOTE/part%2Done"],
+])("preserves a linked canonical identity %s without new AI work", async (id, url) => {
+	const f = await fixture("Keep/{note.year}");
+	f.note.enrichment_source.id = id;
+	f.note.text = f.note.text.replace("#NOTE/n1", `#NOTE/${encodeURIComponent(id)}`);
+	await f.mkdir("Keep/2020");
+	const path = "Keep/2020/Manual.md";
+	f.disk.set(path, f.note.text.replace(`https://keep.google.com/#NOTE/${encodeURIComponent(id)}`, url));
+	await initializeLocalDeletionTracking(f.plugin);
+	await f.run();
+	expect([...f.disk.keys()].filter((key) => key.endsWith(".md"))).toEqual([path]);
+	expect(f.provider).not.toHaveBeenCalled();
+});
+
+it("holds an identity that becomes invalid between discovery and enrichment", async () => {
+	const f = await fixture("Keep/{note.year}");
+	await f.mkdir("Keep/2020");
+	const path = "Keep/2020/Manual.md";
+	f.disk.set(path, f.note.text);
+	await initializeLocalDeletionTracking(f.plugin);
+	const read = f.adapter.read.getMockImplementation()!;
+	let reads = 0;
+	f.adapter.read.mockImplementation(async (candidate) => {
+		if (candidate === path && ++reads === 2)
+			f.disk.set(path, f.note.text.replace("GoogleKeepUrl: https://keep.google.com/#NOTE/n1", "GoogleKeepUrl: null"));
+		return read(candidate);
+	});
+	await expect(f.run()).rejects.toThrow(/GoogleKeepUrl/);
+	expect([...f.disk.keys()].filter((key) => key.endsWith(".md"))).toEqual([path]);
+	expect(f.disk.get(path)).toContain("GoogleKeepUrl: null");
+	expect(f.provider).not.toHaveBeenCalled();
+});
+
 it("holds a same-title late manual import through retries and restart, then reuses cached tags after consent", async () => {
 	const f = await fixture("Keep/{note.year}");
 	await initializeLocalDeletionTracking(f.plugin);

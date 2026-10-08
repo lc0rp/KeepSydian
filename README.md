@@ -49,7 +49,11 @@ scan. Admission and destination lookup read the same identity scope; a cold
 metadata cache cannot create another copy of a linked note.
 Duplicate identities, unreadable candidates and invalid frontmatter stop imports
 before generation or note writes, even with AI off. Repair the affected files and
-retry. A cached suggestion still requires admission before it can be applied to
+retry. A present `GoogleKeepUrl` must contain one supported Google Keep note URL;
+lists, objects, empty values, other types, invalid URLs and conflicting aliases
+stop the scan. A note with no identity property remains a legitimate unlinked
+note. Discovery, AI admission and destination lookup use the same validated URL.
+A cached suggestion still requires admission before it can be applied to
 an existing manual note; a fresh tag choice can reuse that result without a new
 provider call. Files beginning with a byte-order marker are held; save them as
 UTF-8 without BOM before retrying, because title/tag writers do not consistently

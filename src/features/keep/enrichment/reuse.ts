@@ -1,10 +1,9 @@
 import type KeepSidianPlugin from "@app/main";
 import { enrichLocalNotes, type LocalEnrichmentRequest, type PremiumFeatureFlags } from "@integrations/server/keepApi";
 import { EnrichmentSourceSchema } from "@schemas/keep";
-import { canonicalKeepUrl } from "@integrations/server/keepDeletions";
 import { CONFLICT_FILE_SUFFIX } from "../constants";
-import { buildExistingKeepNoteIndex } from "../domain/noteLookup";
-import { extractFrontmatter, getFrontmatterStringValue, normalizeNote, type PreNormalizedNote } from "../domain/note";
+import { buildExistingKeepNoteIndex, readKeepNoteIdentity } from "../domain/noteLookup";
+import { extractFrontmatter, normalizeNote, type PreNormalizedNote } from "../domain/note";
 import { getEnrichmentLedger, type EnrichmentLedger } from "./ledger";
 import { hash, bodyHash, observeLocal, effectiveTitle, tags, type EnrichmentRecord } from "./state";
 import { bindLegacyTagConsent, permitsLegacyTags } from "./consent";
@@ -55,7 +54,7 @@ export async function enrichImportNotes(
 		if (path.includes(CONFLICT_FILE_SUFFIX)) continue;
 		const markdown = await plugin.app.vault.adapter.read(path);
 		contents.set(path, markdown);
-		const identity = canonicalKeepUrl(getFrontmatterStringValue(extractFrontmatter(markdown, true)[2], "GoogleKeepUrl"));
+		const identity = readKeepNoteIdentity(extractFrontmatter(markdown, true)[2], path);
 		if (identity) identities.set(identity, [...(identities.get(identity) ?? []), path]);
 	}
 	const activeLedger = ledger ?? getEnrichmentLedger(plugin);
