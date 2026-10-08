@@ -2,7 +2,7 @@ import { normalizePathSafe } from "@services/paths";
 import { resolveNoteLookupRoot } from "@services/note-path-resolver";
 import { canonicalKeepUrl } from "@integrations/server/keepDeletions";
 import { sha256 } from "../local-deletions/state";
-import { extractFrontmatter, getFrontmatterStringValue, normalizeKeepNoteUrl, type NormalizedNote } from "./note";
+import { extractFrontmatter, getFrontmatterStringValue, type NormalizedNote } from "./note";
 import {
 	CONFLICT_FILE_SUFFIX,
 	FRONTMATTER_GOOGLE_KEEP_CREATED_DATE_KEY,
@@ -30,8 +30,21 @@ export interface ExistingKeepNoteIndex {
 	plannedPathIdentities?: Map<string, string>;
 }
 
-function indexIdentity(index: ExistingKeepNoteIndex, url: string, path: string): void {
-	const identity = normalizeKeepNoteUrl(url);
+/** Missing metadata is unlinked; present invalid metadata is never proof of absence. */
+export function readKeepNoteIdentity(properties: Record<string, unknown>, path?: string): string | undefined {
+	let identity: string | undefined;
+	for (const [key, value] of Object.entries(properties)) {
+		// Preserve existing camel/kebab aliases and do not let a second spelling hide ambiguity.
+		if (key.replace(/-/g, "").toLowerCase() !== FRONTMATTER_GOOGLE_KEEP_URL_KEY.toLowerCase()) continue;
+		const candidate = canonicalKeepUrl(value);
+		if (!candidate || (identity !== undefined && identity !== candidate))
+			throw new Error(`Invalid GoogleKeepUrl${path ? ` in ${path}` : ""}. Use one valid Google Keep note URL before syncing.`);
+		identity = candidate;
+	}
+	return identity;
+}
+
+function indexIdentity(index: ExistingKeepNoteIndex, identity: string, path: string): void {
 	const previous = index.pathByKeepUrl.get(identity);
 	if (previous && previous !== path) (index.ambiguousKeepUrls ??= new Set()).add(identity);
 	else index.pathByKeepUrl.set(identity, path);
@@ -39,10 +52,10 @@ function indexIdentity(index: ExistingKeepNoteIndex, url: string, path: string):
 
 /** A content comparison cannot protect a path that already belongs to another note. */
 export function assertKeepNoteIdentity(incomingNote: NormalizedNote, content: string): void {
-	const identity = canonicalKeepUrl(getFrontmatterStringValue(incomingNote.frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY));
+	const identity = readKeepNoteIdentity(incomingNote.frontmatterDict);
 	if (!identity) return;
-	const [, , properties] = extractFrontmatter(content);
-	if (canonicalKeepUrl(getFrontmatterStringValue(properties, FRONTMATTER_GOOGLE_KEEP_URL_KEY)) !== identity)
+	const [, , properties] = extractFrontmatter(content, true);
+	if (readKeepNoteIdentity(properties) !== identity)
 		throw new Error("Keep identity changed after lookup. The local file was preserved; sync again after resolving its identity.");
 }
 
@@ -128,7 +141,7 @@ export async function buildExistingKeepNoteIndex(
 		if (filePath.includes(CONFLICT_FILE_SUFFIX)) continue;
 		const content = await adapter.read(filePath);
 		const [, , frontmatterDict] = extractFrontmatter(content, true);
-		const existingKeepUrl = getFrontmatterStringValue(frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
+		const existingKeepUrl = readKeepNoteIdentity(frontmatterDict, filePath);
 		if (existingKeepUrl) indexIdentity(index, existingKeepUrl, filePath);
 	}
 
@@ -142,10 +155,10 @@ export function updateExistingKeepNoteIndex(
 ): void {
 	const normalizedPath = normalizePathSafe(filePath);
 	index.existingPaths.add(normalizedPath);
-	const incomingKeepUrl = getFrontmatterStringValue(incomingNote.frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
+	const incomingKeepUrl = readKeepNoteIdentity(incomingNote.frontmatterDict);
 	// A conflict copy shares the original's metadata, but is never its canonical download target.
 	if (incomingKeepUrl && !normalizedPath.includes(CONFLICT_FILE_SUFFIX)) {
-		index.pathByKeepUrl.set(normalizeKeepNoteUrl(incomingKeepUrl), normalizedPath);
+		index.pathByKeepUrl.set(incomingKeepUrl, normalizedPath);
 	}
 }
 
@@ -156,12 +169,12 @@ async function resolveIdentitySafePath(
 	incomingKeepUrl: string | undefined,
 	index?: ExistingKeepNoteIndex
 ): Promise<string> {
-	const identity = canonicalKeepUrl(incomingKeepUrl);
+	const identity = incomingKeepUrl;
 	if (!identity) return preferredPath;
 	const exists = async (path: string) => index?.existingPaths.has(path) || (await adapter.exists?.(path)) || false;
 	const matches = async (path: string) => {
-		const [, , properties] = extractFrontmatter(await adapter.read(path));
-		return canonicalKeepUrl(getFrontmatterStringValue(properties, FRONTMATTER_GOOGLE_KEEP_URL_KEY)) === identity;
+		const [, , properties] = extractFrontmatter(await adapter.read(path), true);
+		return readKeepNoteIdentity(properties, path) === identity;
 	};
 	// Reservations stay separate from files that exist on disk. Parallel planners can
 	// await the same vacant path, so claim it only after rechecking its owner.
@@ -200,15 +213,14 @@ export async function findExistingKeepNotePath(
 ): Promise<string | null> {
 	const adapter = app.vault.adapter;
 	const normalizedPreferredPath = preferredPath ? normalizePathSafe(preferredPath) : null;
-	const incomingKeepUrl = getFrontmatterStringValue(incomingNote.frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
+	const incomingKeepUrl = readKeepNoteIdentity(incomingNote.frontmatterDict);
 	if (incomingKeepUrl && !index) index = await buildExistingKeepNoteIndex(app, rootFolder);
 
 	// A renamed linked note takes precedence over a different note with the expected filename.
 	if (incomingKeepUrl && index) {
-		if (index.ambiguousKeepUrls?.has(normalizeKeepNoteUrl(incomingKeepUrl)))
+		if (index.ambiguousKeepUrls?.has(incomingKeepUrl))
 			throw new Error("Multiple local notes share a Keep identity. Resolve them before importing.");
-		const linkedPath =
-			index.pathByKeepUrl.get(normalizeKeepNoteUrl(incomingKeepUrl)) ?? index.pathByKeepUrl.get(incomingKeepUrl);
+		const linkedPath = index.pathByKeepUrl.get(incomingKeepUrl);
 		if (linkedPath) {
 			assertKeepNoteIdentity(incomingNote, await adapter.read(linkedPath));
 			return linkedPath;

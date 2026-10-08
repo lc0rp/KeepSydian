@@ -34,6 +34,41 @@ function fixture(reverse = false) {
 }
 
 describe("canonical Keep identity lookup", () => {
+	it.each(["GoogleKeepUrl", "googleKeepUrl", "google-keep-url", "GoogleKeepURL"])(
+		"rejects a present invalid identity alias %s",
+		async (key) => {
+			const app = fixture();
+			app.vault.adapter.read.mockResolvedValue(`---\n${key}: ["${URL}"]\n---\nBody`);
+			await expect(buildExistingKeepNoteIndex(app, "Keep")).rejects.toThrow(/GoogleKeepUrl/);
+		}
+	);
+
+	it.each(["null", '"https://keep.google.com/#NOTE/other"'])(
+		"holds conflicting or invalid identity aliases (%s)",
+		async (value) => {
+			const app = fixture();
+			app.vault.adapter.read.mockResolvedValue(`---\nGoogleKeepUrl: ${URL}\ngoogle-keep-url: ${value}\n---\nBody`);
+			await expect(buildExistingKeepNoteIndex(app, "Keep")).rejects.toThrow(/GoogleKeepUrl/);
+		}
+	);
+
+	it("accepts equivalent identity aliases and canonical URL variants", async () => {
+		const app = fixture();
+		app.vault.adapter.read.mockResolvedValue(`---\nGoogleKeepUrl: ${URL}\ngoogle-keep-url: ${CANONICAL_URL}\n---\nBody`);
+		const index = await buildExistingKeepNoteIndex(app, "Keep");
+		expect(await findExistingKeepNotePath(app, note, "Keep/Original.md", index, "Keep")).toBe(ORIGINAL_PATH);
+	});
+
+	it("holds an invalid identity appearing at the preferred path after discovery", async () => {
+		const app = fixture();
+		app.vault.adapter.list.mockResolvedValue({ files: [], folders: [] });
+		const index = await buildExistingKeepNoteIndex(app, "Keep");
+		app.vault.adapter.exists.mockResolvedValue(true);
+		app.vault.adapter.read.mockResolvedValue("---\nGoogleKeepUrl: null\n---\nManual body");
+		await expect(findExistingKeepNotePath(app, note, "Keep/Original.md", index, "Keep")).rejects.toThrow(/GoogleKeepUrl/);
+		expect(app.vault.adapter.write).not.toHaveBeenCalled();
+	});
+
 	it.each(["other-identity", undefined])(
 		"allocates a separate path when a same-title file has identity %s",
 		async (identity) => {
