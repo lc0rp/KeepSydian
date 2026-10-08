@@ -39,6 +39,8 @@ results until relevant content changes. Existing titles stay manual.
 The plugin protects edited titles, keeps deliberately removed AI tags removed,
 and preserves manual tags. Competing
 Keep and Obsidian field edits hold uploads until those fields are resolved.
+Resolving a title conflict keeps unresolved tag conflicts. Title updates accept
+quoted keys and scalar blocks; unsafe YAML alias changes stop before a note write.
 The ledger also guards uncertain requests so losing a reply cannot cause an
 automatic repeat charge. A failed larger-tag request keeps its earlier result.
 

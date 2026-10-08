@@ -139,7 +139,7 @@ export async function enrichImportNotes(
 			if (remoteTitleChanged) record.manualTitle = true;
 			record.conflicts =
 				remoteTitleChanged && localChangedTitle && localTitle !== source.title
-					? ["title"]
+					? [...record.conflicts.filter((value) => value !== "title"), "title"]
 					: record.conflicts.filter((value) => value !== "title" || localTitle !== source.title);
 			const removed = (prior?.labels ?? []).filter((value) => !source.labels.includes(value));
 			for (const value of source.labels) {

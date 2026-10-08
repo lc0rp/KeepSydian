@@ -106,6 +106,25 @@ export function observeLocal(record: EnrichmentRecord, path: string, markdown: s
 	}
 }
 
+/** Update a scalar title without rewriting unrelated properties. */
+export function replaceTitle(markdown: string, title: string): string {
+	const match = /^---[\t ]*\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/.exec(markdown);
+	if (!match) throw new Error("Title frontmatter cannot be updated safely.");
+	const property = /^(["']?)title\1[ \t]*:[^\r\n]*(?:\r?\n[ \t]+[^\r\n]*)*/im;
+	const line = `Title: ${JSON.stringify(title)}`;
+	const newline = match[0].includes("\r\n") ? "\r\n" : "\n";
+	const frontmatter = property.test(match[1])
+		? match[1].replace(property, line)
+		: [match[1], line].filter(Boolean).join(newline);
+	const opening = match[0].indexOf("\n") + 1;
+	const candidate = markdown.slice(0, opening) + frontmatter + markdown.slice(opening + match[1].length);
+	// Anchors, aliases or other YAML forms must not leave an invalid document.
+	// Fail before staging or writing when this narrow replacement is unsafe.
+	if (getFrontmatterStringValue(extractFrontmatter(candidate)[2], "Title") !== title)
+		throw new Error("Title frontmatter cannot be updated safely.");
+	return candidate;
+}
+
 /** Replace only proven owned values; preserve unrelated frontmatter bytes. */
 export function replaceTags(markdown: string, values: string[]): string {
 	const match = /^---[\t ]*\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/.exec(markdown);

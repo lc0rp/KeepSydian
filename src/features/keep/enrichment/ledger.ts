@@ -15,6 +15,7 @@ import {
 	effectiveTitle,
 	tags,
 	observeLocal,
+	replaceTitle,
 	replaceTags,
 	type EnrichmentState,
 	type EnrichmentRecord,
@@ -294,14 +295,7 @@ export class EnrichmentLedger {
 				effectiveTitle(path, before) !== plan.title &&
 				(plan.titleSource || !record.manualTitle)
 			) {
-				const match = /^---[\t ]*\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/.exec(content);
-				if (match) {
-					const line = `Title: ${JSON.stringify(plan.title)}`;
-					const properties = /^Title:/m.test(match[1])
-						? match[1].replace(/^Title:[^\r\n]*/m, line)
-						: `${match[1]}\n${line}`;
-					content = content.replace(match[1], properties);
-				}
+				content = replaceTitle(content, plan.title);
 			}
 			const existing = before === undefined ? [] : tags(before);
 			const ownedValues = new Set(Object.values(record.owned));
