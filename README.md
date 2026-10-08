@@ -40,8 +40,11 @@ automatic repeat charge. A failed larger-tag request keeps its earlier result.
 
 This local branch needs the matching server contract. It has no automatic cache
 expiry or regeneration on model-default changes. It has no explicit retry/reset
-UI yet. Missing or damaged initialized metadata stops AI work. Simultaneous apps
-or separate devices do not have a shared durable claim. The ledger contains
+UI yet. Missing or damaged initialized metadata stops AI work.
+After an unconfirmed upload, AI work pauses until a reviewed upload produces a
+confirmed source receipt. This conservative recovery can require manual conflict
+resolution; it does not infer ownership from an ambiguous remote snapshot.
+Simultaneous apps or separate devices do not have a shared durable claim. The ledger contains
 private titles, labels and outputs; keep it under the vault's normal protection.
 Installed desktop/mobile UAT and any release remain separate approval steps.
 

@@ -7,6 +7,8 @@ import type { PremiumFeatureFlags, enrichLocalNotes } from "@integrations/server
 import { EnrichmentLedger } from "../ledger";
 import { enrichImportNotes, fetchFirstFlags } from "../reuse";
 import { hash } from "../state";
+import { pushGoogleKeepNotes } from "../../push";
+import * as keepApi from "@integrations/server/keepApi";
 
 beforeAll(() => {
 	Object.defineProperty(globalThis, "crypto", { configurable: true, value: webcrypto });
@@ -97,6 +99,60 @@ it("fetches premium filters without sending AI generation flags", () => {
 	expect(fetchFirstFlags({ ...FLAGS, filter_notes: { terms: ["work"] } })).toEqual({
 		filter_notes: { terms: ["work"] },
 	});
+});
+
+it("blocks paid work after a lost upload acknowledgement until an upload is confirmed", async () => {
+	const f = fixture(),
+		current = await note();
+	const [first] = await f.run([current]);
+	const applied = await f.apply(first);
+	const [frontmatter, body] = extractFrontmatter(applied);
+	const dispatch = jest.spyOn(keepApi, "pushNotes").mockRejectedValueOnce(new Error("Upload response lost"));
+	try {
+		await expect(
+			pushGoogleKeepNotes(f.plugin, undefined, [
+				{
+					fullPath: "Keep/AI Proposed.md",
+					relativePath: "AI Proposed.md",
+					title: "AI Proposed",
+					content: applied,
+					frontmatter,
+					body,
+					lastSyncedDate: null,
+					modifiedSinceLastSync: true,
+					attachments: [],
+					updatedAttachmentNames: [],
+					missingAttachments: [],
+				},
+			])
+		).rejects.toThrow("Upload response lost");
+		expect(dispatch).toHaveBeenCalledTimes(1);
+	} finally {
+		dispatch.mockRestore();
+	}
+	const uploaded = {
+		...current.enrichment_source!,
+		title: "AI Proposed",
+		labels: ["auto-work", "auto-topic"],
+		source_hash: "c".repeat(64),
+	};
+	const restarted = new EnrichmentLedger(f.plugin);
+	await expect(f.run([{ ...current, enrichment_source: uploaded }], FLAGS, restarted)).rejects.toThrow(
+		"earlier upload"
+	);
+	expect(f.generated()).toBe(1);
+	await restarted.acknowledgeUpload("Keep/AI Proposed.md", applied, uploaded);
+	await f.run([{ ...current, enrichment_source: uploaded }], FLAGS, restarted);
+	expect(f.generated()).toBe(1);
+});
+
+it("cannot stage an upload when its durable intent write fails", async () => {
+	const f = fixture(),
+		current = await note();
+	const [first] = await f.run([current]);
+	await f.apply(first);
+	f.adapter.write.mockRejectedValueOnce(new Error("Disk full"));
+	await expect(f.ledger.stageUpload("Keep/AI Proposed.md")).rejects.toThrow("Disk full");
 });
 
 it("reuses 650 notes across more than 600 repeated and overlapping requests", async () => {

@@ -21,6 +21,7 @@ import { createPreparedSyncPlanFixture, createSyncPlanEntryFixture } from "@test
 import type { NoteForPush } from "@features/keep/push/collectNotes";
 import { reviewPushNotes } from "@features/keep/push/merge-review";
 import * as retryPolicy from "@features/keep/download-retry";
+import { finishSyncUI } from "@app/sync-ui";
 
 const runRetryPolicy = retryPolicy.retryDownload;
 
@@ -264,6 +265,18 @@ describe("persistent sync attempt preparation", () => {
 		expect(outcomes()[0]).toMatchObject({ outcome, phase: "execution" });
 		expect(plugin.settings.keepSidianLastSuccessfulSyncDate).toBe(checkpoint);
 		expect(logs()).not.toContain("dummy-token");
+	});
+
+	it("finishes selected execution with a warning when enrichment reports uncertainty", async () => {
+		jest.spyOn(api, "fetchNotes").mockResolvedValue({ notes: [{ title: "Warning", text: "Body" }], total_notes: 1 });
+		const plan = (await buildManualSyncPlan(plugin, "import"))!;
+		jest.spyOn(imports, "importSelectedGoogleKeepNotes").mockImplementation(async (_plugin, _notes, callbacks) => {
+			callbacks?.onEnrichmentWarning?.();
+			return 0;
+		});
+		await run(plan);
+		expect(outcomes()).toHaveLength(1);
+		expect(finishSyncUI).toHaveBeenCalledWith(plugin, "warning", 1);
 	});
 
 	it.each([true, false])(

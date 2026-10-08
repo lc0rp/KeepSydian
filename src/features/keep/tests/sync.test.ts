@@ -25,6 +25,7 @@ import * as pathsModule from "@services/paths";
 import * as attachmentsModule from "../../../features/keep/io/attachments";
 import { parseResponse } from "../../../integrations/server/keepApi";
 import { NetworkError } from "@services/errors";
+import * as enrichmentModule from "../enrichment/reuse";
 
 // Mock the external modules
 jest.mock("../domain/compare");
@@ -324,6 +325,19 @@ describe("Google Keep Import Functions", () => {
 	});
 
 	describe("AI suggestion transport and persistence", () => {
+		it("reports warnings created during selected enrichment in the final notice and run count", async () => {
+			const onEnrichmentWarning = jest.fn();
+			const note = { title: "Original", text: "Body", enrichment_requested: { suggest_title: {} } };
+			jest.spyOn(enrichmentModule, "enrichImportNotes").mockResolvedValue([{ ...note, processing_warnings: ["local_enrichment_uncertain"] }]);
+			jest.spyOn(loggingModule, "logSync").mockResolvedValue(undefined);
+			(handleDuplicateNotes as jest.Mock).mockResolvedValue("create");
+			await syncModule.importSelectedGoogleKeepNotes(mockPlugin, [note], { onEnrichmentWarning });
+			expect(onEnrichmentWarning).toHaveBeenCalledTimes(1);
+			expect(Notice).toHaveBeenCalledWith(expect.stringContaining("AI suggestions unavailable for 1 notes"), 10_000);
+			expect(Notice).not.toHaveBeenCalledWith("Imported Google Keep notes.");
+			expect(loggingModule.logSync).toHaveBeenCalledWith(mockPlugin, expect.stringContaining("AI suggestions unavailable"));
+		});
+
 		it("preserves tags and warnings through validated API parsing", () => {
 			const payload = {
 				notes: [{ title: "Proposed", tags: ["auto-work"], processing_warnings: ["suggest_tags_failed"] }],

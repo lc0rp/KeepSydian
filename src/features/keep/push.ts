@@ -124,6 +124,10 @@ export async function pushGoogleKeepNotes(plugin: KeepSidianPlugin, callbacks?: 
 				const frontmatter = stripSyncState(note.frontmatter);
 				return { path: note.relativePath, title: note.title, content: frontmatter === note.frontmatter ? note.content : wrapMarkdown(frontmatter, note.body), attachments: note.attachments.length > 0 ? note.attachments : undefined, expected_revision: note.mergeReview?.remote?.remote_revision ?? storedRemoteRevision(note.frontmatter) };
 			});
+			// Persist uncertainty before the remote write. Lost acknowledgements
+			// must never turn our own AI fields into another paid request.
+			if (plugin.settings.enrichmentLedgerInitialized)
+				for (const note of batch) await getEnrichmentLedger(plugin).stageUpload(note.fullPath);
 			const response = await apiPushNotes(email, token, payloadBatch, supporterKey);
 			const resultMap = mapResultsByPath(response?.results), batchKey = "push:notes", batchOptions = { batchKey, batchSize: NOTE_LOG_BATCH_SIZE };
 			for (const [batchIndex, note] of batch.entries()) {
