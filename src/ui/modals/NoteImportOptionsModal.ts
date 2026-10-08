@@ -2,6 +2,8 @@ import { App, Modal, Setting } from "obsidian";
 import { SubscriptionSettingsTab } from "../settings/SubscriptionSettingsTab";
 import KeepSidianPlugin from "main";
 import type { KeepArchivedStatus, KeepPinnedStatus } from "../../types/subscription";
+import { chooseLegacyTags, type LegacyTagConsent } from "@features/keep/enrichment/consent";
+import { renderLegacyTagChoice } from "./legacy-tag-choice";
 
 export interface NoteImportOptions {
 	includeNotesTerms?: string[];
@@ -14,6 +16,8 @@ export interface NoteImportOptions {
 	maxTags?: number;
 	tagPrefix?: string;
 	limitToExistingTags?: boolean;
+	/** Explicit for this download; never part of persisted premium settings. */
+	legacyTagConsent?: LegacyTagConsent;
 }
 
 export class NoteImportOptionsModal extends Modal {
@@ -32,6 +36,10 @@ export class NoteImportOptionsModal extends Modal {
 			text: "Thanks for supporting KeepSidian! Customize your download below.",
 		});
 		SubscriptionSettingsTab.displayPremiumFeatures(contentEl, this.plugin, true);
+		let legacyTags = false;
+		renderLegacyTagChoice(contentEl, false, (value) => {
+			legacyTags = value;
+		});
 
 		// Submit Button
 		new Setting(contentEl)
@@ -40,7 +48,10 @@ export class NoteImportOptionsModal extends Modal {
 					.setButtonText("Import")
 					.setCta()
 					.onClick(() => {
-						this.onSubmit(this.plugin.settings.premiumFeatures);
+						this.onSubmit({
+							...this.plugin.settings.premiumFeatures,
+							legacyTagConsent: legacyTags ? chooseLegacyTags() : undefined,
+						});
 						this.close();
 					})
 			)

@@ -42,6 +42,17 @@ class MockSetting {
 		cb(new MockButtonComponent(buttonEl));
 		return this;
 	}
+	addToggle(cb: (toggle: { setValue(value: boolean): unknown; onChange(handler: (value: boolean) => void): unknown }) => void) {
+		const input = document.createElement("input");
+		input.type = "checkbox";
+		this.controlEl.appendChild(input);
+		const toggle = {
+			setValue: (value: boolean) => { input.checked = value; return toggle; },
+			onChange: (handler: (value: boolean) => void) => { input.addEventListener("change", () => handler(input.checked)); return toggle; },
+		};
+		cb(toggle);
+		return this;
+	}
 
 	addExtraButton(cb: (button: Record<string, unknown>) => void) {
 		cb({});

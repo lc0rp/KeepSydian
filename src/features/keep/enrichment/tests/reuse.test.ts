@@ -1,3 +1,4 @@
+jest.mock("@app/sync-ui");
 import { webcrypto } from "crypto";
 import { TextEncoder } from "util";
 import type KeepSidianPlugin from "@app/main";
@@ -9,6 +10,9 @@ import { enrichImportNotes, fetchFirstFlags } from "../reuse";
 import { hash } from "../state";
 import { pushGoogleKeepNotes } from "../../push";
 import * as keepApi from "@integrations/server/keepApi";
+import { chooseLegacyTags } from "../consent";
+import { DEFAULT_SETTINGS } from "@types/keepsidian-plugin-settings";
+import { buildManualSyncPlan, runPreparedSyncPlan, runImportNotesFlow } from "@app/main-sync-flows";
 
 beforeAll(() => {
 	Object.defineProperty(globalThis, "crypto", { configurable: true, value: webcrypto });
@@ -247,7 +251,7 @@ it("generates only missing tags when they are enabled after title success", asyn
 	expect(f.provider.mock.calls[1][2][0].title_context).toBe("AI Proposed");
 });
 
-it("protects a legacy manual title and existing overlapping manual tags", async () => {
+it("does not generate legacy titles or tags from saved AI options", async () => {
 	const f = fixture(),
 		current = await note();
 	f.stored.set(
@@ -255,11 +259,99 @@ it("protects a legacy manual title and existing overlapping manual tags", async 
 		current.text!.replace("---\nDecision", 'tags: ["manual", "auto-work"]\n---\nDecision')
 	);
 	const [result] = await f.run([current]);
-	expect(f.provider.mock.calls[0][2][0].features.suggest_title).toBeUndefined();
+	expect(f.provider).not.toHaveBeenCalled();
 	const after = await f.apply(result, "Keep/My Manual Title.md");
-	expect(extractFrontmatter(after)[2].tags).toEqual(["manual", "auto-work", "auto-topic"]);
+	expect(extractFrontmatter(after)[2].tags).toEqual(["manual", "auto-work"]);
 	expect(extractFrontmatter(after)[2].Title).toBeUndefined();
+	await f.run([await note(0, "Changed body")], FLAGS, new EnrichmentLedger(f.plugin));
+	expect(f.provider).not.toHaveBeenCalled();
 });
+
+it("admits only selected legacy tags after a fresh choice and reuses them without another choice", async () => {
+	const f = fixture(),
+		notes = await Promise.all([note(0), note(1)]);
+	for (const current of notes) f.stored.set(`Keep/Manual ${current.enrichment_source!.id}.md`, current.text!);
+	const consent = chooseLegacyTags();
+	const planned = await f.run(
+		notes.map((current) => ({ ...current, enrichment_legacy_consent: consent })),
+		FLAGS,
+		f.ledger,
+		false
+	);
+	expect(f.provider).not.toHaveBeenCalled();
+	await f.run([planned[0]]);
+	expect(f.generated()).toBe(1);
+	expect(f.provider.mock.calls[0][2][0].features).toEqual({ suggest_tags: FLAGS.suggest_tags });
+	await f.run(notes, FLAGS, new EnrichmentLedger(f.plugin));
+	expect(f.generated()).toBe(1);
+});
+
+it("rejects serialized or reused consent for another account, note or content snapshot", async () => {
+	const f = fixture(),
+		current = await note();
+	f.stored.set("Keep/Manual.md", current.text!);
+	const consent = chooseLegacyTags();
+	await f.run([{ ...current, enrichment_legacy_consent: consent }], FLAGS, f.ledger, false);
+	const changed = await note(0, "Different source");
+	await f.run([{ ...changed, enrichment_legacy_consent: consent }]);
+	await f.run([{ ...current, enrichment_legacy_consent: JSON.parse(JSON.stringify(consent)) }]);
+	f.plugin.settings.email = "different@example.test";
+	await f.run([{ ...current, enrichment_legacy_consent: consent }]);
+	expect(f.provider).not.toHaveBeenCalled();
+});
+
+it("holds 650 legacy notes through repeats, date metadata, body changes and restart", async () => {
+	const f = fixture(),
+		notes = await Promise.all(Array.from({ length: 650 }, (_, index) => note(index)));
+	for (const current of notes) f.stored.set(`Keep/Manual ${current.enrichment_source!.id}.md`, current.text!);
+	await f.run(notes);
+	await f.run(notes.slice(200), FLAGS, new EnrichmentLedger(f.plugin));
+	await f.run(notes.map((current) => ({ ...current, updated: "2030-01-01" })));
+	expect(f.provider).not.toHaveBeenCalled();
+});
+
+it.each(["legacy", "review"] as const)(
+	"keeps saved AI options from admitting legacy notes through the %s import caller",
+	async (caller) => {
+		const f = fixture(),
+			current = await note();
+		f.plugin.settings = {
+			...DEFAULT_SETTINGS,
+			...f.plugin.settings,
+			frontmatterPascalCaseFixApplied: true,
+			premiumFeatures: { ...DEFAULT_SETTINGS.premiumFeatures, updateTitle: true, suggestTags: true },
+		};
+		Object.assign(f.plugin, { subscriptionService: { isSubscriptionActive: jest.fn(async () => true) } });
+		Object.assign(f.plugin.app.vault, { createFolder: f.adapter.mkdir });
+		Object.assign(f.adapter, { stat: jest.fn(async () => ({ ctime: 1, mtime: 1, size: 100, type: "file" })) });
+		f.stored.set("Keep/My Manual Title.md", current.text!);
+		const fetch = jest
+			.spyOn(keepApi, "fetchNotesWithPremiumFeatures")
+			.mockResolvedValue({ notes: [current], total_notes: 1 });
+		const capability = jest.spyOn(keepApi, "getReplayEpoch").mockResolvedValue(undefined);
+		const generate = jest.spyOn(keepApi, "enrichLocalNotes").mockImplementation(f.provider);
+		try {
+			if (caller === "legacy") await runImportNotesFlow(f.plugin, false, undefined, () => "failed");
+			else {
+				const plan = await buildManualSyncPlan(f.plugin, "import", undefined, { kind: "all" });
+				expect(plan).not.toBeNull();
+				const result = await runPreparedSyncPlan(
+					f.plugin,
+					plan!,
+					() => "failed",
+					() => {}
+				);
+				expect(result.failed).not.toBe(true);
+			}
+			expect(fetch).toHaveBeenCalled();
+			expect(generate).not.toHaveBeenCalled();
+		} finally {
+			fetch.mockRestore();
+			capability.mockRestore();
+			generate.mockRestore();
+		}
+	}
+);
 
 it("keeps deliberately removed AI tags removed across content and prefix changes", async () => {
 	const f = fixture(),

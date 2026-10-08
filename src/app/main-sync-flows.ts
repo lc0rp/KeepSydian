@@ -34,6 +34,7 @@ import { ensureFolder, normalizePathSafe } from "@services/paths";
 import { resolveLogBaseFolder } from "@services/note-path-resolver";
 import { SyncAttempt } from "@app/sync-attempt";
 import { prepareSyncLog } from "@app/logging";
+import type { LegacyTagConsent } from "@features/keep/enrichment/consent";
 
 type ErrorMessageResolver = (error: unknown) => string;
 const SUPPORTER_LOCK_REASON = "Available to project supporters";
@@ -66,6 +67,7 @@ export interface RunPreparedSyncPlanResult {
 }
 
 export interface SyncPlanBuildCallbacks {
+	legacyTagConsent?: LegacyTagConsent;
 	attempt?: SyncAttempt;
 	onAttempt?: (attempt: SyncAttempt) => void;
 	validateCredentials?: () => boolean;
@@ -166,6 +168,7 @@ export async function buildManualSyncPlan(
 		includeNotesTerms: [...plugin.settings.premiumFeatures.includeNotesTerms],
 		excludeNotesTerms: [...plugin.settings.premiumFeatures.excludeNotesTerms],
 		includeColors: [...plugin.settings.premiumFeatures.includeColors],
+		legacyTagConsent: callbacks?.legacyTagConsent,
 	};
 	const attempt = callbacks?.attempt ?? new SyncAttempt(plugin, mode, downloadScope);
 	await attempt.start();

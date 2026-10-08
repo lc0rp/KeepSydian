@@ -13,6 +13,8 @@ import { normalizeMergeAction } from "@features/keep/domain/merge-action";
 import { renderMergeActionSelector } from "./merge-action-selector";
 import { parseCustomScopeRange, renderCustomScopeInputs } from "./sync-date-range";
 import { deletionReviewSummary, markDeletionConflict, retainUncheckedDeletions } from "./deletion-review";
+import { chooseLegacyTags } from "@features/keep/enrichment/consent";
+import { renderLegacyTagChoice } from "./legacy-tag-choice";
 
 interface CreateElOptions { text?: string; cls?: string | string[]; }
 type MaybeObsidianElement = HTMLElement & { empty?: () => void; setText?: (text: string) => void; };
@@ -162,6 +164,7 @@ export class SyncProgressModal extends Modal {
 	private options: SyncProgressModalOptions;
 	private selectedMode: SyncMode = "import";
 	private downloadScopeKind: DownloadScopeKind = "last-sync";
+	private legacyTags = false;
 	private customSinceInput = "";
 	private customUntilInput = "";
 	private showSyncOptions = false;
@@ -298,6 +301,7 @@ export class SyncProgressModal extends Modal {
 		this.reviewGeneration += 1; this.isGeneratingReview = false;
 		void this.activeAttempt?.finish("abandoned");
 		this.selectedMode = mode; this.preparationPaused = false; this.preparedPlan = null;
+		this.legacyTags = false;
 		this.executionSnapshot = null; this.showExecutionResult = false; this.reviewFilterKey = "notes";
 		this.modalAlert = null; this.dismissPrompt = null;
 		void this.refreshUI();
@@ -347,7 +351,10 @@ export class SyncProgressModal extends Modal {
 			await this.refreshUI();
 			if (generation !== this.reviewGeneration) return;
 			const downloadScope = modeUsesDownload(mode) ? this.getDownloadScope() : undefined;
+			const legacyTagConsent = modeUsesDownload(mode) && this.legacyTags ? chooseLegacyTags() : undefined;
+			this.legacyTags = false;
 			const preparedPlan = await this.options.buildSyncPlan(mode, {
+				legacyTagConsent,
 				attempt: attempt ?? undefined,
 				onAttempt: (context) => {
 					attempt = context;
@@ -655,6 +662,7 @@ export class SyncProgressModal extends Modal {
 					createChild(importOptionsContainerEl, "p", { text: "Thanks for supporting KeepSidian! Customize your download below." }).classList.add("keepsidian-sync-center-download-options-copy");
 					const optionsBody = createChild(importOptionsContainerEl, "div"); optionsBody.classList.add("keepsidian-sync-center-download-options-body");
 					await this.options.renderImportOptions(optionsBody, true);
+					renderLegacyTagChoice(optionsBody, this.legacyTags, (value) => { this.legacyTags = value; });
 					if (renderVersion !== this.renderVersion) return;
 				}
 			}

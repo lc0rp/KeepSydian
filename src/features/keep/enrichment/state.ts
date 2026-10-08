@@ -19,6 +19,7 @@ export const RecordSchema = z.object({
 	source: EnrichmentSourceSchema,
 	projection: ProjectionSchema,
 	manualTitle: z.boolean(),
+	tagsAdmitted: z.boolean().optional(),
 	suppressed: z.array(z.string()).max(1024),
 	suppressedValues: z.array(z.string()).max(1024),
 	conflicts: z.array(z.string()).max(1024),

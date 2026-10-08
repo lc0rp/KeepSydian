@@ -2,6 +2,7 @@ import { parseYaml } from "obsidian";
 import { FRONTMATTER_GOOGLE_KEEP_URL_KEY } from "../constants";
 import type { EnrichmentSource } from "@schemas/keep";
 import type { PremiumFeatureFlags } from "@integrations/server/keepApi";
+import type { LegacyTagConsent } from "../enrichment/consent";
 
 type FrontmatterDict = { [key: string]: unknown };
 
@@ -28,6 +29,8 @@ interface NormalizedNote {
 interface PreNormalizedNote {
 	enrichment_source?: EnrichmentSource;
 	enrichment_requested?: PremiumFeatureFlags;
+	enrichment_legacy_consent?: LegacyTagConsent;
+	enrichment_legacy_held?: boolean;
 	enrichment_pending?: boolean;
 	local_enrichment?: { tags?: Record<string, string>; sourceTags: string[]; removeValues: string[]; title?: string; titleSource?: boolean; receipt: string };
 	id?: string;
