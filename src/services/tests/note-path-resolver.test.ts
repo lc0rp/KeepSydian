@@ -6,10 +6,23 @@ import {
 	resolveLogBaseFolder,
 	resolveNoteDate,
 	resolveNotePath,
+	resolveNoteLookupRoot,
 	type NotePathSettings,
 } from "../note-path-resolver";
 
 describe("note-path-resolver", () => {
+	it.each([
+		["/Keep/{note.year}/{note.month}", "Keep"],
+		["Keep/{now.date}", "Keep"],
+		["Keep/{title}", "Keep"],
+		["{note.year}/Keep", ""],
+		["Keep-{note.year}/Notes", ""],
+		["Keep:Archive/{note.year}", "Keep_Archive"],
+		["/Plain/Folder", "Plain/Folder"],
+	])("searches the stable ancestor for %s", (pattern, root) => {
+		expect(resolveNoteLookupRoot(pattern)).toBe(root);
+	});
+
 	const baseSettings: NotePathSettings = {
 		saveLocationMode: DEFAULT_SAVE_LOCATION_MODE,
 		saveLocation: NEW_INSTALL_SAVE_LOCATION,
