@@ -1,5 +1,7 @@
 jest.mock("obsidian", () => ({
 	requestUrl: jest.fn(),
+	parseYaml: jest.requireActual("../../../../__mocks__/obsidian").parseYaml,
+	getAllTags: jest.fn(() => []),
 	normalizePath: jest.fn((path: string) => path.replace(/\\/g, "/").replace(/\/+/g, "/")),
 	Notice: jest.fn(),
 }));
@@ -57,7 +59,9 @@ describe("Google Keep Import Functions", () => {
 				embedImportedImages: false,
 			},
 			app: {
+				metadataCache: { getFileCache: jest.fn() },
 				vault: {
+					getMarkdownFiles: jest.fn(() => []),
 					getConfig: getVaultConfigMock,
 					setConfig: setVaultConfigMock,
 					adapter: {
@@ -316,6 +320,62 @@ describe("Google Keep Import Functions", () => {
 			(requestUrl as jest.Mock).mockRejectedValue(new Error("Premium feature error"));
 			await expect(importGoogleKeepNotesWithOptions(mockPlugin, mockOptions)).rejects.toThrow("Premium feature error");
 			expect(Notice).toHaveBeenCalledWith("Failed to import notes.");
+		});
+	});
+
+	describe("AI suggestion transport and persistence", () => {
+		it("preserves tags and warnings through validated API parsing", () => {
+			const payload = {
+				notes: [{ title: "Proposed", tags: ["auto-work"], processing_warnings: ["suggest_tags_failed"] }],
+			};
+			const parsed = parseResponse({ json: payload } as RequestUrlResponse);
+			expect(parsed.notes[0]).toEqual(payload.notes[0]);
+		});
+
+		it("adds a review action for tags on an otherwise identical note, then saves only metadata", async () => {
+			const note = { title: "Same", text: "Body", tags: ["auto-work"] };
+			const old = "---\ntags: [manual]\nKeepSidianLastSyncedDate: unchanged\n---\nBody  \n";
+			mockPlugin.app.vault.adapter.read = jest.fn().mockResolvedValue(old);
+			mockPlugin.app.vault.adapter.stat = jest.fn().mockResolvedValue({ ctime: 1, mtime: 2 });
+			(handleDuplicateNotes as jest.Mock).mockResolvedValue("skip");
+			(requestUrl as jest.Mock).mockResolvedValue({
+				status: 200,
+				json: { notes: [note], total_notes: 1 },
+				headers: {},
+			});
+			const built = await buildImportSyncPlan(mockPlugin);
+			expect(built.plan.entries[0]).toEqual(expect.objectContaining({ label: "Add tags", selectable: true }));
+			mockPlugin.app.vault.adapter.exists = jest.fn().mockResolvedValue(true);
+			mockPlugin.app.vault.adapter.list = jest.fn().mockResolvedValue({ files: ["Test Folder/Same.md"], folders: [] });
+			await processAndSaveNotes(mockPlugin, [note]);
+			expect(mockPlugin.app.vault.adapter.write).toHaveBeenCalledWith(
+				expect.any(String),
+				old.replace("tags: [manual]", 'tags: ["manual","auto-work"]'),
+				{ ctime: 1, mtime: 2 }
+			);
+		});
+
+		it("shows suggestion failures in the review and a notice", async () => {
+			const note = { title: "Original", text: "Body", processing_warnings: ["suggest_title_failed"] };
+			(requestUrl as jest.Mock).mockResolvedValue({
+				status: 200,
+				json: { notes: [note], total_notes: 1 },
+				headers: {},
+			});
+			(handleDuplicateNotes as jest.Mock).mockResolvedValue("create");
+			jest.spyOn(loggingModule, "logSync").mockResolvedValue(undefined);
+			const built = await buildImportSyncPlan(mockPlugin);
+			expect(built.plan.entries[0].meta?.detail).toContain("AI suggestions failed");
+			expect(Notice).toHaveBeenCalledWith(expect.stringContaining("AI suggestions failed for 1 notes"), 10_000);
+		});
+
+		it("serializes vault-wide restrictions including an empty permitted set", () => {
+			const options = { suggestTags: true, limitToExistingTags: true } as NoteImportOptions;
+			expect(convertOptionsToFeatureFlags(options, ["work", "project"]).suggest_tags?.restrict_tags).toEqual([
+				"work",
+				"project",
+			]);
+			expect(convertOptionsToFeatureFlags(options, []).suggest_tags?.restrict_tags).toEqual([]);
 		});
 	});
 

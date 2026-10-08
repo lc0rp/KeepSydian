@@ -1,6 +1,12 @@
-import { Notice } from "obsidian";
+import { Notice, getAllTags } from "obsidian";
 import type KeepSidianPlugin from "@app/main";
-import { normalizeNote, PreNormalizedNote, extractFrontmatter } from "./domain/note";
+import {
+	normalizeNote,
+	PreNormalizedNote,
+	extractFrontmatter,
+	mergeSuggestedTags,
+	getSuggestedTagUpdate,
+} from "./domain/note";
 import { handleDuplicateNotes } from "./domain/compare";
 import { hasPendingUpload, remoteBaseline, resolveDownloadMerge, withSyncState } from "./domain/sync-state";
 import { getArchivedNoteUpdate, getDownloadFrontmatter, isArchivedDownload } from "./domain/archive";
@@ -51,7 +57,9 @@ const FETCH_NOTES_PAGE_LIMIT = 100;
 interface Preparation {
 	identity: string;
 	created: number;
+	lastActive: number;
 	operationId?: string;
+	featureFlags?: PremiumFeatureFlags;
 	originalAttemptId?: string;
 	notes: PreNormalizedNote[];
 	offset: number;
@@ -418,12 +426,22 @@ async function fetchImportNotesBase(
 			offset += limit;
 		}
 		pageOrdinal += 1;
+		if (preparation) preparation.lastActive = Date.now();
 		if (preparation)
 			Object.assign(preparation, { offset, cursor, page: pageOrdinal, usingCursor: usingCursorPagination });
 	}
 	if (expectedTotal !== undefined && fetchedNotes.length !== expectedTotal) {
 		throw new ParseError("Download snapshot is incomplete. Start sync again. No notes were imported.");
 	}
+	const failedSuggestions = fetchedNotes.filter((note) => note.processing_warnings?.length).length;
+	if (failedSuggestions) {
+		new Notice(
+			`AI suggestions failed for ${failedSuggestions} notes. Their original content was kept. Review these notes before syncing.`,
+			10_000
+		);
+		await logSync(plugin, `AI suggestions failed for ${failedSuggestions} notes; original content retained.`);
+	}
+
 	return { notes: fetchedNotes, completionDate };
 }
 
@@ -477,15 +495,13 @@ function buildImportPlanEntry(
 			case "merge": {
 				const existingContent = await plugin.app.vault.adapter.read(noteFilePath);
 				const [existingFrontmatter, existingBody] = extractFrontmatter(existingContent);
-				const { hasConflict } = await resolveDownloadMerge(
-					existingFrontmatter,
-					existingBody,
-					note
-				);
+				const { hasConflict } = await resolveDownloadMerge(existingFrontmatter, existingBody, note);
 				action = hasConflict ? "conflict-copy" : "merge";
 				label = hasConflict ? "Conflict copy" : "Merge";
 				selectable = true;
-				detail = hasConflict ? "Will create a conflict copy next to the existing note unless another merge action is chosen." : undefined;
+				detail = hasConflict
+					? "Will create a conflict copy next to the existing note unless another merge action is chosen."
+					: undefined;
 				if (getArchivedNoteUpdate(note, existingContent, archivedStatus)) {
 					detail = `${detail ? `${detail} ` : ""}Also marks the existing note as archived.`;
 				}
@@ -507,6 +523,19 @@ function buildImportPlanEntry(
 					}
 				}
 				break;
+		}
+
+		if (duplicateAction === "skip" && note.tags?.length) {
+			const content = await plugin.app.vault.adapter.read(noteFilePath);
+			if (getSuggestedTagUpdate(note, content)) {
+				action = "overwrite";
+				label = "Add tags";
+				selectable = true;
+				detail = "Adds suggested tags while preserving your existing content and tags.";
+			}
+		}
+		if (note.processing_warnings?.length) {
+			detail = `${detail ? `${detail} ` : ""}AI suggestions failed; original content retained.`;
 		}
 
 		return {
@@ -563,7 +592,6 @@ async function buildImportSyncPlanBase(
 	const { email, token } = plugin.settings;
 	const supporterKey = plugin.settings.supporterKeyConfigured ? (plugin.settings.supporterKey ?? "") : undefined;
 	const archivedStatus = options?.archivedStatus ?? "active-only";
-	const featureFlags = options === undefined ? undefined : convertOptionsToFeatureFlags(options);
 	const identity = JSON.stringify([
 		email,
 		token,
@@ -575,18 +603,29 @@ async function buildImportSyncPlanBase(
 	]);
 	let preparation = preparations.get(plugin);
 	if (preparation?.active) throw new Error("A download preparation is already running.");
-	if (preparation && (preparation.identity !== identity || Date.now() - preparation.created >= 14 * 60_000)) {
+	if (
+		preparation &&
+		(preparation.identity !== identity ||
+			Date.now() - preparation.lastActive >= 14 * 60_000 ||
+			Date.now() - preparation.created >= 2 * 60 * 60_000)
+	) {
 		preparations.delete(plugin);
 		preparation = undefined;
 		new Notice("Previous preparation expired or its options changed. Restarting the selected date range.");
 	}
 	if (!preparation) {
+		const requestedFeatureFlags =
+			options === undefined
+				? undefined
+				: convertOptionsToFeatureFlags(options, options.limitToExistingTags ? vaultTagNames(plugin) : undefined);
 		const dateWindow = resolveDownloadDateWindow(downloadScope, getLastSuccessfulSyncDate(plugin), startedAt);
 		// Free GET preparation is already replay-safe and needs no premium probe.
 		const epoch = options === undefined ? undefined : await getReplayEpoch(email, token);
 		preparation = {
 			identity,
+			featureFlags: requestedFeatureFlags,
 			created: Date.now(),
+			lastActive: Date.now(),
 			operationId: epoch ? `${epoch}:${Date.now()}:${Math.random().toString(36).slice(2)}` : undefined,
 			originalAttemptId: callbacks?.attempt?.id,
 			notes: [],
@@ -599,10 +638,6 @@ async function buildImportSyncPlanBase(
 			active: false,
 		};
 		preparations.set(plugin, preparation);
-		const retained = preparation;
-		window.setTimeout(() => {
-			if (preparations.get(plugin) === retained && !retained.active) preparations.delete(plugin);
-		}, 14 * 60_000);
 	} else {
 		callbacks?.attempt?.setResumedFrom(preparation.originalAttemptId);
 		new Notice(
@@ -610,6 +645,7 @@ async function buildImportSyncPlanBase(
 		);
 	}
 	preparation.active = true;
+	const featureFlags = preparation.featureFlags;
 	const operationId = preparation.operationId;
 	const fetchFunction =
 		featureFlags !== undefined
@@ -650,7 +686,14 @@ async function buildImportSyncPlanBase(
 		throw error;
 	} finally {
 		preparation.active = false;
-		if (Date.now() - preparation.created >= 14 * 60_000) preparations.delete(plugin);
+		preparation.lastActive = Date.now();
+		const retained = preparation;
+		window.setTimeout(() => {
+			if (preparations.get(plugin) === retained && !retained.active && Date.now() - retained.lastActive >= 14 * 60_000)
+				preparations.delete(plugin);
+		}, 14 * 60_000);
+		if (Date.now() - preparation.lastActive >= 14 * 60_000 || Date.now() - preparation.created >= 2 * 60 * 60_000)
+			preparations.delete(plugin);
 	}
 	await callbacks?.attempt?.transition("plan");
 	const existingKeepNoteIndex = await buildExistingKeepNoteIndex(plugin.app, plugin.settings.saveLocation);
@@ -759,7 +802,10 @@ export async function importGoogleKeepNotesWithOptions(
 	callbacks?: SyncCallbacks,
 	downloadScope?: DownloadScope
 ): Promise<number> {
-	const featureFlags = convertOptionsToFeatureFlags(options);
+	const featureFlags = convertOptionsToFeatureFlags(
+		options,
+		options.limitToExistingTags ? vaultTagNames(plugin) : undefined
+	);
 	const { email, token } = plugin.settings;
 	const supporterKey = plugin.settings.supporterKeyConfigured ? (plugin.settings.supporterKey ?? "") : undefined;
 	return await importGoogleKeepNotesBase(
@@ -772,7 +818,16 @@ export async function importGoogleKeepNotesWithOptions(
 	);
 }
 
-export function convertOptionsToFeatureFlags(options: NoteImportOptions): PremiumFeatureFlags {
+function vaultTagNames(plugin: KeepSidianPlugin): string[] {
+	const tags = new Set<string>();
+	for (const file of plugin.app.vault.getMarkdownFiles()) {
+		const cache = plugin.app.metadataCache.getFileCache(file);
+		if (cache) for (const tag of getAllTags(cache) ?? []) tags.add(tag.replace(/^#/, ""));
+	}
+	return [...tags].sort();
+}
+
+export function convertOptionsToFeatureFlags(options: NoteImportOptions, existingTags?: string[]): PremiumFeatureFlags {
 	const featureFlags: PremiumFeatureFlags = {};
 
 	if (options.includeNotesTerms && options.includeNotesTerms.length > 0) {
@@ -808,7 +863,7 @@ export function convertOptionsToFeatureFlags(options: NoteImportOptions): Premiu
 	if (options.suggestTags) {
 		featureFlags.suggest_tags = {
 			max_tags: options.maxTags || 5,
-			restrict_tags: options.limitToExistingTags || false,
+			restrict_tags: options.limitToExistingTags ? (existingTags ?? true) : false,
 			prefix: options.tagPrefix || "auto-",
 		};
 	}
@@ -1120,11 +1175,28 @@ export async function processAndSaveNote(
 
 		if (duplicateNotesAction === "skip") {
 			const archived = await markExistingNoteArchived(noteFilePath);
-			metrics.action = archived ? "archived" : "skipped";
+			let tagged = false;
+			if (note.tags?.length) {
+				const content = await plugin.app.vault.adapter.read(noteFilePath);
+				const updated = getSuggestedTagUpdate(note, content);
+				if (updated) {
+					const stat = await plugin.app.vault.adapter.stat(noteFilePath);
+					if (!stat || !Number.isFinite(stat.mtime))
+						throw new Error("Cannot preserve note modification time while adding tags.");
+					throwIfSyncCancelled(plugin);
+					await plugin.app.vault.adapter.write(noteFilePath, updated, { ctime: stat.ctime, mtime: stat.mtime });
+					tagged = true;
+				}
+			}
+			metrics.action = archived ? "archived" : tagged ? "merged" : "skipped";
 			await logNote(archived ? `${noteLink} - marked as archived` : `${noteLink} - identical (skipped)`);
 		} else if (duplicateNotesAction === "create") {
 			metrics.action = "created";
-			const mdFrontmatter = withSyncState(buildFrontmatterWithSyncDate(newFrontmatter, lastSyncedDate), false, baseline);
+			const mdFrontmatter = withSyncState(
+				buildFrontmatterWithSyncDate(newFrontmatter, lastSyncedDate),
+				false,
+				baseline
+			);
 			const newMdContent = wrapMarkdown(mdFrontmatter, newTextWithoutFrontmatter);
 			await ensureParentFolder(noteFilePath);
 			const writeStartedAt = getNowMs();
@@ -1142,14 +1214,23 @@ export async function processAndSaveNote(
 				typeof existingMarkdownFileContentRaw === "string" ? existingMarkdownFileContentRaw : "";
 			const [existingFrontmatter, existingTextWithoutFrontmatterRaw] = extractFrontmatter(existingMarkdownFileContent);
 			let mdFrontmatter = withSyncState(
-				buildFrontmatterWithSyncDate(existingFrontmatter, lastSyncedDate, newFrontmatter),
+				buildFrontmatterWithSyncDate(
+					mergeSuggestedTags(existingFrontmatter, note.tags),
+					lastSyncedDate,
+					newFrontmatter
+				),
 				hasPendingUpload(existingFrontmatter),
 				baseline
 			);
 
 			if (duplicateNotesAction === "merge") {
 				const originalNoteFilePath = noteFilePath;
-				const decision = await resolveDownloadMerge(existingFrontmatter, existingTextWithoutFrontmatterRaw, note, mergeAction);
+				const decision = await resolveDownloadMerge(
+					existingFrontmatter,
+					existingTextWithoutFrontmatterRaw,
+					note,
+					mergeAction
+				);
 				if (decision.action === "skipped-conflict") {
 					metrics.action = "skipped-conflict";
 					onMergeConflict?.(normalizePathSafe(noteFilePath));
@@ -1166,12 +1247,21 @@ export async function processAndSaveNote(
 					metrics.action = decision.action === "overwrite" ? "overwritten" : "merged";
 					// Persist pending state in the SAME write as the merged body. It
 					// survives losing an in-memory plan, deselection and app restart.
-					mdFrontmatter = withSyncState(mdFrontmatter, decision.action === "merge" || hasPendingUpload(existingFrontmatter), baseline);
+					mdFrontmatter = withSyncState(
+						mdFrontmatter,
+						decision.action === "merge" || hasPendingUpload(existingFrontmatter),
+						baseline
+					);
 				}
 				if (decision.action === "merge" || decision.action === "conflict-copy") {
-					retainedImageNames = Array.from(existingTextWithoutFrontmatterRaw.matchAll(/!\[\[media\/([^\]\n|]+)(?:\|[^\]]+)?\]\]/g), (match) => match[1]);
+					retainedImageNames = Array.from(
+						existingTextWithoutFrontmatterRaw.matchAll(/!\[\[media\/([^\]\n|]+)(?:\|[^\]]+)?\]\]/g),
+						(match) => match[1]
+					);
 				}
-				const mergedBody = retainedImageNames.length ? withManagedImageEmbeds(decision.text, retainedImageNames) : decision.text;
+				const mergedBody = retainedImageNames.length
+					? withManagedImageEmbeds(decision.text, retainedImageNames)
+					: decision.text;
 				await ensureParentFolder(noteFilePath);
 				const writeStartedAt = getNowMs();
 				await plugin.app.vault.adapter.write(noteFilePath, wrapMarkdown(mdFrontmatter, mergedBody));

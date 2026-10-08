@@ -27,7 +27,7 @@ export interface PremiumFeatureFlags {
 	suggest_title?: Record<string, never>;
 	suggest_tags?: {
 		max_tags: number;
-		restrict_tags: boolean;
+		restrict_tags: boolean | string[];
 		prefix: string;
 	};
 }
