@@ -34,7 +34,7 @@ export async function enrichImportNotes(
 			tags: undefined,
 			processing_warnings: [...(note.processing_warnings ?? []), "local_enrichment_unavailable"],
 		}));
-	const index = await buildExistingKeepNoteIndex(plugin.app, plugin.settings.saveLocation);
+	const index = await buildExistingKeepNoteIndex(plugin.app, plugin.settings.saveLocation, true);
 	const credentials = {
 		email: plugin.settings.email,
 		token: plugin.settings.token,
@@ -110,7 +110,12 @@ export async function enrichImportNotes(
 				};
 			if (record.tagsAdmitted === undefined)
 				record.tagsAdmitted = paths.length === 0 || Object.keys(record.owned).length > 0;
+			await activeLedger.recover(record);
 			if (!record.local && paths.length) {
+				// Preview does not prove that a later file was created by AI. Adopt
+				// an independently imported note as manual before admitting work.
+				record.manualTitle = true;
+				record.tagsAdmitted = false;
 				const markdown = contents.get(paths[0])!;
 				record.local = {
 					source,
@@ -124,7 +129,6 @@ export async function enrichImportNotes(
 					owned: {},
 				};
 			}
-			await activeLedger.recover(record);
 			// Planning can observe a newer snapshot, but only an applied/confirmed
 			// receipt advances the baseline used for manual field reconciliation.
 			const seen = record.source;

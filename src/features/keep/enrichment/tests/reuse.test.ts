@@ -56,7 +56,7 @@ function fixture() {
 		mkdir: jest.fn(async (path: string) => {
 			stored.set(path, "");
 		}),
-		list: jest.fn(async () => ({
+		list: jest.fn(async (_path: string) => ({
 			files: [...stored.keys()].filter((path) => path.startsWith("Keep/") && path.endsWith(".md")),
 			folders: [],
 		})),
@@ -266,6 +266,90 @@ it("does not generate legacy titles or tags from saved AI options", async () => 
 	await f.run([await note(0, "Changed body")], FLAGS, new EnrichmentLedger(f.plugin));
 	expect(f.provider).not.toHaveBeenCalled();
 });
+
+it("does not admit AI work when an existing note folder cannot be listed", async () => {
+	const f = fixture(),
+		current = await note();
+	f.stored.set("Keep/Manual.md", current.text!);
+	f.adapter.list.mockRejectedValueOnce(new Error("Synthetic folder IO failure"));
+	await expect(f.run([current])).rejects.toThrow("Synthetic folder IO failure");
+	expect(f.generated()).toBe(0);
+});
+
+it("an abandoned preview cannot admit a later manual import", async () => {
+	const f = fixture(),
+		current = await note();
+	await f.run([current], FLAGS, f.ledger, false);
+	f.stored.set("Keep/Manual.md", current.text!.replace("\n---\nDecision", '\nTitle: "My manual title"\n---\nDecision'));
+	await f.run([current]);
+	expect(f.generated()).toBe(0);
+});
+
+it("admits a new note only when a readable ancestor proves its destination absent", async () => {
+	const f = fixture(),
+		current = await note();
+	f.adapter.list.mockRejectedValueOnce(new Error("Destination absent"));
+	await f.run([current]);
+	expect(f.generated()).toBe(1);
+});
+
+it("keeps an unreadable nested folder from admitting existing notes", async () => {
+	const f = fixture(),
+		current = await note();
+	f.stored.set("Keep/Nested/Manual.md", current.text!);
+	f.adapter.list.mockImplementation(async (path: string) => {
+		if (path === "Keep/Nested") throw new Error("Nested folder IO failure");
+		return { files: [], folders: path === "Keep" ? ["Keep/Nested"] : [] };
+	});
+	await expect(f.run([current])).rejects.toThrow("Nested folder IO failure");
+	expect(f.generated()).toBe(0);
+});
+
+it("refuses an empty tag replacement that would invalidate a YAML alias", async () => {
+	const f = fixture(),
+		current = await note();
+	current.enrichment_source!.labels = ["manual"];
+	const before = current.text!.replace(
+		"\n---\nDecision",
+		'\nTitle: "Human 0"\ntags: &labels ["manual"]\ncustom: *labels\n---\nDecision'
+	);
+	f.stored.set("Keep/Manual.md", before);
+	const [initial] = await f.run([current], { suggest_title: {} });
+	const first = await f.ledger.stage(initial, "Keep/Manual.md", before, before);
+	f.stored.set("Keep/Manual.md", first);
+	await f.ledger.finish(initial);
+	const changed = {
+		...current,
+		enrichment_source: { ...current.enrichment_source!, labels: [], source_hash: "d".repeat(64) },
+	};
+	const [incoming] = await f.run([changed], { suggest_title: {} });
+	await expect(f.ledger.stage(incoming, "Keep/Manual.md", first, first)).rejects.toThrow("frontmatter");
+	expect(f.stored.get("Keep/Manual.md")).toBe(first);
+	expect(f.generated()).toBe(0);
+});
+
+it.each([false, true])(
+	"refuses unsafe tag aliases before writing, tag generation enabled: %s",
+	async (generateTags) => {
+		const f = fixture(),
+			current = await note();
+		current.enrichment_source!.labels = generateTags ? [] : ["manual", "new-label"];
+		const before = current.text!.replace(
+			"\n---\nDecision",
+			'\nTitle: "Human 0"\ntags: &labels ["manual"]\ncustom: *labels\n---\nDecision'
+		);
+		f.stored.set("Keep/Manual.md", before);
+		const [incoming] = await f.run(
+			[{ ...current, enrichment_legacy_consent: chooseLegacyTags() }],
+			generateTags ? FLAGS : { suggest_title: {} }
+		);
+		f.adapter.write.mockClear();
+		await expect(f.ledger.stage(incoming, "Keep/Manual.md", before, before)).rejects.toThrow("frontmatter");
+		expect(f.stored.get("Keep/Manual.md")).toBe(before);
+		expect(f.adapter.write).not.toHaveBeenCalled();
+		expect(f.generated()).toBe(generateTags ? 1 : 0);
+	}
+);
 
 it("admits only selected legacy tags after a fresh choice and reuses them without another choice", async () => {
 	const f = fixture(),

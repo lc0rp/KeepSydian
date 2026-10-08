@@ -135,5 +135,9 @@ export function replaceTags(markdown: string, values: string[]): string {
 		? match[1].replace(property, line)
 		: [match[1], line].filter(Boolean).join("\n");
 	const opening = match[0].indexOf("\n") + 1;
-	return markdown.slice(0, opening) + frontmatter + markdown.slice(opening + match[1].length);
+	const candidate = markdown.slice(0, opening) + frontmatter + markdown.slice(opening + match[1].length);
+	const parsedTags = extractFrontmatter(candidate)[2].tags;
+	if (!Array.isArray(parsedTags) || JSON.stringify(parsedTags) !== JSON.stringify(values))
+		throw new Error("Tag frontmatter cannot be updated safely.");
+	return candidate;
 }
