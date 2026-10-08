@@ -667,6 +667,44 @@ it("propagates a Keep title edit and blocks a concurrent local title conflict", 
 	await expect(f.ledger.assertUploadAllowed("Keep/AI Proposed.md")).rejects.toThrow("both sides");
 });
 
+it("keeps an unresolved tag conflict when a later title conflict is resolved", async () => {
+	const f = fixture(),
+		current = await note();
+	current.enrichment_source!.labels = ["manual"];
+	f.stored.set(
+		"Keep/Manual.md",
+		current.text!.replace("\n---\nDecision", '\nTitle: "Human 0"\ntags: []\n---\nDecision')
+	);
+	const run = async (source = current.enrichment_source!) =>
+		(await f.run([{ ...current, enrichment_source: source }], { suggest_title: {} }))[0];
+	const apply = async (incoming: PreNormalizedNote) => {
+		const before = f.stored.get("Keep/Manual.md")!;
+		const after = await f.ledger.stage(incoming, "Keep/Manual.md", before, before);
+		f.stored.set("Keep/Manual.md", after);
+		await f.ledger.finish(incoming);
+	};
+	await apply(await run());
+	f.stored.set("Keep/Manual.md", f.stored.get("Keep/Manual.md")!.replace('tags: ["manual"]', "tags: []"));
+	await apply(await run());
+	f.stored.set("Keep/Manual.md", f.stored.get("Keep/Manual.md")!.replace("tags: []", 'tags: ["manual"]'));
+	const removed = { ...current.enrichment_source!, labels: [], source_hash: "c".repeat(64) };
+	await apply(await run(removed));
+	await expect(f.ledger.assertUploadAllowed("Keep/Manual.md")).rejects.toThrow("both sides");
+	f.stored.set(
+		"Keep/Manual.md",
+		f.stored.get("Keep/Manual.md")!.replace('Title: "Human 0"', 'Title: "Obsidian changed"')
+	);
+	const retitled = { ...removed, title: "Keep changed", source_hash: "d".repeat(64) };
+	await run(retitled);
+	f.stored.set(
+		"Keep/Manual.md",
+		f.stored.get("Keep/Manual.md")!.replace('Title: "Obsidian changed"', 'Title: "Keep changed"')
+	);
+	await run(retitled);
+	await expect(f.ledger.assertUploadAllowed("Keep/Manual.md")).rejects.toThrow("both sides");
+	expect(f.generated()).toBe(0);
+});
+
 it("retains Keep field changes through review preparation and selected execution", async () => {
 	const f = fixture(),
 		current = await note();
@@ -684,6 +722,58 @@ it("retains Keep field changes through review preparation and selected execution
 	const applied = extractFrontmatter(await f.apply(selected))[2];
 	expect(applied.Title).toBe("Keep edited");
 	expect(applied.tags).toEqual(["auto-work", "auto-topic"]);
+});
+
+it.each([
+	'Title: "Human 0"',
+	'"Title": "Human 0"',
+	"'Title': 'Human 0'",
+	'title: "Human 0"',
+	"Title: >-\n  Human 0",
+	"'Title': |-\n  Human 0",
+	'Title : "Human 0"',
+])("preserves frontmatter when a Keep title edit updates %s", async (property) => {
+	const f = fixture(),
+		current = await note();
+	const before = current.text!.replace("\n---\nDecision", `\n${property}\ncustom: preserved\n---\nDecision`);
+	f.stored.set("Keep/Manual.md", before);
+	const [initial] = await f.run([current], { suggest_title: {} });
+	const first = await f.ledger.stage(initial, "Keep/Manual.md", before, before);
+	f.stored.set("Keep/Manual.md", first);
+	await f.ledger.finish(initial);
+	const changed = {
+		...current,
+		enrichment_source: { ...current.enrichment_source!, title: "Keep edited", source_hash: "d".repeat(64) },
+	};
+	const [incoming] = await f.run([changed], { suggest_title: {} });
+	const after = await f.ledger.stage(incoming, "Keep/Manual.md", first, first);
+	const properties = extractFrontmatter(after)[2];
+	expect(properties.Title).toBe("Keep edited");
+	expect(properties.GoogleKeepUrl).toBe("https://keep.google.com/#NOTE/note-0");
+	expect(properties.custom).toBe("preserved");
+	expect(after).toContain("Decision: pause.");
+	expect(f.generated()).toBe(0);
+});
+
+it("refuses a title replacement that would break a YAML alias before changing the note", async () => {
+	const f = fixture(),
+		current = await note();
+	const before = current.text!.replace("\n---\nDecision", '\nTitle: &name "Human 0"\ncustom: *name\n---\nDecision');
+	f.stored.set("Keep/Manual.md", before);
+	const [initial] = await f.run([current], { suggest_title: {} });
+	const first = await f.ledger.stage(initial, "Keep/Manual.md", before, before);
+	f.stored.set("Keep/Manual.md", first);
+	await f.ledger.finish(initial);
+	const changed = {
+		...current,
+		enrichment_source: { ...current.enrichment_source!, title: "Keep edited", source_hash: "d".repeat(64) },
+	};
+	const [incoming] = await f.run([changed], { suggest_title: {} });
+	f.adapter.write.mockClear();
+	await expect(f.ledger.stage(incoming, "Keep/Manual.md", first, first)).rejects.toThrow("frontmatter");
+	expect(f.stored.get("Keep/Manual.md")).toBe(first);
+	expect(f.adapter.write).not.toHaveBeenCalled();
+	expect(f.generated()).toBe(0);
 });
 
 it("advances the human field receipt only after a confirmed upload", async () => {
