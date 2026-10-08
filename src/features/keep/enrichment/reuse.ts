@@ -84,6 +84,10 @@ export async function enrichImportNotes(
 			if (paths.length > 1)
 				throw new Error("Multiple local notes share a Keep identity. Resolve them before enrichment.");
 			let record = state.records[key];
+			if (record?.uploadPending)
+				throw new Error(
+					"An earlier upload has no confirmed enrichment receipt. Review and confirm that note's upload before requesting AI suggestions."
+				);
 			if (!record)
 				record = state.records[key] = {
 					source,

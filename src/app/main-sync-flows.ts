@@ -371,6 +371,7 @@ export async function runPreparedSyncPlan(
 			else runCallbacks?.onEntrySettled?.(entryId, success, outcome);
 		},
 		onAttachmentWarning: () => { attachmentWarnings += 1; },
+		onEnrichmentWarning: () => { attachmentWarnings += 1; },
 	};
 	return executeAttempt(plugin, attempt, async () => {
 		await assertPreparedDeletionContext(plugin, preparedPlan);
@@ -471,6 +472,7 @@ export async function runImportNotesFlow(
 			setTotalNotes: (n: number) => uiSetTotalNotes(plugin, n),
 			reportProgress: () => reportSyncProgress(plugin),
 			onAttachmentWarning: () => { attachmentWarnings += 1; },
+			onEnrichmentWarning: () => { attachmentWarnings += 1; },
 			deferCheckpoint: (date: string) => { completionDate = date; },
 		};
 		if (effectiveOptions !== undefined) await importGoogleKeepNotesWithOptions(plugin, effectiveOptions, callbacks);
@@ -505,6 +507,7 @@ export async function runTwoWaySyncFlow(plugin: KeepSidianPlugin, _getErrorMessa
 			setTotalNotes: (n: number) => uiSetTotalNotes(plugin, n),
 			reportProgress: () => reportSyncProgress(plugin),
 			onAttachmentWarning: () => { attachmentWarnings += 1; },
+			onEnrichmentWarning: () => { attachmentWarnings += 1; },
 			deferCheckpoint: (date: string) => { completionDate = date; },
 		};
 		await importGoogleKeepNotes(plugin, callbacks);

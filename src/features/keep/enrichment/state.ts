@@ -25,6 +25,7 @@ export const RecordSchema = z.object({
 	manualKeepLabels: z.array(z.string()).max(1024),
 	owned: z.record(z.string(), z.string()),
 	local: ReceiptSchema.optional(),
+	uploadPending: z.boolean().optional(),
 	alias: z
 		.object({ source: EnrichmentSourceSchema, projection: ProjectionSchema, owned: z.record(z.string(), z.string()) })
 		.optional(),

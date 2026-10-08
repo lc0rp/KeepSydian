@@ -267,11 +267,16 @@ export class EnrichmentLedger {
 			record.local.title = effectiveTitle(path, content);
 			record.local.tags = tags(content);
 			record.local.owned = { ...record.owned };
+			delete record.uploadPending;
 			await save();
 		});
 	}
 
-	async assertUploadAllowed(path: string): Promise<void> {
+	async stageUpload(path: string): Promise<void> {
+		await this.assertUploadAllowed(path, true);
+	}
+
+	async assertUploadAllowed(path: string, stageIntent = false): Promise<void> {
 		await this.transaction(async (state, save) => {
 			const adapter = this.plugin.app.vault.adapter;
 			if (!(await adapter.exists(path))) return;
@@ -293,6 +298,10 @@ export class EnrichmentLedger {
 				}
 				if (record.conflicts.length)
 					throw new Error("Title or tags changed on both sides. Resolve those fields before upload.");
+				if (stageIntent && !record.uploadPending) {
+					record.uploadPending = true;
+					await save();
+				}
 			}
 		});
 	}

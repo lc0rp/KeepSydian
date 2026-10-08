@@ -254,6 +254,7 @@ export interface SyncCallbacks {
 	reportPlanProgress?: (processed: number, total?: number) => void;
 	onEntrySettled?: (entryId: string, success: boolean, outcome?: SyncPlanAction) => void;
 	onAttachmentWarning?: (warning: SyncAttachmentWarning) => void;
+	onEnrichmentWarning?: () => void;
 }
 
 export interface SyncAttachmentWarning extends AttachmentFailure {
@@ -753,13 +754,19 @@ export async function importSelectedGoogleKeepNotes(
 ): Promise<number> {
 	const requested = notes.find((note) => note.enrichment_requested)?.enrichment_requested;
 	if (requested) notes = await enrichImportNotes(plugin, notes, requested);
+	const enrichmentWarnings = notes.filter((note) => note.processing_warnings?.length).length;
+	for (let index = 0; index < enrichmentWarnings; index++) callbacks?.onEnrichmentWarning?.();
+	if (enrichmentWarnings)
+		await logSync(plugin, `AI suggestions unavailable for ${enrichmentWarnings} notes; available content retained. Review these notes before requesting AI again.`);
 	await processAndSaveNotes(plugin, notes, callbacks, noteEntryIds);
 	throwIfSyncCancelled(plugin);
 	if (completionDate) {
 		if (callbacks?.deferCheckpoint) callbacks.deferCheckpoint(completionDate);
 		else persistLastSuccessfulSyncDate(plugin, completionDate);
 	}
-	new Notice("Imported Google Keep notes.");
+	if (enrichmentWarnings)
+		new Notice(`Imported Google Keep notes. AI suggestions unavailable for ${enrichmentWarnings} notes. Review these notes before requesting AI again.`, 10_000);
+	else new Notice("Imported Google Keep notes.");
 	return notes.length;
 }
 
