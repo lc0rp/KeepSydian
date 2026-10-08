@@ -42,25 +42,54 @@ function normalizeVaultPathForScope(path: string): string {
 	return normalizePathSafe(path).replace(/^\/+/, "").replace(/\/+$/, "");
 }
 
-export async function listMarkdownFilesRecursively(adapter: ListableAdapter, folder = ""): Promise<string[]> {
+async function folderIsProvenAbsent(adapter: ListableAdapter, folder: string): Promise<boolean> {
+	let candidate = folder;
+	while (candidate && adapter.list) {
+		const separator = candidate.lastIndexOf("/");
+		const parent = separator < 0 ? "" : candidate.slice(0, separator);
+		try {
+			const inventory = await adapter.list(parent);
+			return ![...inventory.files, ...inventory.folders].some((entry) => {
+				const path = normalizeVaultPathForScope(entry);
+				return path === candidate || path.startsWith(`${candidate}/`);
+			});
+		} catch {
+			candidate = parent;
+		}
+	}
+	return false;
+}
+
+export async function listMarkdownFilesRecursively(
+	adapter: ListableAdapter,
+	folder = "",
+	strict = false
+): Promise<string[]> {
 	const normalizedFolder = normalizePathSafe(folder);
 	if (typeof adapter.list !== "function") {
+		if (strict) throw new Error("Enrichment vault listing is unavailable.");
 		return [];
 	}
 
+	let listed = false;
 	try {
 		const { files, folders } = await adapter.list(normalizedFolder);
+		listed = true;
 		const markdownFiles = files
 			.map((file) => normalizePathSafe(file))
 			.filter((file) => file.toLowerCase().endsWith(".md"));
 
 		for (const subfolder of folders) {
-			const nested = await listMarkdownFilesRecursively(adapter, subfolder);
+			const nested = await listMarkdownFilesRecursively(adapter, subfolder, strict);
 			markdownFiles.push(...nested);
 		}
 
 		return markdownFiles;
-	} catch {
+	} catch (error) {
+		// A paid admission must distinguish a missing destination from a failed
+		// scan. Only a readable ancestor inventory can prove a folder absent.
+		if (strict && (listed || !(await folderIsProvenAbsent(adapter, normalizeVaultPathForScope(normalizedFolder)))))
+			throw error;
 		return [];
 	}
 }
@@ -76,12 +105,13 @@ export function isKeepSidianFrontmatter(frontmatterDict: Record<string, unknown>
 
 export async function buildExistingKeepNoteIndex(
 	app: MetadataBackedApp,
-	rootFolder = ""
+	rootFolder = "",
+	strict = false
 ): Promise<ExistingKeepNoteIndex> {
 	const adapter = app.vault.adapter;
 	const normalizedRootFolder = normalizeVaultPathForScope(rootFolder);
 	if (normalizedRootFolder) {
-		const markdownFiles = await listMarkdownFilesRecursively(adapter, normalizedRootFolder);
+		const markdownFiles = await listMarkdownFilesRecursively(adapter, normalizedRootFolder, strict);
 		const existingPaths = new Set(markdownFiles.map((filePath) => normalizePathSafe(filePath)));
 		const pathByKeepUrl = new Map<string, string>();
 
@@ -104,7 +134,7 @@ export async function buildExistingKeepNoteIndex(
 		};
 	}
 
-	const metadataBackedFiles = app.vault.getMarkdownFiles?.();
+	const metadataBackedFiles = strict ? undefined : app.vault.getMarkdownFiles?.();
 	if (Array.isArray(metadataBackedFiles) && metadataBackedFiles.length > 0) {
 		const existingPaths = new Set(
 			metadataBackedFiles.map((file) => normalizePathSafe(file.path)).filter((path) => path.length > 0)
@@ -129,7 +159,7 @@ export async function buildExistingKeepNoteIndex(
 		};
 	}
 
-	const markdownFiles = await listMarkdownFilesRecursively(adapter, normalizedRootFolder);
+	const markdownFiles = await listMarkdownFilesRecursively(adapter, normalizedRootFolder, strict);
 	const existingPaths = new Set(markdownFiles.map((filePath) => normalizePathSafe(filePath)));
 	const pathByKeepUrl = new Map<string, string>();
 
