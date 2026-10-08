@@ -155,29 +155,33 @@ export function getSuggestedTagUpdate(note: PreNormalizedNote, markdown: string)
 	return markdown.slice(0, openingLength) + frontmatter + markdown.slice(openingLength + match[1].length);
 }
 
-function extractFrontmatter(text: string): [string, string, FrontmatterDict] {
+function extractFrontmatter(text: string, strict = false): [string, string, FrontmatterDict] {
 	// Frontmatter is between --- and --- at the start of the text if it exists
 	let frontmatter = "";
 	let frontmatterDict: FrontmatterDict = {};
 	let textWithoutFrontmatter = text;
-	const frontmatterMatch = text.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?/);
+	const frontmatterMatch = text.match(/^---[\t ]*\r?\n(?:([\s\S]*?)\r?\n)?---[\t ]*(?:\r?\n|$)/);
 	if (frontmatterMatch) {
-		frontmatter = frontmatterMatch[1].trim();
+		frontmatter = (frontmatterMatch[1] ?? "").trim();
 		textWithoutFrontmatter = text.slice(frontmatterMatch[0].length).trim();
 	}
+	if (strict && !frontmatterMatch && /^---[\t ]*\r?\n/.test(text))
+		throw new Error("Cannot determine Keep identity from unclosed frontmatter.");
 
 	if (frontmatter) {
-		frontmatterDict = parseFrontmatter(frontmatter);
+		frontmatterDict = parseFrontmatter(frontmatter, strict);
 	}
 
 	return [frontmatter, textWithoutFrontmatter, frontmatterDict];
 }
 
-function parseFrontmatter(frontmatter: string): FrontmatterDict {
+function parseFrontmatter(frontmatter: string, strict = false): FrontmatterDict {
 	try {
 		const parseYamlUnknown = parseYaml as (yaml: string) => unknown;
 		const parsed = parseYamlUnknown(frontmatter);
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			if (strict && parsed !== null && parsed !== undefined)
+				throw new Error("Frontmatter must be a mapping.");
 			return {};
 		}
 
@@ -196,6 +200,7 @@ function parseFrontmatter(frontmatter: string): FrontmatterDict {
 
 		return frontmatterDict;
 	} catch {
+		if (strict) throw new Error("Cannot determine Keep identity from malformed frontmatter.");
 		return {};
 	}
 }

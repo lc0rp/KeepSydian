@@ -1,6 +1,13 @@
 import { extractFrontmatter, NormalizedNote, normalizeNote } from "../note";
 
 describe("extractFrontmatter", () => {
+	it.each(["---\n---\nBody", "---\r\n---\r\nBody", "---\n\n---\nBody"])(
+		"accepts empty frontmatter during strict identity discovery: %j",
+		(text) => {
+			expect(extractFrontmatter(text, true)).toEqual(["", "Body", {}]);
+		}
+	);
+
 	it("should extract frontmatter correctly", () => {
 		const text = "---\nkey1: value1\nkey2: value2\n---\nThis is the body";
 		const [frontmatter, body, frontmatterDict] = extractFrontmatter(text);

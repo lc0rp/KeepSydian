@@ -49,10 +49,10 @@ async function fixture(pattern: string, ai = true) {
 	};
 	const adapter = {
 		exists: async (path: string) => disk.has(path) || directories.has(path),
-		read: async (path: string) => {
+		read: jest.fn(async (path: string) => {
 			if (!disk.has(path)) throw new Error("Missing file");
 			return disk.get(path)!;
-		},
+		}),
 		write: async (path: string, content: string) => {
 			disk.set(path, content);
 		},
@@ -66,6 +66,7 @@ async function fixture(pattern: string, ai = true) {
 			};
 		}),
 	};
+	const metadataCache = { getFileCache: jest.fn(() => null as { frontmatter?: Record<string, unknown> } | null) };
 	const plugin = {
 		settings: {
 			...DEFAULT_SETTINGS,
@@ -86,7 +87,7 @@ async function fixture(pattern: string, ai = true) {
 				read: async (file: { path: string }) => adapter.read(file.path),
 				getMarkdownFiles: () => [...disk.keys()].filter((path) => path.endsWith(".md")).map((path) => ({ path })),
 			},
-			metadataCache: { getFileCache: () => null },
+			metadataCache,
 		},
 		saveSettings: jest.fn(async () => {}),
 		throwIfSyncCancelled: jest.fn(),
@@ -108,17 +109,90 @@ async function fixture(pattern: string, ai = true) {
 	jest.spyOn(keepApi, "fetchNotes").mockImplementation(async () => ({ notes: [note], total_notes: 1 }));
 	jest.spyOn(keepApi, "getReplayEpoch").mockResolvedValue(undefined);
 	jest.spyOn(keepApi, "enrichLocalNotes").mockImplementation(provider);
-	const run = async (legacyTagConsent?: LegacyTagConsent) => {
-		const plan = await buildManualSyncPlan(plugin, "import", { legacyTagConsent }, { kind: "all" });
+	const run = async (legacyTagConsent?: LegacyTagConsent, currentPlugin = plugin) => {
+		const plan = await buildManualSyncPlan(currentPlugin, "import", { legacyTagConsent }, { kind: "all" });
 		return runPreparedSyncPlan(
-			plugin,
+			currentPlugin,
 			plan!,
 			() => "failed",
 			() => {}
 		);
 	};
-	return { note, disk, directories, adapter, plugin, provider, run, mkdir };
+	return { note, disk, directories, adapter, plugin, provider, run, mkdir, metadataCache };
 }
+
+it("holds a same-title late manual import through retries and restart, then reuses cached tags after consent", async () => {
+	const f = await fixture("Keep/{note.year}");
+	await initializeLocalDeletionTracking(f.plugin);
+	const path = "Keep/2025/Manual.md";
+	f.provider.mockImplementationOnce(async (_email, _token, rows) => {
+		await f.mkdir("Keep/2025");
+		f.disk.set(path, f.note.text.replace("\n---\nBody", '\nTitle: "Human title"\ntags: ["manual"]\n---\nBody'));
+		return { results: rows.map((row) => ({ source: row.source, status: "ready" as const, outputs: { title: "AI title", tags: ["topic"] } })) };
+	});
+	await f.run();
+	await f.run();
+	const restarted = { ...f.plugin, settings: { ...f.plugin.settings } } as KeepSidianPlugin;
+	await f.run(undefined, restarted);
+	expect(extractFrontmatter(f.disk.get(path)!)[2]).toMatchObject({ Title: "Human title", tags: ["manual"] });
+	expect(f.provider).toHaveBeenCalledTimes(1);
+	await f.run(chooseLegacyTags(), restarted);
+	await f.run(undefined, restarted);
+	expect(extractFrontmatter(f.disk.get(path)!)[2]).toMatchObject({ Title: "Human title", tags: ["manual", "auto-topic"] });
+	expect(f.provider).toHaveBeenCalledTimes(1);
+	await getEnrichmentLedger(restarted).transaction(async (state) => {
+		expect(Object.values(state.records)[0]).toMatchObject({ tagsAdmitted: true, owned: { topic: "auto-topic" } });
+	});
+});
+
+it.each([false, true])("uses current root identity instead of stale metadata (AI=%s)", async (ai) => {
+	const f = await fixture("/", ai);
+	await f.mkdir("Elsewhere");
+	const path = "Elsewhere/Manual.md";
+	f.disk.set(path, f.note.text);
+	await initializeLocalDeletionTracking(f.plugin);
+	f.metadataCache.getFileCache.mockReturnValue({ frontmatter: {} });
+	await f.run();
+	expect([...f.disk.keys()].filter((key) => key.endsWith(".md"))).toEqual([path]);
+	f.metadataCache.getFileCache.mockReturnValue({ frontmatter: { GoogleKeepUrl: "https://keep.google.com/#NOTE/other" } });
+	await f.run();
+	expect([...f.disk.keys()].filter((key) => key.endsWith(".md"))).toEqual([path]);
+	expect(f.provider).not.toHaveBeenCalled();
+});
+
+it.each(["review", "legacy"])("holds unreadable identity candidates with AI off through %s", async (caller) => {
+	const f = await fixture("Keep/{note.year}", false);
+	await f.mkdir("Keep/2025");
+	const path = "Keep/2025/Manual.md";
+	f.disk.set(path, f.note.text);
+	await initializeLocalDeletionTracking(f.plugin);
+	const read = f.adapter.read.getMockImplementation()!;
+	f.adapter.read.mockImplementation(async (candidate) => {
+		if (candidate === path) throw new Error("Synthetic unreadable identity");
+		return read(candidate);
+	});
+	if (caller === "review") await expect(f.run()).rejects.toThrow("Synthetic unreadable identity");
+	else {
+		await runImportNotesFlow(f.plugin, false, () => "failed");
+		expect(f.plugin.settings.lastSyncAttempt?.outcome).toBe("failed");
+	}
+	expect([...f.disk.keys()].filter((key) => key.endsWith(".md"))).toEqual([path]);
+	expect(f.disk.get(path)).toBe(f.note.text);
+	expect(f.provider).not.toHaveBeenCalled();
+});
+
+it.each(["bad-yaml", "unclosed-header"])("holds an uncertain identity in %s before AI or import", async (malformation) => {
+	const f = await fixture("Keep/{note.year}");
+	await f.mkdir("Keep/2025");
+	const path = "Keep/2025/Manual.md";
+	const text = f.note.text.replace("\n---\nBody", malformation === "bad-yaml" ? '\ntags: ["manual"\n---\nBody' : "\nBody");
+	f.disk.set(path, text);
+	await initializeLocalDeletionTracking(f.plugin);
+	await expect(f.run()).rejects.toThrow(/frontmatter/i);
+	expect([...f.disk.keys()].filter((key) => key.endsWith(".md"))).toEqual([path]);
+	expect(f.disk.get(path)).toBe(text);
+	expect(f.provider).not.toHaveBeenCalled();
+});
 
 it.each(["review", "legacy"])("holds duplicate identities with AI disabled through %s", async (caller) => {
 	const f = await fixture("Keep/{note.year}", false);
@@ -267,14 +341,15 @@ it("reuses admitted results after a move between dated folders and a source date
 	expect([...f.disk.keys()].filter((key) => key.endsWith(".md"))).toEqual([moved]);
 });
 
-it("blocks uncertain enumeration under a pattern before any AI request", async () => {
-	const f = await fixture("Keep/{note.year}");
+it.each([false, true])("blocks uncertain enumeration under a pattern before import (AI=%s)", async (ai) => {
+	const f = await fixture("Keep/{note.year}", ai);
 	await f.mkdir("Keep/2024");
 	f.adapter.list.mockImplementation(async (path) => {
 		if (path === "Keep/2024") throw new Error("Synthetic unreadable folder");
 		return { files: [], folders: path === "Keep" ? ["Keep/2024"] : ["Keep"] };
 	});
 	await expect(f.run()).rejects.toThrow("Synthetic unreadable folder");
+	expect([...f.disk.keys()].filter((path) => path.endsWith(".md"))).toEqual([]);
 	expect(f.provider).not.toHaveBeenCalled();
 });
 

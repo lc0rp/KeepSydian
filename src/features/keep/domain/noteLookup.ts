@@ -17,20 +17,10 @@ type ListableAdapter = {
 	read: (path: string) => Promise<string>;
 };
 
-type MarkdownFileLike = {
-	path: string;
-};
-
-type MetadataCacheLike = {
-	getFileCache?: (file: MarkdownFileLike) => { frontmatter?: Record<string, unknown> } | null;
-};
-
-type MetadataBackedApp = {
+type NoteLookupApp = {
 	vault: {
 		adapter: ListableAdapter;
-		getMarkdownFiles?: () => MarkdownFileLike[];
 	};
-	metadataCache?: MetadataCacheLike;
 };
 
 export interface ExistingKeepNoteIndex {
@@ -122,74 +112,24 @@ export function isKeepSidianFrontmatter(frontmatterDict: Record<string, unknown>
 }
 
 export async function buildExistingKeepNoteIndex(
-	app: MetadataBackedApp,
-	rootFolder = "",
-	strict = false
+	app: NoteLookupApp,
+	rootFolder = ""
 ): Promise<ExistingKeepNoteIndex> {
 	const adapter = app.vault.adapter;
 	const normalizedRootFolder = normalizeVaultPathForScope(resolveNoteLookupRoot(rootFolder));
-	if (normalizedRootFolder) {
-		const markdownFiles = await listMarkdownFilesRecursively(adapter, normalizedRootFolder, strict);
-		const existingPaths = new Set(markdownFiles.map((filePath) => normalizePathSafe(filePath)));
-		const pathByKeepUrl = new Map<string, string>();
-		const index = { pathByKeepUrl, existingPaths, ambiguousKeepUrls: new Set<string>() };
-
-		for (const filePath of existingPaths) {
-			try {
-				const content = await adapter.read(filePath);
-				const [, , frontmatterDict] = extractFrontmatter(content);
-				const existingKeepUrl = getFrontmatterStringValue(frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
-				if (existingKeepUrl && !filePath.includes(CONFLICT_FILE_SUFFIX)) {
-					indexIdentity(index, existingKeepUrl, filePath);
-				}
-			} catch {
-				// Ignore unreadable candidates during lookup.
-			}
-		}
-
-		return index;
-	}
-
-	// Pattern roots can span old dates/titles. Cold metadata must not turn a
-	// linked file found by admission into a duplicate at destination selection.
-	const metadataBackedFiles = strict || /[{}]/.test(rootFolder) ? undefined : app.vault.getMarkdownFiles?.();
-	if (Array.isArray(metadataBackedFiles) && metadataBackedFiles.length > 0) {
-		const existingPaths = new Set(
-			metadataBackedFiles.map((file) => normalizePathSafe(file.path)).filter((path) => path.length > 0)
-		);
-		const pathByKeepUrl = new Map<string, string>();
-		const index = { pathByKeepUrl, existingPaths, ambiguousKeepUrls: new Set<string>() };
-
-		for (const file of metadataBackedFiles) {
-			const normalizedPath = normalizePathSafe(file.path);
-			// Metadata is an optimization, never evidence that a cold file has no identity.
-			const frontmatterDict = app.metadataCache?.getFileCache?.(file)?.frontmatter ??
-				extractFrontmatter(await adapter.read(normalizedPath))[2];
-			const existingKeepUrl = getFrontmatterStringValue(frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
-			if (existingKeepUrl && !normalizedPath.includes(CONFLICT_FILE_SUFFIX)) {
-				indexIdentity(index, existingKeepUrl, normalizedPath);
-			}
-		}
-
-		return index;
-	}
-
-	const markdownFiles = await listMarkdownFilesRecursively(adapter, normalizedRootFolder, strict);
+	// Neither cached metadata nor a failed scan proves that an identity is absent.
+	// Use one physical, complete discovery path for admission and all import modes.
+	const markdownFiles = await listMarkdownFilesRecursively(adapter, normalizedRootFolder, true);
 	const existingPaths = new Set(markdownFiles.map((filePath) => normalizePathSafe(filePath)));
 	const pathByKeepUrl = new Map<string, string>();
 	const index = { pathByKeepUrl, existingPaths, ambiguousKeepUrls: new Set<string>() };
 
 	for (const filePath of existingPaths) {
-		try {
-			const content = await adapter.read(filePath);
-			const [, , frontmatterDict] = extractFrontmatter(content);
-			const existingKeepUrl = getFrontmatterStringValue(frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
-			if (existingKeepUrl && !filePath.includes(CONFLICT_FILE_SUFFIX)) {
-				indexIdentity(index, existingKeepUrl, filePath);
-			}
-		} catch {
-			// Ignore unreadable candidates during lookup.
-		}
+		if (filePath.includes(CONFLICT_FILE_SUFFIX)) continue;
+		const content = await adapter.read(filePath);
+		const [, , frontmatterDict] = extractFrontmatter(content, true);
+		const existingKeepUrl = getFrontmatterStringValue(frontmatterDict, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
+		if (existingKeepUrl) indexIdentity(index, existingKeepUrl, filePath);
 	}
 
 	return index;
