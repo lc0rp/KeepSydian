@@ -4,7 +4,7 @@ import { EnrichmentSourceSchema } from "@schemas/keep";
 import { canonicalKeepUrl } from "@integrations/server/keepDeletions";
 import { CONFLICT_FILE_SUFFIX } from "../constants";
 import { buildExistingKeepNoteIndex } from "../domain/noteLookup";
-import { extractFrontmatter, getFrontmatterStringValue, type PreNormalizedNote } from "../domain/note";
+import { extractFrontmatter, getFrontmatterStringValue, normalizeNote, type PreNormalizedNote } from "../domain/note";
 import { getEnrichmentLedger, type EnrichmentLedger } from "./ledger";
 import { hash, bodyHash, observeLocal, effectiveTitle, tags, type EnrichmentRecord } from "./state";
 import { bindLegacyTagConsent, permitsLegacyTags } from "./consent";
@@ -116,7 +116,10 @@ export async function enrichImportNotes(
 					source,
 					path: paths[0],
 					title: effectiveTitle(paths[0], markdown),
-					body: await bodyHash(markdown),
+					body:
+						extractFrontmatter(markdown)[1] === normalizeNote(original).textWithoutFrontmatter
+							? await bodyHash(markdown)
+							: "local-work",
 					tags: tags(markdown),
 					owned: {},
 				};

@@ -27,6 +27,8 @@ it("uses real file writes and production download receipts for 650 notes and res
 	const full = (path: string) => join(directory, path);
 	let writtenBytes = 0;
 	let writeCount = 0;
+	let snapshotBytes = 0;
+	let journalBytes = 0;
 	const adapter = {
 		exists: async (path: string) => {
 			try {
@@ -39,6 +41,8 @@ it("uses real file writes and production download receipts for 650 notes and res
 		read: async (path: string) => fs.readFile(full(path), "utf8"),
 		write: async (path: string, value: string) => {
 			writtenBytes += Buffer.byteLength(value, "utf8");
+			if (path.endsWith("enrichment-v1.json")) snapshotBytes += Buffer.byteLength(value, "utf8");
+			if (path.endsWith("enrichment-v1.json.applications.json")) journalBytes += Buffer.byteLength(value, "utf8");
 			writeCount += 1;
 			await fs.writeFile(full(path), value);
 		},
@@ -138,8 +142,13 @@ it("uses real file writes and production download receipts for 650 notes and res
 				ledgerBytes: Buffer.byteLength(disk, "utf8"),
 				totalWrittenBytes: writtenBytes,
 				fileWrites: writeCount,
+				snapshotWrittenBytes: snapshotBytes,
+				journalWrittenBytes: journalBytes,
 			})
 		);
+		// A bounded application journal must avoid rewriting the full ledger
+		// twice per note. This is a desktop filesystem measurement, not UAT.
+		expect(writtenBytes).toBeLessThan(128 * 1024 * 1024);
 	} finally {
 		await fs.rm(directory, { recursive: true, force: true });
 	}

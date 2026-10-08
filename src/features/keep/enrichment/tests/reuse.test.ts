@@ -11,7 +11,7 @@ import { hash } from "../state";
 import { pushGoogleKeepNotes } from "../../push";
 import * as keepApi from "@integrations/server/keepApi";
 import { chooseLegacyTags } from "../consent";
-import { DEFAULT_SETTINGS } from "@types/keepsidian-plugin-settings";
+import { DEFAULT_SETTINGS } from "../../../../types/keepsidian-plugin-settings";
 import { buildManualSyncPlan, runPreparedSyncPlan, runImportNotesFlow } from "@app/main-sync-flows";
 
 beforeAll(() => {
@@ -331,7 +331,7 @@ it.each(["legacy", "review"] as const)(
 		const capability = jest.spyOn(keepApi, "getReplayEpoch").mockResolvedValue(undefined);
 		const generate = jest.spyOn(keepApi, "enrichLocalNotes").mockImplementation(f.provider);
 		try {
-			if (caller === "legacy") await runImportNotesFlow(f.plugin, false, undefined, () => "failed");
+			if (caller === "legacy") await runImportNotesFlow(f.plugin, false, () => "failed");
 			else {
 				const plan = await buildManualSyncPlan(f.plugin, "import", undefined, { kind: "all" });
 				expect(plan).not.toBeNull();
@@ -443,6 +443,143 @@ it("recovers an application completed before its receipt was finalized", async (
 	const [second] = await f.run([current], FLAGS, restarted);
 	expect(second.local_enrichment?.tags).toEqual({ work: "auto-work", topic: "auto-topic" });
 	expect(f.generated()).toBe(1);
+});
+
+it("treats an unknown in-flight application image as manual without another AI charge", async () => {
+	const f = fixture(),
+		current = await note(),
+		[first] = await f.run([current]);
+	const staged = await f.ledger.stage(first, "Keep/AI Proposed.md", undefined, first.text!);
+	const edited = staged + "\nManual work before completion";
+	f.stored.set("Keep/AI Proposed.md", edited);
+	const restarted = new EnrichmentLedger(f.plugin);
+	const [reused] = await f.run([current], FLAGS, restarted);
+	expect(f.generated()).toBe(1);
+	const protectedContent = await restarted.stage(reused, "Keep/AI Proposed.md", edited, edited);
+	expect(extractFrontmatter(protectedContent)[2].tags).toEqual(["auto-work", "auto-topic"]);
+	expect(protectedContent).toContain("Manual work before completion");
+});
+
+it("keeps a completed receipt durable through restart and a pure path move", async () => {
+	const f = fixture(),
+		current = await note();
+	current.text = current.text!.replace("---\nDecision", 'Title: "AI Proposed"\n---\nDecision');
+	const [first] = await f.run([current]);
+	const after = await f.apply(first);
+	f.stored.delete("Keep/AI Proposed.md");
+	f.stored.set("Keep/Moved.md", after);
+	const restarted = new EnrichmentLedger(f.plugin);
+	await restarted.assertUploadAllowed("Keep/Moved.md");
+	const uploaded = {
+		...current.enrichment_source!,
+		title: "AI Proposed",
+		labels: ["auto-work", "auto-topic"],
+		source_hash: "a".repeat(64),
+	};
+	await restarted.acknowledgeUpload("Keep/Moved.md", after, uploaded);
+	await f.run([{ ...current, enrichment_source: uploaded }], FLAGS, restarted);
+	expect(f.generated()).toBe(1);
+});
+
+it.each(["snapshot-response-lost", "journal-reset-fails", "journal-reset-response-lost"] as const)(
+	"recovers snapshot-first application compaction after %s without new provider work",
+	async (fault) => {
+		const f = fixture(),
+			notes = await Promise.all(Array.from({ length: 16 }, (_, index) => note(index)));
+		const enriched = await f.run(notes);
+		for (let index = 0; index < 15; index++) {
+			const incoming = {
+				...enriched[index],
+				text: enriched[index].text!.replace("---\nDecision", 'Title: "AI Proposed"\n---\nDecision'),
+			};
+			await f.apply(incoming, `Keep/Note ${index}.md`);
+		}
+		f.adapter.write.mockImplementation(async (path, value) => {
+			if (path === METADATA && fault === "snapshot-response-lost") {
+				f.stored.set(path, value);
+				throw new Error("Snapshot reply lost");
+			}
+			if (path === f.ledger.applicationPath && Object.keys(JSON.parse(value).journal.records).length === 0) {
+				if (fault === "journal-reset-response-lost") f.stored.set(path, value);
+				throw new Error("Journal reset interrupted");
+			}
+			f.stored.set(path, value);
+		});
+		await expect(f.ledger.stage(enriched[15], "Keep/Note 15.md", undefined, enriched[15].text!)).rejects.toThrow();
+		f.adapter.write.mockImplementation(async (path, value) => {
+			f.stored.set(path, value);
+		});
+		const restarted = new EnrichmentLedger(f.plugin);
+		const reused = await f.run(notes, { ...FLAGS, suggest_tags: { ...FLAGS.suggest_tags!, prefix: "ai-" } }, restarted);
+		expect(f.generated()).toBe(16);
+		const before = f.stored.get("Keep/Note 0.md")!;
+		const after = await restarted.stage(reused[0], "Keep/Note 0.md", before, before);
+		expect(extractFrontmatter(after)[2].tags).toEqual(["ai-work", "ai-topic"]);
+	}
+);
+
+it.each(["missing", "truncated", "checksum", "wrong-base"] as const)(
+	"blocks %s application metadata without paid fallback",
+	async (fault) => {
+		const f = fixture(),
+			current = await note(),
+			[first] = await f.run([current]);
+		await f.apply(first);
+		const path = f.ledger.applicationPath;
+		if (fault === "missing") f.stored.delete(path);
+		else if (fault === "truncated") f.stored.set(path, "{");
+		else {
+			const envelope = JSON.parse(f.stored.get(path)!);
+			if (fault === "checksum") envelope.checksum = "0".repeat(64);
+			else {
+				envelope.journal.base = "0".repeat(64);
+				envelope.checksum = await hash(envelope.journal);
+			}
+			f.stored.set(path, JSON.stringify(envelope));
+		}
+		await expect(f.run([await note(0, "Changed content")], FLAGS, new EnrichmentLedger(f.plugin))).rejects.toThrow();
+		expect(f.generated()).toBe(1);
+	}
+);
+
+it("detects another writer's application journal change before paid dispatch", async () => {
+	const f = fixture(),
+		[first] = await f.run([await note()]);
+	await f.apply(first);
+	f.stored.set(f.ledger.applicationPath, f.stored.get(f.ledger.applicationPath)! + "\n");
+	await expect(f.run([await note(0, "Changed content")])).rejects.toThrow("outside this session");
+	expect(f.generated()).toBe(1);
+});
+
+it("does not alias an ungrounded legacy local body to the fetched source body", async () => {
+	const f = fixture(),
+		current = await note();
+	const local = current.text!.replace("Decision: pause.", "My pending local body");
+	f.stored.set("Keep/Manual.md", local);
+	await f.run([{ ...current, enrichment_legacy_consent: chooseLegacyTags() }]);
+	const uploaded = {
+		...current.enrichment_source!,
+		title: "Manual",
+		body_hash: await hash("My pending local body"),
+		source_hash: "b".repeat(64),
+	};
+	await f.ledger.acknowledgeUpload("Keep/Manual.md", local, uploaded);
+	await f.run([{ ...current, enrichment_source: uploaded }]);
+	expect(f.generated()).toBe(2);
+});
+
+it("rejects a cached application after its account changes", async () => {
+	const f = fixture(),
+		[first] = await f.run([await note()]);
+	f.plugin.settings.email = "different@example.test";
+	await expect(f.ledger.stage(first, "Keep/AI Proposed.md", undefined, first.text!)).rejects.toThrow("account");
+});
+
+it("rejects a superseded application after a newer source was observed", async () => {
+	const f = fixture(),
+		[first] = await f.run([await note()]);
+	await f.run([await note(0, "Newer source")]);
+	await expect(f.ledger.stage(first, "Keep/AI Proposed.md", undefined, first.text!)).rejects.toThrow("source");
 });
 
 it("isolates the same content under a different account and note incarnation", async () => {

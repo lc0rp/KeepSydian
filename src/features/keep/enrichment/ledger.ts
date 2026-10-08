@@ -7,6 +7,8 @@ import { CONFLICT_FILE_SUFFIX } from "../constants";
 import { KEEPSIDIAN_SERVER_URL } from "../../../config";
 import {
 	StateSchema,
+	ApplicationJournalSchema,
+	RecordSchema,
 	emptyState,
 	hash,
 	bodyHash,
@@ -21,13 +23,20 @@ import {
 const ledgers = new WeakMap<KeepSidianPlugin, EnrichmentLedger>();
 const queues = new WeakMap<object, Map<string, Promise<void>>>();
 const LIMIT = 8 * 1024 * 1024;
+const APPLICATION_LIMIT = 256 * 1024;
+const APPLICATION_BATCH_SIZE = 16;
 
-/** One writer per plugin instance; outside writes fail closed. No TTL/eviction. */
+/** Serialize writers sharing an adapter/path; outside writes fail closed. No TTL/eviction. */
 export class EnrichmentLedger {
 	private state: EnrichmentState = emptyState();
 	private disk?: string;
+	private snapshotChecksum?: string;
+	private applicationDisk?: string;
+	private applicationsLoaded = false;
+	private pendingRecords: Record<string, EnrichmentRecord> = {};
 	private blocked = false;
 	readonly path: string;
+	readonly applicationPath: string;
 
 	constructor(
 		readonly plugin: KeepSidianPlugin,
@@ -38,6 +47,7 @@ export class EnrichmentLedger {
 		if (!path && !plugin.manifest?.dir && !plugin.app.vault.configDir)
 			throw new Error("Vault configuration directory is unavailable.");
 		this.path = path ?? `${directory}/enrichment-v1.json`;
+		this.applicationPath = `${this.path}.applications.json`;
 		if (!isSafeVaultPath(this.path)) throw new Error("Unsafe enrichment ledger path.");
 	}
 
@@ -49,7 +59,10 @@ export class EnrichmentLedger {
 		return hash([await this.namespace(), source.id, source.incarnation]);
 	}
 
-	async transaction<T>(work: (state: EnrichmentState, save: () => Promise<void>) => Promise<T>): Promise<T> {
+	async transaction<T>(
+		work: (state: EnrichmentState, save: () => Promise<void>) => Promise<T>,
+		applicationKey?: string
+	): Promise<T> {
 		const adapter = this.plugin.app.vault.adapter;
 		let byPath = queues.get(adapter);
 		if (!byPath) {
@@ -70,10 +83,51 @@ export class EnrichmentLedger {
 						throw new Error("Invalid enrichment checksum.");
 					this.state = parsed;
 					this.disk = disk;
+					this.snapshotChecksum = (envelope as { checksum: string }).checksum;
 				} else if (this.disk === undefined && this.plugin.settings.enrichmentLedgerInitialized) {
 					throw new Error("Enrichment ledger is missing.");
 				} else if (this.disk !== undefined && (!exists || (await adapter.read(this.path)) !== this.disk)) {
 					throw new Error("Enrichment ledger changed outside this session.");
+				}
+				const applicationExists = await adapter.exists(this.applicationPath);
+				if (!this.applicationsLoaded) {
+					if (applicationExists) {
+						const text = await adapter.read(this.applicationPath);
+						if (new TextEncoder().encode(text).byteLength > APPLICATION_LIMIT)
+							throw new Error("Enrichment application journal is too large.");
+						const envelope = JSON.parse(text) as { journal?: unknown; checksum?: unknown };
+						const journal = ApplicationJournalSchema.parse(envelope.journal);
+						if (envelope.checksum !== (await hash(journal)))
+							throw new Error("Invalid enrichment application checksum.");
+						if (journal.base === this.snapshotChecksum) {
+							for (const [key, record] of Object.entries(journal.records)) {
+								if (!this.state.records[key]) throw new Error("Unknown enrichment application record.");
+								this.state.records[key] = record;
+							}
+							this.pendingRecords = journal.records;
+						} else {
+							// Snapshot-first compaction can leave the previous journal.
+							// Only an exact, checksummed checkpoint proves it was included.
+							const checkpoint = this.disk
+								? (JSON.parse(this.disk) as { appliedJournal?: unknown; checkpointChecksum?: unknown })
+								: {};
+							if (
+								checkpoint.appliedJournal !== envelope.checksum ||
+								checkpoint.checkpointChecksum !== (await hash([this.snapshotChecksum, checkpoint.appliedJournal]))
+							)
+								throw new Error("Enrichment application journal does not match its snapshot.");
+						}
+						this.applicationDisk = text;
+					} else if (this.plugin.settings.enrichmentApplicationJournalInitialized) {
+						throw new Error("Enrichment application journal is missing.");
+					}
+					this.applicationsLoaded = true;
+				} else if (
+					this.applicationDisk === undefined
+						? applicationExists
+						: !applicationExists || (await adapter.read(this.applicationPath)) !== this.applicationDisk
+				) {
+					throw new Error("Enrichment application journal changed outside this session.");
 				}
 			} catch (error) {
 				this.blocked = true;
@@ -93,9 +147,40 @@ export class EnrichmentLedger {
 						throw new Error("Enrichment account/folder changed.");
 					if (Object.keys(this.state.cache).length > 20000 || Object.keys(this.state.records).length > 10000)
 						throw new Error("Enrichment capacity reached.");
-					const text = JSON.stringify({ state: StateSchema.parse(this.state), checksum: await hash(this.state) });
-					if (new TextEncoder().encode(text).byteLength > LIMIT) throw new Error("Enrichment capacity reached.");
-					if (text !== this.disk) {
+					const state = StateSchema.parse(this.state);
+					if (new TextEncoder().encode(JSON.stringify(state)).byteLength > LIMIT - 512)
+						throw new Error("Enrichment capacity reached.");
+					let applicationText: string | undefined;
+					if (applicationKey) {
+						this.pendingRecords[applicationKey] = RecordSchema.parse(this.state.records[applicationKey]);
+						for (const key of Object.keys(this.pendingRecords))
+							this.pendingRecords[key] = RecordSchema.parse(this.state.records[key]);
+						if (Object.keys(this.pendingRecords).length < APPLICATION_BATCH_SIZE) {
+							const journal = ApplicationJournalSchema.parse({
+								version: 1,
+								base: this.snapshotChecksum,
+								records: this.pendingRecords,
+							});
+							const candidate = JSON.stringify({ journal, checksum: await hash(journal) });
+							if (new TextEncoder().encode(candidate).byteLength <= APPLICATION_LIMIT) applicationText = candidate;
+						}
+					}
+					let checksum: string | undefined;
+					let text: string | undefined;
+					if (applicationText === undefined) {
+						checksum = await hash(state);
+						const appliedJournal = this.applicationDisk
+							? (JSON.parse(this.applicationDisk) as { checksum: string }).checksum
+							: undefined;
+						text = JSON.stringify({
+							state,
+							checksum,
+							appliedJournal,
+							checkpointChecksum: appliedJournal ? await hash([checksum, appliedJournal]) : undefined,
+						});
+						if (new TextEncoder().encode(text).byteLength > LIMIT) throw new Error("Enrichment capacity reached.");
+					}
+					if (applicationText !== undefined || text !== this.disk) {
 						const parts = this.path.split("/");
 						for (let i = 1; i < parts.length; i++) {
 							const folder = parts.slice(0, i).join("/");
@@ -105,12 +190,39 @@ export class EnrichmentLedger {
 							this.disk === undefined ? await adapter.exists(this.path) : (await adapter.read(this.path)) !== this.disk
 						)
 							throw new Error("Enrichment ledger changed before write.");
-						await adapter.write(this.path, text);
-						if ((await adapter.read(this.path)) !== text) throw new Error("Enrichment write was not confirmed.");
-						this.disk = text;
+						if (
+							this.applicationDisk === undefined
+								? await adapter.exists(this.applicationPath)
+								: (await adapter.read(this.applicationPath)) !== this.applicationDisk
+						)
+							throw new Error("Enrichment application journal changed before write.");
+						if (applicationText !== undefined) {
+							await adapter.write(this.applicationPath, applicationText);
+							if ((await adapter.read(this.applicationPath)) !== applicationText)
+								throw new Error("Enrichment application write was not confirmed.");
+							this.applicationDisk = applicationText;
+						} else {
+							await adapter.write(this.path, text!);
+							if ((await adapter.read(this.path)) !== text) throw new Error("Enrichment write was not confirmed.");
+							this.disk = text;
+							this.snapshotChecksum = checksum;
+							if (this.applicationDisk !== undefined) {
+								const journal = { version: 1 as const, base: checksum!, records: {} };
+								const empty = JSON.stringify({ journal, checksum: await hash(journal) });
+								await adapter.write(this.applicationPath, empty);
+								if ((await adapter.read(this.applicationPath)) !== empty)
+									throw new Error("Enrichment journal checkpoint was not confirmed.");
+								this.applicationDisk = empty;
+							}
+							this.pendingRecords = {};
+						}
 					}
 					if (!this.plugin.settings.enrichmentLedgerInitialized) {
 						this.plugin.settings.enrichmentLedgerInitialized = true;
+						await this.plugin.saveSettings();
+					}
+					if (this.applicationDisk !== undefined && !this.plugin.settings.enrichmentApplicationJournalInitialized) {
+						this.plugin.settings.enrichmentApplicationJournalInitialized = true;
 						await this.plugin.saveSettings();
 					}
 				} catch (error) {
@@ -142,6 +254,8 @@ export class EnrichmentLedger {
 			record.owned = journal.receipt.owned;
 		} else if (current !== journal.before) {
 			record.manualTitle = true;
+			record.tagsAdmitted = false;
+			record.owned = {};
 			for (const raw of Object.keys(journal.receipt.owned))
 				if (!record.suppressed.includes(raw)) record.suppressed.push(raw);
 		}
@@ -159,6 +273,15 @@ export class EnrichmentLedger {
 		return this.transaction(async (state, save) => {
 			const record = state.records[note.local_enrichment!.receipt];
 			if (!record) throw new Error("Enrichment receipt unavailable.");
+			if (note.local_enrichment!.receipt !== (await this.key(record.source)))
+				throw new Error("Enrichment account changed before application.");
+			const source = EnrichmentSourceSchema.parse(note.enrichment_source);
+			if (
+				source.source_hash !== record.source.source_hash ||
+				source.id !== record.source.id ||
+				source.incarnation !== record.source.incarnation
+			)
+				throw new Error("Enrichment source changed before application.");
 			await this.recover(record);
 			if (before !== undefined) observeLocal(record, path, before);
 			const plan = note.local_enrichment!;
@@ -213,7 +336,7 @@ export class EnrichmentLedger {
 			};
 			await save();
 			return content;
-		});
+		}, note.local_enrichment.receipt);
 	}
 
 	async finish(note: PreNormalizedNote): Promise<void> {
@@ -224,7 +347,7 @@ export class EnrichmentLedger {
 				await this.recover(record);
 				await save();
 			}
-		});
+		}, note.local_enrichment.receipt);
 	}
 
 	async acknowledgeUpload(path: string, content: string, sourceInput: unknown): Promise<void> {
@@ -284,12 +407,10 @@ export class EnrichmentLedger {
 			const url = canonicalKeepUrl(getFrontmatterStringValue(extractFrontmatter(content)[2], "GoogleKeepUrl"));
 			if (!url) return;
 			for (const [key, record] of Object.entries(state.records)) {
-				if (
-					!record.local ||
-					url !== `https://keep.google.com/#NOTE/${record.source.id}` ||
-					key !== (await this.key(record.source))
-				)
+				if (url !== `https://keep.google.com/#NOTE/${record.source.id}` || key !== (await this.key(record.source)))
 					continue;
+				await this.recover(record);
+				if (!record.local) continue;
 				if (record.local.path !== path) {
 					if (await adapter.exists(record.local.path)) throw new Error("Multiple local notes share a Keep identity.");
 					record.local.path = path;

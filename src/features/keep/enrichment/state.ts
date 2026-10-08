@@ -48,6 +48,11 @@ export const StateSchema = z.object({
 	),
 	vocabulary: z.record(z.string(), z.array(z.string()).max(256)),
 });
+export const ApplicationJournalSchema = z.object({
+	version: z.literal(1),
+	base: z.string().regex(/^[a-f0-9]{64}$/),
+	records: z.record(z.string(), RecordSchema).refine((records) => Object.keys(records).length < 16),
+});
 export type EnrichmentState = z.infer<typeof StateSchema>;
 export type EnrichmentRecord = z.infer<typeof RecordSchema>;
 export type Projection = z.infer<typeof ProjectionSchema>;
