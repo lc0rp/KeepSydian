@@ -9,6 +9,7 @@ import { buildNotePath } from "@services/index";
 import { findExistingKeepNotePath, type ExistingKeepNoteIndex } from "./noteLookup";
 import { stripManagedImageEmbeds } from "./attachmentEmbeds";
 import { hasPendingUpload } from "./sync-state";
+import { localStateBaseline, storedLocalBaseline } from "./local-state";
 
 interface UpdatedFileInfo {
 	textWithoutFrontmatter: string;
@@ -17,6 +18,7 @@ interface UpdatedFileInfo {
 }
 
 interface ExistingFileInfo {
+	sourceContent?: string;
 	textWithoutFrontmatter: string;
 	createdDate: Date | null;
 	updatedDate: Date | null;
@@ -24,6 +26,8 @@ interface ExistingFileInfo {
 	fsUpdatedDate: Date | null;
 	lastSyncedDate: Date | null;
 	pendingUpload?: boolean;
+	localUnchanged?: boolean;
+	localChanged?: boolean;
 }
 
 function getUpdatedFileInfo(incomingNote: NormalizedNote): UpdatedFileInfo {
@@ -52,8 +56,11 @@ async function getExistingFileInfo(noteFilePath: string, app: App): Promise<Exis
 	const fsUpdatedDateTimeStamp = await app.vault.adapter.stat(noteFilePath).then((stat) => stat?.mtime);
 	const fsCreatedDate = fsCreatedDateTimeStamp ? new Date(fsCreatedDateTimeStamp) : null;
 	const fsUpdatedDate = fsUpdatedDateTimeStamp ? new Date(fsUpdatedDateTimeStamp) : null;
+	const stored = storedLocalBaseline(existingContent);
+	const current = stored ? await localStateBaseline(app.vault.adapter, noteFilePath, existingContent) : undefined;
 
 	return {
+		sourceContent: existingContent,
 		// Read from noteFilePath
 		textWithoutFrontmatter: stripManagedImageEmbeds(existingBody),
 		createdDate: existingCreatedDate,
@@ -62,6 +69,8 @@ async function getExistingFileInfo(noteFilePath: string, app: App): Promise<Exis
 		fsUpdatedDate: fsUpdatedDate,
 		lastSyncedDate: existingLastSyncedDate,
 		pendingUpload: hasPendingUpload(existingFrontmatter),
+		localUnchanged: Boolean(stored && current === stored),
+		localChanged: Boolean(stored && current !== stored),
 	};
 }
 
@@ -70,7 +79,8 @@ async function handleDuplicateNotes(
 	incomingNote: NormalizedNote,
 	app: App,
 	noteFilePathOverride?: string,
-	existingKeepNoteIndex?: ExistingKeepNoteIndex
+	existingKeepNoteIndex?: ExistingKeepNoteIndex,
+	onSourceCaptured?: (content: string) => void
 ): Promise<"skip" | "merge" | "overwrite" | "create"> {
 	const preferredPath = noteFilePathOverride ?? buildNotePath(saveLocation, incomingNote.title);
 	const noteFilePath =
@@ -84,6 +94,7 @@ async function handleDuplicateNotes(
 		const updatedFileInfo: UpdatedFileInfo = getUpdatedFileInfo(incomingNote);
 		const existingFileInfo: ExistingFileInfo = await getExistingFileInfo(noteFilePath, app);
 
+		if (existingFileInfo.sourceContent !== undefined) onSourceCaptured?.(existingFileInfo.sourceContent);
 		return checkForDuplicateData(updatedFileInfo, existingFileInfo);
 	} else {
 		return "create";
@@ -111,6 +122,8 @@ function checkForDuplicateData(
 	// A downloaded merge is still local work until Keep acknowledges its upload.
 	// Timestamp equality (including same-second writes) cannot retire that work.
 	if (existingFile.pendingUpload) return "merge";
+	if (existingFile.localChanged) return "merge";
+	if (existingFile.localUnchanged && incomingFile.updatedDate && existingFile.updatedDate && incomingFile.updatedDate > existingFile.updatedDate) return "overwrite";
 
 	// Step 2: If lastSyncedDate exists, use it to determine if both files have been modified
 	if (lastSyncedDate && existingUpdatedDate) {

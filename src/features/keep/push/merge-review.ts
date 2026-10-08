@@ -49,7 +49,7 @@ function remoteKey(note: PreNormalizedNote): string | undefined {
 
 function signature(note: PreNormalizedNote): string {
 	// Avoid comparing expiring attachment URLs. Snapshots stay in memory and are never logged.
-	return JSON.stringify([note.id, note.title, note.text, note.updated, note.blob_names, note.archived, note.trashed]);
+	return JSON.stringify([note.remote_revision, note.id, note.title, note.text, note.updated, note.blob_names, note.archived, note.trashed, note.tags, note.color, note.pinned]);
 }
 
 async function fetchRemoteIndex(plugin: KeepSidianPlugin): Promise<Map<string, PreNormalizedNote>> {

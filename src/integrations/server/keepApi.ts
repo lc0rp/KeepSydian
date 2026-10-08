@@ -43,6 +43,7 @@ export interface PushNotePayload {
 	title?: string;
 	content: string;
 	attachments?: PushAttachmentPayload[];
+	expected_revision?: string;
 }
 
 export interface PushNoteResult {
@@ -52,6 +53,7 @@ export interface PushNoteResult {
 	error?: string;
 	keep_url?: string;
 	remote_revision?: string;
+	remote_updated?: string;
 }
 
 export interface PushNotesResponse {

@@ -8,7 +8,8 @@ import {
 	getSuggestedTagUpdate,
 } from "./domain/note";
 import { handleDuplicateNotes } from "./domain/compare";
-import { hasPendingUpload, remoteBaseline, resolveDownloadMerge, withSyncState } from "./domain/sync-state";
+import { captureLocalMedia, localStateBaseline, stampLocalBaseline, storedLocalBaseline, type MediaBaseline } from "./domain/local-state";
+import { hasPendingUpload, remoteBaseline, resolveDownloadMerge, withSyncState, withRemoteRevision } from "./domain/sync-state";
 import { getArchivedNoteUpdate, getDownloadFrontmatter, isArchivedDownload } from "./domain/archive";
 import type { KeepArchivedStatus } from "../../types/subscription";
 // Import via legacy google path so tests can spy on this module
@@ -1120,6 +1121,29 @@ export async function processAndSaveNote(
 	let retainedImageNames: string[] = [];
 	let receiptComplete = true;
 
+	let decisionSource: string | undefined;
+	let expectedMarkdown: string | undefined;
+	let acknowledgedMedia: MediaBaseline | undefined;
+	let preserveLocalMedia = false;
+	const writeKnownContent = async (path: string, content: string, expected?: string): Promise<void> => {
+		const [frontmatter, body] = extractFrontmatter(content);
+		const stamped = await stampLocalBaseline(plugin.app.vault.adapter, path, wrapMarkdown(withRemoteRevision(frontmatter, note.remote_revision), body), acknowledgedMedia);
+		if (expected !== undefined && (await plugin.app.vault.adapter.read(path) ?? "") !== expected) throw new Error("A local note changed during download. Local edits were preserved.");
+		if (expected === undefined && await plugin.app.vault.adapter.exists(path)) throw new Error("A local file appeared at the download destination. It was preserved.");
+		await plugin.app.vault.adapter.write(path, stamped);
+		expectedMarkdown = stamped;
+	};
+	const writeMetadata = async (path: string, content: string, expected: string, options: { ctime: number; mtime: number }): Promise<void> => {
+		const known = storedLocalBaseline(expected);
+		let media: MediaBaseline | undefined;
+		try { media = await captureLocalMedia(plugin.app.vault.adapter, path, expected); } catch { /* Cannot acknowledge unknown media. */ }
+		const unchanged = known !== undefined && media !== undefined && await localStateBaseline(plugin.app.vault.adapter, path, expected, media) === known;
+		const updated = unchanged ? await stampLocalBaseline(plugin.app.vault.adapter, path, content, media) : content;
+		if ((await plugin.app.vault.adapter.read(path) ?? "") !== expected) throw new Error("A local note changed during metadata update. Local edits were preserved.");
+		await plugin.app.vault.adapter.write(path, updated, options);
+		if (unchanged) expectedMarkdown = updated;
+	};
+
 	const lastSyncedDate = new Date().toISOString();
 	const ensureParentFolder = async (filePath: string): Promise<void> => {
 		metrics.ensureParentFolderDurationMs += await measureAsyncDuration(async () => {
@@ -1141,6 +1165,7 @@ export async function processAndSaveNote(
 		});
 	};
 	const markExistingNoteArchived = async (filePath: string, content?: string): Promise<boolean> => {
+		if (preserveLocalMedia && mergeAction !== "overwrite-all") return false;
 		if (!isArchivedDownload(note, archivedStatus)) return false;
 		const readStartedAt = getNowMs();
 		const existingContent = content ?? (await plugin.app.vault.adapter.read(filePath));
@@ -1154,7 +1179,7 @@ export async function processAndSaveNote(
 		}
 		throwIfSyncCancelled(plugin);
 		const writeStartedAt = getNowMs();
-		await plugin.app.vault.adapter.write(filePath, updatedContent, { ctime: stat.ctime, mtime: stat.mtime });
+		await writeMetadata(filePath, updatedContent, existingContent, { ctime: stat.ctime, mtime: stat.mtime });
 		metrics.writeNoteDurationMs += getNowMs() - writeStartedAt;
 		return true;
 	};
@@ -1167,9 +1192,22 @@ export async function processAndSaveNote(
 			noteFilePath === resolvedNotePath &&
 			!existingKeepNoteIndex.existingPaths.has(noteFilePath)
 				? "create"
-				: await handleDuplicateNotes(saveLocation, normalizedNote, plugin.app, noteFilePath, existingKeepNoteIndex);
+				: await handleDuplicateNotes(saveLocation, normalizedNote, plugin.app, noteFilePath, existingKeepNoteIndex, (content) => { decisionSource = content; });
 		metrics.duplicateDecisionDurationMs = getNowMs() - duplicateDecisionStartedAt;
-		const newFrontmatter = getDownloadFrontmatter(note, archivedStatus);
+		if (duplicateNotesAction !== "create") {
+			const original = (await plugin.app.vault.adapter.read(noteFilePath)) ?? "";
+			if (decisionSource !== undefined && original !== decisionSource) throw new Error("A local note changed after download comparison. Local edits were preserved.");
+			const baseline = storedLocalBaseline(original);
+			try { acknowledgedMedia = await captureLocalMedia(plugin.app.vault.adapter, noteFilePath, original); } catch { /* Unknown media cannot be acknowledged. */ }
+			const currentState = acknowledgedMedia ? await localStateBaseline(plugin.app.vault.adapter, noteFilePath, original, acknowledgedMedia) : undefined;
+			preserveLocalMedia = Boolean(baseline && currentState !== baseline);
+			if (baseline && currentState === baseline) expectedMarkdown = original;
+		}
+
+		// A known unsent local Keep-state edit remains local work. Only the
+		// explicitly selected overwrite-all action replaces those properties.
+		const incomingFrontmatter = getDownloadFrontmatter(note, archivedStatus);
+		const newFrontmatter = preserveLocalMedia && mergeAction !== "overwrite-all" ? incomingFrontmatter.replace(/^GoogleKeep(?:Color|Pinned|Archived):[^\r\n]*(?:\r?\n|$)/gm, "").trim() : incomingFrontmatter;
 		const newTextWithoutFrontmatter = normalizedNote.textWithoutFrontmatter;
 		const baseline = duplicateNotesAction === "skip" ? undefined : await remoteBaseline(note);
 
@@ -1184,11 +1222,14 @@ export async function processAndSaveNote(
 					if (!stat || !Number.isFinite(stat.mtime))
 						throw new Error("Cannot preserve note modification time while adding tags.");
 					throwIfSyncCancelled(plugin);
-					await plugin.app.vault.adapter.write(noteFilePath, updated, { ctime: stat.ctime, mtime: stat.mtime });
+					await writeMetadata(noteFilePath, updated, content, { ctime: stat.ctime, mtime: stat.mtime });
 					tagged = true;
 				}
 			}
-			metrics.action = archived ? "archived" : tagged ? "merged" : "skipped";
+			// Enrichment metadata is an own write, not a downloaded body merge
+			// that must be uploaded again in the two-way stage.
+			metrics.action = archived ? "archived" : "skipped";
+			if (tagged) await logNote(`${noteLink} - suggested tags updated`);
 			await logNote(archived ? `${noteLink} - marked as archived` : `${noteLink} - identical (skipped)`);
 		} else if (duplicateNotesAction === "create") {
 			metrics.action = "created";
@@ -1200,7 +1241,7 @@ export async function processAndSaveNote(
 			const newMdContent = wrapMarkdown(mdFrontmatter, newTextWithoutFrontmatter);
 			await ensureParentFolder(noteFilePath);
 			const writeStartedAt = getNowMs();
-			await plugin.app.vault.adapter.write(noteFilePath, newMdContent);
+			await writeKnownContent(noteFilePath, newMdContent);
 			metrics.writeNoteDurationMs += getNowMs() - writeStartedAt;
 			if (existingKeepNoteIndex) {
 				updateExistingKeepNoteIndex(existingKeepNoteIndex, noteFilePath, normalizedNote);
@@ -1212,6 +1253,7 @@ export async function processAndSaveNote(
 			metrics.readExistingDurationMs += getNowMs() - readStartedAt;
 			const existingMarkdownFileContent =
 				typeof existingMarkdownFileContentRaw === "string" ? existingMarkdownFileContentRaw : "";
+			if (decisionSource !== undefined && existingMarkdownFileContent !== decisionSource) throw new Error("A local note changed after download comparison. Local edits were preserved.");
 			const [existingFrontmatter, existingTextWithoutFrontmatterRaw] = extractFrontmatter(existingMarkdownFileContent);
 			let mdFrontmatter = withSyncState(
 				buildFrontmatterWithSyncDate(
@@ -1249,7 +1291,7 @@ export async function processAndSaveNote(
 					// survives losing an in-memory plan, deselection and app restart.
 					mdFrontmatter = withSyncState(
 						mdFrontmatter,
-						decision.action === "merge" || hasPendingUpload(existingFrontmatter),
+						decision.action === "merge" || hasPendingUpload(existingFrontmatter) || (preserveLocalMedia && mergeAction !== "overwrite-all"),
 						baseline
 					);
 				}
@@ -1264,7 +1306,7 @@ export async function processAndSaveNote(
 					: decision.text;
 				await ensureParentFolder(noteFilePath);
 				const writeStartedAt = getNowMs();
-				await plugin.app.vault.adapter.write(noteFilePath, wrapMarkdown(mdFrontmatter, mergedBody));
+				await writeKnownContent(noteFilePath, wrapMarkdown(mdFrontmatter, mergedBody), decision.action === "conflict-copy" ? undefined : existingMarkdownFileContent);
 				metrics.writeNoteDurationMs += getNowMs() - writeStartedAt;
 				if (existingKeepNoteIndex) {
 					updateExistingKeepNoteIndex(existingKeepNoteIndex, noteFilePath, normalizedNote);
@@ -1286,7 +1328,7 @@ export async function processAndSaveNote(
 				const mdContentWithSyncDate = wrapMarkdown(mdFrontmatter, newTextWithoutFrontmatter);
 				await ensureParentFolder(noteFilePath);
 				const writeStartedAt = getNowMs();
-				await plugin.app.vault.adapter.write(noteFilePath, mdContentWithSyncDate);
+				await writeKnownContent(noteFilePath, mdContentWithSyncDate, existingMarkdownFileContent);
 				metrics.writeNoteDurationMs += getNowMs() - writeStartedAt;
 				if (existingKeepNoteIndex) {
 					updateExistingKeepNoteIndex(existingKeepNoteIndex, noteFilePath, normalizedNote);
@@ -1308,6 +1350,7 @@ export async function processAndSaveNote(
 				compareDurationMs = 0,
 				writeDurationMs = 0,
 				fileNames = [],
+				mediaBaselines,
 				failures = [],
 			} = await processAttachments(
 				plugin.app,
@@ -1317,8 +1360,15 @@ export async function processAndSaveNote(
 				{
 					email: plugin.settings.email,
 					token: plugin.settings.token,
-				}
+				},
+				preserveLocalMedia
 			);
+			if (mediaBaselines) {
+				const known = new Map(acknowledgedMedia ?? []);
+				for (const [path, hash] of mediaBaselines) known.set(path, hash);
+				acknowledgedMedia = [...known.entries()].sort(([a], [b]) => a.localeCompare(b));
+			}
+
 			metrics.attachmentDurationMs += totalDurationMs;
 			metrics.attachmentFetchDurationMs += fetchDurationMs;
 			metrics.attachmentCompareDurationMs += compareDurationMs;
@@ -1340,10 +1390,19 @@ export async function processAndSaveNote(
 				const noteContentWithEmbeds = wrapMarkdown(existingFrontmatter, bodyWithEmbeds);
 				if (noteContentWithEmbeds !== existingNoteContent) {
 					const writeStartedAt = getNowMs();
-					await plugin.app.vault.adapter.write(noteFilePath, noteContentWithEmbeds);
+					if (expectedMarkdown === existingNoteContent) await writeKnownContent(noteFilePath, noteContentWithEmbeds, existingNoteContent);
+					else {
+						// Preserve edits made during attachment fetch; do not acknowledge them.
+						if (await plugin.app.vault.adapter.read(noteFilePath) !== existingNoteContent) throw new Error("A local note changed while attaching media.");
+						await plugin.app.vault.adapter.write(noteFilePath, noteContentWithEmbeds);
+					}
 					metrics.writeNoteDurationMs += getNowMs() - writeStartedAt;
 				}
 			}
+			if (expectedMarkdown !== undefined && await plugin.app.vault.adapter.read(noteFilePath) === expectedMarkdown) {
+				await writeKnownContent(noteFilePath, expectedMarkdown, expectedMarkdown);
+			}
+
 			if (downloaded > 0) {
 				const attachmentWord = downloaded === 1 ? "attachment" : "attachments";
 				const skippedSuffix = skippedIdentical > 0 ? ` (${skippedIdentical} identical skipped)` : "";

@@ -133,7 +133,7 @@ describe("pushGoogleKeepNotes", () => {
 		expect(apiPushNotes).toHaveBeenCalledWith(email, token, expect.any(Array), "ABCD-EFGH-IJKL-MN12");
 	});
 
-	it("skips notes when mtime diff is below a second", async () => {
+	it("uploads same-second edits when no content baseline is available", async () => {
 		jest.useFakeTimers().setSystemTime(new Date("2024-01-01T00:00:00Z"));
 		const { plugin, adapter } = createPlugin();
 		adapter.list.mockResolvedValue({ files: ["Keep/note.md"], folders: [] });
@@ -141,12 +141,12 @@ describe("pushGoogleKeepNotes", () => {
 		adapter.stat.mockResolvedValue({
 			mtime: new Date("2024-01-01T00:00:00.500Z").getTime(),
 		});
+		(apiPushNotes as jest.Mock).mockResolvedValue({ results: [{ path: "note.md", success: true }] });
 
 		const result = await pushGoogleKeepNotes(plugin);
 
-		expect(result).toBe(0);
-		expect(apiPushNotes).not.toHaveBeenCalled();
-		expect(Notice).toHaveBeenCalledWith("No Google Keep notes to push.");
+		expect(result).toBe(1);
+		expect(apiPushNotes).toHaveBeenCalledTimes(1);
 	});
 
 	it("includes updated attachments in the payload", async () => {

@@ -6,10 +6,12 @@ import { SyncCancellationError, isSyncCancellationError } from "@app/sync-cancel
 import { buildFrontmatterWithSyncDate, wrapMarkdown } from "./frontmatter";
 import { FRONTMATTER_GOOGLE_KEEP_URL_KEY } from "./constants";
 import type { SyncCallbacks } from "./sync";
-import { collectNotesToPush, roundDateToSeconds, assertPendingAttachmentsUnchanged } from "./push/collectNotes";
+import { collectNotesToPush, assertPendingAttachmentsUnchanged } from "./push/collectNotes";
 import { getReviewedPushAction, prepareReviewedUploads, reviewPushNotes, type PushPlanOptions, type ReviewedPushNote } from "./push/merge-review";
 import { DEFAULT_MERGE_ACTION } from "./domain/merge-action";
-import { bodyBaseline, hasPendingUpload, localKeepKey, stripSyncState, withSyncState } from "./domain/sync-state";
+import { localStateBaseline, stampLocalBaseline } from "./domain/local-state";
+import { extractFrontmatter } from "./domain/note";
+import { bodyBaseline, hasPendingUpload, localKeepKey, stripSyncState, storedRemoteRevision, withRemoteRevision, withSyncState } from "./domain/sync-state";
 import { pushNotes as apiPushNotes, PushNotePayload, PushNoteResult } from "@integrations/server/keepApi";
 import { canonicalKeepUrl } from "@integrations/server/keepDeletions";
 import { getDeletionLedger } from "./local-deletions/ledger";
@@ -112,12 +114,13 @@ export async function pushGoogleKeepNotes(plugin: KeepSidianPlugin, callbacks?: 
 			throwIfSyncCancelled(plugin);
 			const batch = notesToPush.slice(index, index + PUSH_PAYLOAD_BATCH_SIZE);
 			for (const note of batch) {
-				if (note.mergeReview && (await plugin.app.vault.adapter.read(note.fullPath)) !== note.mergeReview.sourceContent) throw new Error("A local note changed during upload. Refresh the plan.");
+				if ((await plugin.app.vault.adapter.read(note.fullPath)) !== (note.mergeReview?.sourceContent ?? note.content)) throw new Error("A local note changed during upload. Refresh the plan.");
 				await assertPendingAttachmentsUnchanged(plugin, note);
+				if (note.localState && await localStateBaseline(plugin.app.vault.adapter, note.fullPath, note.mergeReview?.sourceContent ?? note.content) !== note.localState) throw new Error("Local media changed during upload. Refresh the plan.");
 			}
 			const payloadBatch: PushNotePayload[] = batch.map((note) => {
 				const frontmatter = stripSyncState(note.frontmatter);
-				return { path: note.relativePath, title: note.title, content: frontmatter === note.frontmatter ? note.content : wrapMarkdown(frontmatter, note.body), attachments: note.attachments.length > 0 ? note.attachments : undefined };
+				return { path: note.relativePath, title: note.title, content: frontmatter === note.frontmatter ? note.content : wrapMarkdown(frontmatter, note.body), attachments: note.attachments.length > 0 ? note.attachments : undefined, expected_revision: note.mergeReview?.remote?.remote_revision ?? storedRemoteRevision(note.frontmatter) };
 			});
 			const response = await apiPushNotes(email, token, payloadBatch, supporterKey);
 			const resultMap = mapResultsByPath(response?.results), batchKey = "push:notes", batchOptions = { batchKey, batchSize: NOTE_LOG_BATCH_SIZE };
@@ -125,10 +128,10 @@ export async function pushGoogleKeepNotes(plugin: KeepSidianPlugin, callbacks?: 
 				throwIfSyncCancelled(plugin);
 				const noteLabel = callbacks?.attempt ? `Note (attempt ${callbacks.attempt.id})` : `[${note.title}](${normalizePathSafe(note.fullPath)})`;
 				let pushSucceeded = false;
+				const result = resultMap.get(normalizePathSafe(note.relativePath)) ?? resultMap.get(note.relativePath);
 				try {
-					const pushTimestamp = roundDateToSeconds(new Date()).toISOString();
-					const result = resultMap.get(normalizePathSafe(note.relativePath)) ?? resultMap.get(note.relativePath);
-					if (result?.success === false || (note.mergeReview && result?.success !== true)) {
+					const pushTimestamp = new Date().toISOString();
+					if (result?.success !== true) {
 						firstFailure ??= new Error("The server did not confirm an upload");
 						await flushLogSync(plugin, { batchKey }); await logSync(plugin, `${noteLabel} - push failed: server rejected upload`); continue;
 					}
@@ -145,13 +148,23 @@ export async function pushGoogleKeepNotes(plugin: KeepSidianPlugin, callbacks?: 
 					}
 					// Hash the acknowledged body, not local completion time. If the
 					// server transforms it, the next remote read conservatively differs.
+					if (result?.remote_updated && Number.isFinite(Date.parse(result.remote_updated))) {
+						const line = `GoogleKeepUpdatedDate: ${new Date(result.remote_updated).toISOString()}`;
+						note.frontmatter = /^GoogleKeepUpdatedDate:/m.test(note.frontmatter) ? note.frontmatter.replace(/^GoogleKeepUpdatedDate:[^\r\n]*/m, line) : `${note.frontmatter}\n${line}`;
+					}
 					const baseline = result?.success === true ? await bodyBaseline(localKeepKey(note.frontmatter), note.body) : undefined;
-					const frontmatter = withSyncState(buildFrontmatterWithSyncDate(note.frontmatter, pushTimestamp), false, baseline);
+					const frontmatter = withRemoteRevision(withSyncState(buildFrontmatterWithSyncDate(note.frontmatter, pushTimestamp), false, baseline), result?.success === true ? result.remote_revision : undefined);
 					await assertPendingAttachmentsUnchanged(plugin, note);
-					if (note.mergeReview && (await plugin.app.vault.adapter.read(note.fullPath)) !== note.mergeReview.sourceContent) throw new Error("A local note changed while its upload was in flight. Local edits were preserved.");
+				if (note.localState && await localStateBaseline(plugin.app.vault.adapter, note.fullPath, note.mergeReview?.sourceContent ?? note.content) !== note.localState) throw new Error("Local media changed during upload. Refresh the plan.");
+					const currentContent = await plugin.app.vault.adapter.read(note.fullPath);
+					if (currentContent !== (note.mergeReview?.sourceContent ?? note.content)) {
+						throw new Error("A local note changed while its upload was in flight. Local edits were preserved.");
+					}
 					// Body, baseline and pending state change together. A failed local
 					// write leaves the original pending marker available for retry.
-					await plugin.app.vault.adapter.write(note.fullPath, wrapMarkdown(frontmatter, note.body));
+					const acknowledged = await stampLocalBaseline(plugin.app.vault.adapter, note.fullPath, wrapMarkdown(frontmatter, note.body), note.localMedia);
+					if (await plugin.app.vault.adapter.read(note.fullPath) !== (note.mergeReview?.sourceContent ?? note.content)) throw new Error("A local note changed while acknowledging its upload. Local edits were preserved.");
+					await plugin.app.vault.adapter.write(note.fullPath, acknowledged);
 					getDeletionLedger(plugin)?.stageUpload(
 						canonicalKeepUrl(result?.keep_url ?? localKeepKey(frontmatter)),
 						normalizePathSafe(note.fullPath),
@@ -163,6 +176,20 @@ export async function pushGoogleKeepNotes(plugin: KeepSidianPlugin, callbacks?: 
 					successCount += 1; pushSucceeded = true;
 				} catch (error: unknown) {
 					if (error instanceof SyncCancellationError) throw error;
+					// A confirmed creation must retain its identity even if newer
+					// local note/media edits prevent acknowledgement of its bytes.
+					if (result?.success === true && result.keep_url && localKeepKey(`GoogleKeepUrl: ${result.keep_url}`) && !localKeepKey(extractFrontmatter(note.mergeReview?.sourceContent ?? note.content)[0])) {
+						try {
+							const current = await plugin.app.vault.adapter.read(note.fullPath);
+							const [properties, body] = extractFrontmatter(current);
+							if (!localKeepKey(properties)) {
+								const linked = withRemoteRevision(withSyncState(`${properties}\nGoogleKeepUrl: ${result.keep_url}`, true), result.remote_revision);
+								if (await plugin.app.vault.adapter.read(note.fullPath) !== current) throw new Error("Local note changed before linking its confirmed identity.");
+								await plugin.app.vault.adapter.write(note.fullPath, wrapMarkdown(linked, body));
+							}
+						} catch { firstFailure ??= new Error("A confirmed upload could not be linked locally. Refresh Keep before retrying."); }
+					}
+
 					firstFailure ??= error instanceof Error ? error : new AppError("unknown", "Upload failed", error);
 					await flushLogSync(plugin, { batchKey }); await logSync(plugin, `${noteLabel} - error: ${JSON.stringify(safeSyncError(error))}`);
 				} finally {

@@ -345,8 +345,8 @@ describe("processAttachments", () => {
 		(requestUrl as jest.Mock).mockResolvedValueOnce({
 			arrayBuffer: mockArrayBuffer,
 		});
-		(mockPlugin.app.vault.adapter.exists as jest.Mock).mockResolvedValueOnce(true);
-		(mockPlugin.app.vault.adapter.readBinary as jest.Mock).mockResolvedValueOnce(mockArrayBuffer);
+		(mockPlugin.app.vault.adapter.exists as jest.Mock).mockResolvedValue(true);
+		(mockPlugin.app.vault.adapter.readBinary as jest.Mock).mockResolvedValue(mockArrayBuffer);
 
 		const blobUrls = ["https://example.com/image1.jpg"];
 		const saveLocation = "/test/location";
@@ -427,8 +427,8 @@ describe("processAttachments", () => {
 		(requestUrl as jest.Mock).mockResolvedValueOnce({
 			arrayBuffer: mockArrayBuffer,
 		});
-		(mockPlugin.app.vault.adapter.exists as jest.Mock).mockResolvedValueOnce(true);
-		(mockPlugin.app.vault.adapter.readBinary as jest.Mock).mockResolvedValueOnce(existingBuffer);
+		(mockPlugin.app.vault.adapter.exists as jest.Mock).mockResolvedValue(true);
+		(mockPlugin.app.vault.adapter.readBinary as jest.Mock).mockResolvedValue(existingBuffer);
 
 		const blobUrls = ["https://example.com/image1.jpg"];
 		const saveLocation = "/test/location";
@@ -441,4 +441,27 @@ describe("processAttachments", () => {
 		);
 		expectAttachmentMetrics(result, { downloaded: 1, skippedIdentical: 0 });
 	});
+});
+
+it("preserves local media bytes changed during remote fetch", async () => {
+	jest.clearAllMocks();
+	const original = new Uint8Array([1, 2, 3]).buffer;
+	const edited = new Uint8Array([4, 5, 6]).buffer;
+	let current = original;
+	const adapter = { exists: async () => true, readBinary: async () => current, writeBinary: jest.fn() };
+	(requestUrl as jest.Mock).mockImplementation(async () => { current = edited; return { arrayBuffer: new Uint8Array([7, 8, 9]).buffer }; });
+	const result = await processAttachments({ vault: { adapter } }, ["https://example.invalid/image.png"], "Keep");
+	expect(result.failures).toHaveLength(1);
+	expect(adapter.writeBinary).not.toHaveBeenCalled();
+	expect(current).toBe(edited);
+});
+
+it("refuses to replace existing media at a newly inferred destination", async () => {
+	jest.clearAllMocks();
+	const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).buffer;
+	const adapter = { exists: async (path: string) => path.endsWith(".png"), readBinary: async () => new Uint8Array([1]).buffer, writeBinary: jest.fn() };
+	(requestUrl as jest.Mock).mockResolvedValue({ arrayBuffer: png });
+	const result = await processAttachments({ vault: { adapter } }, ["https://example.invalid/blob"], "Keep");
+	expect(result.failures).toHaveLength(1);
+	expect(adapter.writeBinary).not.toHaveBeenCalled();
 });
