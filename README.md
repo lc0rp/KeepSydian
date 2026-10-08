@@ -51,7 +51,9 @@ Duplicate identities, unreadable candidates and invalid frontmatter stop imports
 before generation or note writes, even with AI off. Repair the affected files and
 retry. A cached suggestion still requires admission before it can be applied to
 an existing manual note; a fresh tag choice can reuse that result without a new
-provider call.
+provider call. Files beginning with a byte-order marker are held; save them as
+UTF-8 without BOM before retrying, because title/tag writers do not consistently
+support that format yet.
 The ledger also guards uncertain requests so losing a reply cannot cause an
 automatic repeat charge. A failed larger-tag request keeps its earlier result.
 

@@ -15,7 +15,7 @@ import { initializeLocalDeletionTracking } from "../../local-deletions/tracking"
 import { resolveNoteFolder } from "@services/note-path-resolver";
 import { hash } from "../state";
 import { chooseLegacyTags, type LegacyTagConsent } from "../consent";
-import { getEnrichmentLedger } from "../ledger";
+import { EnrichmentLedger, getEnrichmentLedger } from "../ledger";
 
 beforeAll(() => {
 	Object.defineProperty(globalThis, "crypto", { configurable: true, value: webcrypto });
@@ -145,6 +145,41 @@ it("holds a same-title late manual import through retries and restart, then reus
 	});
 });
 
+it("persists cached tag consent when every suggestion is already a manual tag", async () => {
+	const f = await fixture("Keep/{note.year}");
+	await initializeLocalDeletionTracking(f.plugin);
+	const path = "Keep/2020/Human title.md";
+	f.provider.mockImplementationOnce(async (_email, _token, rows) => {
+		await f.mkdir("Keep/2020");
+		f.disk.set(path, f.note.text.replace("\n---\nBody", '\nTitle: "Human title"\ntags: ["auto-topic"]\n---\nBody'));
+		return {
+			results: rows.map((row) => ({
+				source: row.source,
+				status: "ready" as const,
+				outputs: { title: "AI title", tags: ["topic"] },
+			})),
+		};
+	});
+	await f.run();
+	await runImportNotesFlow(f.plugin, false, () => "failed");
+	await runImportNotesFlow(f.plugin, false, () => "failed", {
+		...f.plugin.settings.premiumFeatures,
+		legacyTagConsent: chooseLegacyTags(),
+	});
+	expect(f.plugin.settings.lastSyncAttempt?.outcome).toBe("success");
+	expect(f.provider).toHaveBeenCalledTimes(1);
+	await new EnrichmentLedger(f.plugin).transaction(async (state) => {
+		expect(Object.values(state.records)[0]).toMatchObject({ tagsAdmitted: true, owned: {} });
+	});
+	const restarted = { ...f.plugin, settings: { ...f.plugin.settings } } as KeepSidianPlugin;
+	f.note.text = f.note.text.replace("Body", "Updated body");
+	f.note.enrichment_source.body_hash = await hash("Updated body");
+	f.note.enrichment_source.source_hash = await hash("Updated source");
+	await f.run(undefined, restarted);
+	expect(f.provider).toHaveBeenCalledTimes(2);
+	expect(extractFrontmatter(f.disk.get(path)!)[2]).toMatchObject({ Title: "Human title", tags: ["auto-topic"] });
+});
+
 it.each([false, true])("uses current root identity instead of stale metadata (AI=%s)", async (ai) => {
 	const f = await fixture("/", ai);
 	await f.mkdir("Elsewhere");
@@ -157,6 +192,19 @@ it.each([false, true])("uses current root identity instead of stale metadata (AI
 	f.metadataCache.getFileCache.mockReturnValue({ frontmatter: { GoogleKeepUrl: "https://keep.google.com/#NOTE/other" } });
 	await f.run();
 	expect([...f.disk.keys()].filter((key) => key.endsWith(".md"))).toEqual([path]);
+	expect(f.provider).not.toHaveBeenCalled();
+});
+
+it.each([false, true])("holds a byte-order marker before identity admission (AI=%s)", async (ai) => {
+	const f = await fixture("/", ai);
+	await f.mkdir("Elsewhere");
+	const path = "Elsewhere/Manual.md";
+	const text = "\uFEFF" + f.note.text;
+	f.disk.set(path, text);
+	await initializeLocalDeletionTracking(f.plugin);
+	await expect(f.run()).rejects.toThrow(/byte-order marker/i);
+	expect([...f.disk.keys()].filter((key) => key.endsWith(".md"))).toEqual([path]);
+	expect(f.disk.get(path)).toBe(text);
 	expect(f.provider).not.toHaveBeenCalled();
 });
 
