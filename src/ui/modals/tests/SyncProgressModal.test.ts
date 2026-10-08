@@ -509,6 +509,21 @@ describe("SyncProgressModal", () => {
 		expect(modalOptions.buildSyncPlan).toHaveBeenLastCalledWith("import", expect.any(Object), { kind: "last-sync" });
 	});
 
+	test("legacy AI choice defaults off and grants only the next download review", async () => {
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Customize sync").click();
+		await flushUI();
+		const input = modal.contentEl.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+		expect(input.checked).toBe(false);
+		input.checked = true;
+		input.dispatchEvent(new Event("change"));
+		await modal.beginReview();
+		expect(modalOptions.buildSyncPlan.mock.calls.at(-1)?.[1].legacyTagConsent).toBeDefined();
+		await modal.beginReview();
+		expect(modalOptions.buildSyncPlan.mock.calls.at(-1)?.[1].legacyTagConsent).toBeUndefined();
+	});
+
 	test("customize sync two-way mode surfaces gate guidance and deep-links to settings", async () => {
 		const modal = new SyncProgressModal(app, modalOptions);
 		modal.onOpen();

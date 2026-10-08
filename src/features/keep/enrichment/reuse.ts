@@ -6,7 +6,8 @@ import { CONFLICT_FILE_SUFFIX } from "../constants";
 import { buildExistingKeepNoteIndex } from "../domain/noteLookup";
 import { extractFrontmatter, getFrontmatterStringValue, type PreNormalizedNote } from "../domain/note";
 import { getEnrichmentLedger, type EnrichmentLedger } from "./ledger";
-import { hash, observeLocal, effectiveTitle, tags, type EnrichmentRecord } from "./state";
+import { hash, bodyHash, observeLocal, effectiveTitle, tags, type EnrichmentRecord } from "./state";
+import { bindLegacyTagConsent, permitsLegacyTags } from "./consent";
 
 export function fetchFirstFlags(flags: PremiumFeatureFlags): PremiumFeatureFlags {
 	const filters = { ...flags };
@@ -61,6 +62,13 @@ export async function enrichImportNotes(
 	return activeLedger.transaction(async (state, save) => {
 		const before = JSON.stringify(state);
 		const namespace = await activeLedger.namespace();
+		const consentSources = await Promise.all(
+			notes.map(async (note) => {
+				const parsed = EnrichmentSourceSchema.safeParse(note.enrichment_source);
+				return parsed.success ? `${await activeLedger.key(parsed.data)}:${parsed.data.source_hash}` : "";
+			})
+		);
+		for (const note of notes) bindLegacyTagConsent(note.enrichment_legacy_consent, namespace, consentSources);
 		let flags = requested;
 		if (Array.isArray(requested.suggest_tags?.restrict_tags)) {
 			state.vocabulary[namespace] ??= [...new Set(requested.suggest_tags.restrict_tags)].sort();
@@ -93,12 +101,26 @@ export async function enrichImportNotes(
 					source,
 					projection: { body: source.body_hash, title: source.title, labels: source.labels },
 					manualTitle: paths.length > 0,
+					tagsAdmitted: paths.length === 0,
 					manualKeepLabels: [],
 					suppressed: [],
 					suppressedValues: [],
 					conflicts: [],
 					owned: {},
 				};
+			if (record.tagsAdmitted === undefined)
+				record.tagsAdmitted = paths.length === 0 || Object.keys(record.owned).length > 0;
+			if (!record.local && paths.length) {
+				const markdown = contents.get(paths[0])!;
+				record.local = {
+					source,
+					path: paths[0],
+					title: effectiveTitle(paths[0], markdown),
+					body: await bodyHash(markdown),
+					tags: tags(markdown),
+					owned: {},
+				};
+			}
 			await activeLedger.recover(record);
 			// Planning can observe a newer snapshot, but only an applied/confirmed
 			// receipt advances the baseline used for manual field reconciliation.
@@ -164,6 +186,13 @@ export async function enrichImportNotes(
 					titleSource: sourceTitle !== undefined,
 				},
 			};
+			const tagConsent = permitsLegacyTags(
+				original.enrichment_legacy_consent,
+				namespace,
+				`${key}:${source.source_hash}`
+			);
+			const eligibleTags = record.tagsAdmitted || tagConsent;
+			note.enrichment_legacy_held = !!flags.suggest_tags && !eligibleTags;
 			const eligibleTitle = flags.suggest_title !== undefined && !record.manualTitle;
 			const features: LocalEnrichmentRequest["features"] = {};
 			const keys: Record<string, string> = {};
@@ -206,7 +235,7 @@ export async function enrichImportNotes(
 					cached?.status === "ready" &&
 					cached.coverage < flags.suggest_tags!.max_tags &&
 					(cached.attemptedCoverage ?? cached.coverage) < flags.suggest_tags!.max_tags;
-				if (!cached || upgrade) {
+				if ((!cached || upgrade) && (feature !== "tags" || eligibleTags)) {
 					if (feature === "title") features.suggest_title = flags.suggest_title;
 					else features.suggest_tags = flags.suggest_tags;
 				}
@@ -226,6 +255,7 @@ export async function enrichImportNotes(
 		for (let offset = 0; offset < missing.length; offset += 16) {
 			plugin.throwIfSyncCancelled?.();
 			const batch = missing.slice(offset, offset + 16);
+			for (const item of batch) if (item.request!.features.suggest_tags) item.record.tagsAdmitted = true;
 			for (const item of batch)
 				for (const feature of ["title", "tags"] as const) {
 					if (item.request!.features[feature === "title" ? "suggest_title" : "suggest_tags"]) {

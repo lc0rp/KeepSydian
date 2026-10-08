@@ -52,6 +52,7 @@ import { getDeletionLedger } from "./local-deletions/ledger";
 import { assertDownloadIdentityPresentOrUntracked } from "./local-deletions/download";
 import { enrichImportNotes, fetchFirstFlags } from "./enrichment/reuse";
 import { getEnrichmentLedger } from "./enrichment/ledger";
+import type { LegacyTagConsent } from "./enrichment/consent";
 
 const LAST_SUCCESSFUL_SYNC_DATE_KEY = "KeepSidianLastSuccessfulSyncDate";
 const NOTE_LOG_BATCH_KEY = "sync:notes";
@@ -63,6 +64,7 @@ interface Preparation {
 	lastActive: number;
 	operationId?: string;
 	featureFlags?: PremiumFeatureFlags;
+	legacyTagConsent?: LegacyTagConsent;
 	originalAttemptId?: string;
 	notes: PreNormalizedNote[];
 	offset: number;
@@ -546,6 +548,7 @@ function buildImportPlanEntry(
 			detail = "Applies available suggestions while preserving your manual edits.";
 		}
 		if (note.enrichment_pending) detail = `${detail ? `${detail} ` : ""}New AI suggestions are requested only for selected notes.`;
+		if (note.enrichment_legacy_held) detail = `${detail ? `${detail} ` : ""}Previously imported titles and tags are kept. New AI tags require the choice in Customize sync.`;
 
 		return {
 			id: `import:${index}:${normalizePathSafe(noteFilePath)}`,
@@ -616,7 +619,8 @@ async function buildImportSyncPlanBase(
 		preparation &&
 		(preparation.identity !== identity ||
 			Date.now() - preparation.lastActive >= 14 * 60_000 ||
-			Date.now() - preparation.created >= 2 * 60 * 60_000)
+			Date.now() - preparation.created >= 2 * 60 * 60_000 ||
+			preparation.legacyTagConsent !== options?.legacyTagConsent)
 	) {
 		preparations.delete(plugin);
 		preparation = undefined;
@@ -633,6 +637,7 @@ async function buildImportSyncPlanBase(
 		preparation = {
 			identity,
 			featureFlags: requestedFeatureFlags,
+			legacyTagConsent: options?.legacyTagConsent,
 			created: Date.now(),
 			lastActive: Date.now(),
 			operationId: epoch ? `${epoch}:${Date.now()}:${Math.random().toString(36).slice(2)}` : undefined,
@@ -705,7 +710,9 @@ async function buildImportSyncPlanBase(
 			preparations.delete(plugin);
 	}
 	await callbacks?.attempt?.transition("plan");
-	if (featureFlags) fetched.notes = await enrichImportNotes(plugin, fetched.notes, featureFlags, undefined, undefined, false);
+	if (featureFlags) fetched.notes = await enrichImportNotes(plugin,
+		fetched.notes.map((note) => ({ ...note, enrichment_legacy_consent: preparation.legacyTagConsent })),
+		featureFlags, undefined, undefined, false);
 	const existingKeepNoteIndex = await buildExistingKeepNoteIndex(plugin.app, plugin.settings.saveLocation);
 	const entries = await Promise.all(
 		fetched.notes.map((note, index) =>
@@ -830,7 +837,8 @@ export async function importGoogleKeepNotesWithOptions(
 		plugin,
 		async (offset, limit, filters, cursor) => {
 			const response = await apiFetchNotesWithPremium(email, token, fetchFirstFlags(featureFlags), offset, limit, filters, cursor, supporterKey);
-			return { ...response, notes: response.notes.map((note) => ({ ...note, enrichment_requested: featureFlags })) };
+			return { ...response, notes: response.notes.map((note) => ({ ...note, enrichment_requested: featureFlags,
+				enrichment_legacy_consent: options.legacyTagConsent })) };
 		},
 		{ ...callbacks, archivedStatus: options.archivedStatus ?? "active-only" },
 		downloadScope,
