@@ -5,6 +5,7 @@ import { execFileSync } from "child_process";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { resolve } from "path";
 import readline from "readline";
+import { incrementPrerelease, parseVersion } from "./release-version.mjs";
 
 const ENV_FILE_PATH = ".env.production";
 const DEFAULT_SERVER_SERVICE = "keepsidianserver";
@@ -222,26 +223,6 @@ const promptServerReleaseDecision = async ({ latestServerTag, reasons }) => {
 	throw new Error(`Invalid selection: ${normalized || "<empty>"}`);
 };
 
-const parseVersion = (version) => {
-	const match = version.match(/^(\d+)\.(\d+)\.(\d+)(?:-(alpha|beta)\.(\d+))?$/);
-	if (!match) {
-		throw new Error(`Invalid semantic version: ${version}`);
-	}
-
-	const [, majorStr, minorStr, patchStr, channel, prereleaseNumberStr] = match;
-	const major = Number.parseInt(majorStr, 10);
-	const minor = Number.parseInt(minorStr, 10);
-	const patch = Number.parseInt(patchStr, 10);
-
-	return {
-		major,
-		minor,
-		patch,
-		baseVersion: `${major}.${minor}.${patch}`,
-		prerelease: channel ? { channel, number: Number.parseInt(prereleaseNumberStr, 10) } : null,
-	};
-};
-
 const bumpBaseVersion = (parsedVersion, releaseType) => {
 	switch (releaseType) {
 		case "major":
@@ -296,9 +277,8 @@ const determineNextVersion = async (currentVersion) => {
 	if (alphaBetaChoice === "alpha" || alphaBetaChoice === "beta") {
 		const sameChannel = parsed.prerelease && parsed.prerelease.channel === alphaBetaChoice;
 		if (sameChannel) {
-			const nextNumber = parsed.prerelease.number + 1;
 			return {
-				nextVersion: `${parsed.baseVersion}-${alphaBetaChoice}.${nextNumber}`,
+				nextVersion: incrementPrerelease(parsed),
 				releaseTypeLabel: `${alphaBetaChoice} increment`,
 			};
 		}
