@@ -48,4 +48,3 @@ export function extractAttachmentReferences(noteContent: string, notePath: strin
 	while ((mdMatch = markdownImageRegex.exec(noteContent)) !== null) processMatch(mdMatch[1]);
 	return Array.from(references);
 }
-
