@@ -150,7 +150,7 @@ describe("canonical Keep identity lookup", () => {
 		expect(index.pathByKeepUrl.get(CANONICAL_URL)).toBe("Keep/Another rename.md");
 	});
 
-	it("applies the same rules to metadata-cache-backed root-vault lookup", async () => {
+	it("reads current identities at the vault root even when metadata is populated", async () => {
 		const base = fixture();
 		const app = {
 			...base,
@@ -162,6 +162,7 @@ describe("canonical Keep identity lookup", () => {
 		};
 		const index = await buildExistingKeepNoteIndex(app);
 		expect(index.pathByKeepUrl.get(CANONICAL_URL)).toBe(ORIGINAL_PATH);
-		expect(app.vault.adapter.read).not.toHaveBeenCalled();
+		expect(app.vault.adapter.read).toHaveBeenCalledWith(ORIGINAL_PATH);
+		expect(app.vault.adapter.read).not.toHaveBeenCalledWith(CONFLICT_PATH);
 	});
 });

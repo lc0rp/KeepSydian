@@ -303,8 +303,19 @@ export class EnrichmentLedger {
 				plan.title = undefined;
 				plan.titleSource = false;
 				plan.removeValues = [];
-				if (!record.tagsAdmitted) plan.tags = {};
 			}
+			if (
+				!record.tagsAdmitted &&
+				plan.tags !== undefined &&
+				permitsLegacyTags(
+					note.enrichment_legacy_consent,
+					await this.namespace(),
+					`${note.local_enrichment!.receipt}:${source.source_hash}`
+				)
+			)
+				record.tagsAdmitted = true;
+			// Accepted output is reusable data, not permission to apply it to a legacy file.
+			if (!record.tagsAdmitted) plan.tags = {};
 			let content = proposed;
 			if (
 				plan.title !== undefined &&

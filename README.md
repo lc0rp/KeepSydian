@@ -47,6 +47,11 @@ Folder patterns search the fixed ancestor before the first variable, including
 older date/title folders. A variable in the first segment requires a vault-root
 scan. Admission and destination lookup read the same identity scope; a cold
 metadata cache cannot create another copy of a linked note.
+Duplicate identities, unreadable candidates and invalid frontmatter stop imports
+before generation or note writes, even with AI off. Repair the affected files and
+retry. A cached suggestion still requires admission before it can be applied to
+an existing manual note; a fresh tag choice can reuse that result without a new
+provider call.
 The ledger also guards uncertain requests so losing a reply cannot cause an
 automatic repeat charge. A failed larger-tag request keeps its earlier result.
 

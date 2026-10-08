@@ -34,7 +34,7 @@ export async function enrichImportNotes(
 			tags: undefined,
 			processing_warnings: [...(note.processing_warnings ?? []), "local_enrichment_unavailable"],
 		}));
-	const index = await buildExistingKeepNoteIndex(plugin.app, plugin.settings.saveLocation, true);
+	const index = await buildExistingKeepNoteIndex(plugin.app, plugin.settings.saveLocation);
 	const credentials = {
 		email: plugin.settings.email,
 		token: plugin.settings.token,
@@ -55,7 +55,7 @@ export async function enrichImportNotes(
 		if (path.includes(CONFLICT_FILE_SUFFIX)) continue;
 		const markdown = await plugin.app.vault.adapter.read(path);
 		contents.set(path, markdown);
-		const identity = canonicalKeepUrl(getFrontmatterStringValue(extractFrontmatter(markdown)[2], "GoogleKeepUrl"));
+		const identity = canonicalKeepUrl(getFrontmatterStringValue(extractFrontmatter(markdown, true)[2], "GoogleKeepUrl"));
 		if (identity) identities.set(identity, [...(identities.get(identity) ?? []), path]);
 	}
 	const activeLedger = ledger ?? getEnrichmentLedger(plugin);
@@ -348,7 +348,7 @@ export async function enrichImportNotes(
 				note.local_enrichment!.title ??= title.output;
 			}
 			const tagResult = state.cache[keys.tags];
-			if (tagResult?.status === "ready" && Array.isArray(tagResult.output)) {
+			if (!note.enrichment_legacy_held && tagResult?.status === "ready" && Array.isArray(tagResult.output)) {
 				const rendered = Object.fromEntries(
 					tagResult.output
 						.slice(0, flags.suggest_tags!.max_tags)
