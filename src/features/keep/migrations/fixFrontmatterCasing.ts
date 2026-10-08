@@ -89,10 +89,8 @@ async function runFrontmatterFix(plugin: KeepSidianPlugin): Promise<void> {
 				continue;
 			}
 
-			const newline = match[0].includes("\r\n") ? "\r\n" : "\n";
-			const updatedFrontmatter = `---${newline}${updated}${newline}---`;
-			const remainder = content.slice(match[0].length);
-			const updatedContent = `${updatedFrontmatter}${remainder}`;
+			const openingLength = content.indexOf("\n") + 1;
+			const updatedContent = content.slice(0, openingLength) + updated + content.slice(openingLength + frontmatterBlock.length);
 
 			if (updatedContent !== content) {
 				readKeepNoteIdentity(extractFrontmatter(updatedContent, true)[2], filePath);
@@ -122,6 +120,9 @@ async function markFixComplete(plugin: KeepSidianPlugin): Promise<void> {
 }
 
 function replaceHyphenatedKeys(frontmatter: string, properties: Record<string, unknown>): { updated: string; changed: boolean } {
+	// Parsed equality loses shadowed merge entries. Only consider documents whose
+	// physical lines independently prove their root-key ownership; defer richer YAML.
+	if (!hasStandaloneRootProperties(frontmatter, properties)) return { updated: frontmatter, changed: false };
 	let updated = frontmatter;
 	let changed = false;
 	const expected = { ...properties };
@@ -145,6 +146,27 @@ function replaceHyphenatedKeys(frontmatter: string, properties: Record<string, u
 	// Legacy aliases are supported: skip the whole rewrite unless only root keys changed.
 	if (changed && !sameYamlData(expected, parseYaml(updated))) return { updated: frontmatter, changed: false };
 	return { updated, changed };
+}
+
+function hasStandaloneRootProperties(frontmatter: string, properties: Record<string, unknown>): boolean {
+	const seen = new Set<string>();
+	for (const line of frontmatter.split(/\r?\n/)) {
+		if (/^\s*(?:#.*)?$/.test(line)) continue;
+		const match = /^(?:"([^"\\]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))[\t ]*:/.exec(line);
+		if (!match) return false;
+		const key = match[1] ?? match[2] ?? match[3];
+		try {
+			const parsed: unknown = parseYaml(line);
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) ||
+				Object.keys(parsed).length !== 1 || !Object.prototype.hasOwnProperty.call(parsed, key) ||
+				!Object.prototype.hasOwnProperty.call(properties, key) || seen.has(key) ||
+				!sameYamlData((parsed as Record<string, unknown>)[key], properties[key])) return false;
+			seen.add(key);
+		} catch {
+			return false;
+		}
+	}
+	return seen.size === Object.keys(properties).length;
 }
 
 function sameYamlData(left: unknown, right: unknown, ancestors = new Set<object>()): boolean {

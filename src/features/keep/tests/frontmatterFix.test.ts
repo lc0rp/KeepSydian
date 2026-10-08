@@ -1,6 +1,6 @@
 import KeepSidianPlugin from "main";
 import { ensurePascalCaseFrontmatter } from "../migrations/fixFrontmatterCasing";
-import { ambiguousMigrationCases } from "./frontmatterFixtures";
+import { ambiguousMigrationCases, mixedNewlineMigrationCases } from "./frontmatterFixtures";
 
 describe("ensurePascalCaseFrontmatter", () => {
 	function createPlugin(content: string) {
@@ -70,6 +70,12 @@ describe("ensurePascalCaseFrontmatter", () => {
 		expect(adapter.read).toHaveBeenCalledTimes(1);
 	});
 
+	it.each(mixedNewlineMigrationCases)("preserves every non-key byte with mixed newlines: %j", async (original) => {
+		const { plugin, adapter } = createPlugin(original);
+		await ensurePascalCaseFrontmatter(plugin);
+		expect(adapter.write).toHaveBeenCalledWith("Keep/note.md", original.replace("google-keep-url:", "GoogleKeepUrl:"));
+	});
+
 	it.each([
 		'google-keep-url: https://keep.google.com/#NOTE/n1\nmetadata: "first\ngoogle-keep-url: literal text\nlast"',
 		'google-keep-created-date: "first\ngoogle-keep-created-date: literal text\nlast"',
@@ -81,8 +87,8 @@ describe("ensurePascalCaseFrontmatter", () => {
 		expect(adapter.write).not.toHaveBeenCalled();
 	});
 
-	it("allows a root-key rename while preserving arrays, dates and shared metadata", async () => {
-		const original = "---\ngoogle-keep-url: https://keep.google.com/#NOTE/n1\nmetadata: &shared\n  values: [2024-01-01, null, .nan, true, text]\ncopy: *shared\n---\nBody";
+	it("allows a root-key rename while preserving single-line arrays and dates", async () => {
+		const original = "---\ngoogle-keep-url: https://keep.google.com/#NOTE/n1\nmetadata: {values: [2024-01-01, null, .nan, true, text]}\n---\nBody";
 		const { plugin, adapter } = createPlugin(original);
 		await ensurePascalCaseFrontmatter(plugin);
 		expect(adapter.write).toHaveBeenCalledWith("Keep/note.md", original.replace("google-keep-url:", "GoogleKeepUrl:"));
@@ -137,11 +143,11 @@ describe("ensurePascalCaseFrontmatter", () => {
 		}
 	);
 
-	it("preserves nested metadata while migrating top-level keys", async () => {
+	it("defers a multiline nested document without changing top-level keys", async () => {
 		const original = "---\ngoogle-keep-url: https://keep.google.com/#NOTE/n1\nmetadata:\n  google-keep-url: unrelated\n---\nBody";
 		const { plugin, adapter } = createPlugin(original);
 		await ensurePascalCaseFrontmatter(plugin);
-		expect(adapter.write).toHaveBeenCalledWith("Keep/note.md", original.replace(/^google-keep-url:/m, "GoogleKeepUrl:"));
+		expect(adapter.write).not.toHaveBeenCalled();
 	});
 
 	it("does not treat a migration key in a comment as stored metadata", async () => {
