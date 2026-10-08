@@ -24,6 +24,27 @@ before the plugin writes to your vault. Or, you can set it and forget it, and le
 
 ## Move quick captures into Obsidian
 
+### AI reuse in the local implementation branch
+
+AI title and tag suggestions are kept in a vault-local ledger. Repeated syncs,
+date-range changes, credential refreshes and releases reuse accepted results.
+Relevant content or prompt changes can request a new result. Prefix changes and
+lower tag limits use the same raw tags. Review preparation does no AI work; a
+missing suggestion is requested only when its note is selected for execution.
+
+Existing titles and tags start as manual. The plugin protects edited titles,
+keeps deliberately removed AI tags removed, and preserves manual tags. Competing
+Keep and Obsidian field edits hold uploads until those fields are resolved.
+The ledger also guards uncertain requests so losing a reply cannot cause an
+automatic repeat charge. A failed larger-tag request keeps its earlier result.
+
+This local branch needs the matching server contract. It has no automatic cache
+expiry or regeneration on model-default changes. It has no explicit retry/reset
+UI yet. Missing or damaged initialized metadata stops AI work. Simultaneous apps
+or separate devices do not have a shared durable claim. The ledger contains
+private titles, labels and outputs; keep it under the vault's normal protection.
+Installed desktop/mobile UAT and any release remain separate approval steps.
+
 I built KeepSydian because I use Keep for quick capture and Obsidian for everything else.
 
 KeepSydian manages the handoff seamlessly. With a few clicks, you can:

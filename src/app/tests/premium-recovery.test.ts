@@ -243,14 +243,14 @@ describe("premium recovery through the manual sync caller", () => {
 		expect(JSON.parse(String(originalRequest.body))).toEqual({
 			feature_flags: {
 				keep_state_filter: { archived: "all" },
-				...(ai ? { suggest_title: {}, suggest_tags: { max_tags: 5, restrict_tags: false, prefix: "auto-" } } : {}),
 			},
 		});
 		expect(plan.importNotes?.map((note) => note.id)).toEqual(
 			Array.from({ length: 597 }, (_, index) => `note-${index}`)
 		);
 		expect(server.generatedPages).toHaveLength(150);
-		expect(server.enrichedNotes).toBe(ai ? 597 : 0);
+		// Fetch and replay are always free of AI work, even when AI is enabled.
+		expect(server.enrichedNotes).toBe(0);
 		expect(records().some((record) => record.event === "review-ready" && record.resumedFrom === originalAttempt)).toBe(
 			true
 		);
@@ -276,7 +276,7 @@ describe("premium recovery through the manual sync caller", () => {
 		expect(server.requests[page - 1]).toEqual(server.requests[page]);
 		expect(plan.importNotes).toHaveLength(597);
 		expect(new Set(plan.importNotes?.map((note) => note.id)).size).toBe(597);
-		expect(server.enrichedNotes).toBe(597);
+		expect(server.enrichedNotes).toBe(0);
 		assertNoImport();
 	});
 
@@ -293,7 +293,7 @@ describe("premium recovery through the manual sync caller", () => {
 			Array.from({ length: 597 }, (_, index) => `note-${index}`)
 		);
 		expect(server.generatedPages).toHaveLength(150);
-		expect(server.enrichedNotes).toBe(597);
+		expect(server.enrichedNotes).toBe(0);
 		assertNoImport();
 	});
 
@@ -325,7 +325,7 @@ describe("premium recovery through the manual sync caller", () => {
 		expect(plan.importNotes).toHaveLength(650);
 		expect(new Set(plan.importNotes?.map((note) => note.id)).size).toBe(650);
 		expect(server.generatedPages).toHaveLength(163);
-		expect(server.enrichedNotes).toBe(650);
+		expect(server.enrichedNotes).toBe(0);
 		expect(
 			server.requests.every(
 				(request) => request.headers?.["X-Sync-Operation"] === original.headers?.["X-Sync-Operation"]
@@ -350,7 +350,7 @@ describe("premium recovery through the manual sync caller", () => {
 		expect(plan.notes).toHaveLength(8);
 		expect(lookup).toHaveBeenCalledTimes(1);
 		expect(server.requests.every((request) => request.body === server.requests[0].body)).toBe(true);
-		expect(server.enrichedNotes).toBe(8);
+		expect(server.enrichedNotes).toBe(0);
 		assertNoImport();
 	});
 

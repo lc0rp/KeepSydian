@@ -5,6 +5,7 @@ import type { PreNormalizedNote } from "@features/keep/domain/note";
 import { GoogleKeepImportResponseSchema, PremiumFeatureFlagsSchema } from "@schemas/keep";
 import type { KeepArchivedStatus, KeepPinnedStatus } from "../../types/subscription";
 import { recoveryUatHeaders, recoveryUatResponse } from "@services/recovery-uat";
+import { LocalEnrichmentResponseSchema, type EnrichmentSource } from "@schemas/keep";
 
 export interface GoogleKeepImportResponse {
 	notes: Array<PreNormalizedNote>;
@@ -24,7 +25,7 @@ export interface PremiumFeatureFlags {
 		pinned?: KeepPinnedStatus;
 		archived?: KeepArchivedStatus;
 	};
-	suggest_title?: Record<string, never>;
+	suggest_title?: { prompt?: string };
 	suggest_tags?: {
 		max_tags: number;
 		restrict_tags: boolean | string[];
@@ -47,6 +48,7 @@ export interface PushNotePayload {
 }
 
 export interface PushNoteResult {
+	enrichment_source?: EnrichmentSource;
 	path?: string;
 	success?: boolean;
 	message?: string;
@@ -54,6 +56,20 @@ export interface PushNoteResult {
 	keep_url?: string;
 	remote_revision?: string;
 	remote_updated?: string;
+}
+
+export interface LocalEnrichmentRequest {
+	source: EnrichmentSource;
+	features: Pick<PremiumFeatureFlags, "suggest_title" | "suggest_tags">;
+	title_context?: string;
+}
+
+export async function enrichLocalNotes(email: string, token: string, notes: LocalEnrichmentRequest[], supporterKey?: string) {
+	const raw = await httpPostJson<unknown, { notes: LocalEnrichmentRequest[] }>(
+		`${KEEPSIDIAN_SERVER_URL}/keep/enrich/local/v1`, { notes },
+		withSupporterKey({ "X-User-Email": email, Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, supporterKey)
+	);
+	return LocalEnrichmentResponseSchema.parse(raw);
 }
 
 export interface PushNotesResponse {

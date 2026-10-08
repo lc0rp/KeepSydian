@@ -1,5 +1,23 @@
 import { z } from "zod";
 
+export const EnrichmentSourceSchema = z.object({
+	version: z.literal(1), id: z.string().regex(/^[A-Za-z0-9._-]{1,200}$/),
+	incarnation: z.string().regex(/^[a-f0-9]{64}$/), body_hash: z.string().regex(/^[a-f0-9]{64}$/),
+	source_hash: z.string().regex(/^[a-f0-9]{64}$/), title: z.string().max(2000),
+	labels: z.array(z.string().max(100)).max(256), has_body: z.boolean(),
+});
+export type EnrichmentSource = z.infer<typeof EnrichmentSourceSchema>;
+export const EnrichmentProvenanceSchema = z.object({
+	model_requested: z.string(), model_revision: z.literal("unknown"),
+	parameters: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])),
+	request_hash: z.string().regex(/^[a-f0-9]{64}$/), prompt_hash: z.string().regex(/^[a-f0-9]{64}$/), schema_hash: z.string().regex(/^[a-f0-9]{64}$/),
+});
+export const LocalEnrichmentResponseSchema = z.object({ results: z.array(z.object({
+	source: EnrichmentSourceSchema, status: z.enum(["ready", "uncertain"]),
+	outputs: z.object({ title: z.string().min(1).max(2000).optional(), tags: z.array(z.string().min(1).max(100)).max(20).optional() }),
+	provenance: EnrichmentProvenanceSchema.optional(),
+})).max(16) });
+
 // Schema for a pre-normalized note as returned by the server
 export const PreNormalizedNoteSchema = z.object({
 	id: z.string().optional(),
@@ -26,6 +44,7 @@ export const PreNormalizedNoteSchema = z.object({
 	blob_names: z.array(z.string()).optional(),
 	media: z.array(z.string()).optional(),
 	header: z.string().optional(),
+	enrichment_source: EnrichmentSourceSchema.optional(),
 });
 
 // Response schema for the Keep import endpoints
@@ -47,7 +66,7 @@ export const PremiumFeatureFlagsSchema = z.object({
 		})
 		.optional(),
 	// Server expects an empty object if present
-	suggest_title: z.object({}).optional(),
+	suggest_title: z.object({ prompt: z.string().min(1).max(10000).optional() }).optional(),
 	suggest_tags: z
 		.object({
 			max_tags: z.number(),
