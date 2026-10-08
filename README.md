@@ -53,6 +53,9 @@ retry. A present `GoogleKeepUrl` must contain one supported Google Keep note URL
 lists, objects, empty values, other types, invalid URLs and conflicting aliases
 stop the scan. A note with no identity property remains a legitimate unlinked
 note. Discovery, AI admission and destination lookup use the same validated URL.
+Identity validation also precedes the one-time frontmatter casing migration.
+That migration preserves equivalent aliases when the canonical key already
+exists and changes only top-level keys.
 A cached suggestion still requires admission before it can be applied to
 an existing manual note; a fresh tag choice can reuse that result without a new
 provider call. Files beginning with a byte-order marker are held; save them as

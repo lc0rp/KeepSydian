@@ -1,5 +1,8 @@
 import type KeepSidianPlugin from "@app/main";
+import { parseYaml } from "obsidian";
 import { normalizePathSafe } from "@services/paths";
+import { extractFrontmatter } from "../domain/note";
+import { readKeepNoteIdentity } from "../domain/noteLookup";
 import {
 	FRONTMATTER_GOOGLE_KEEP_CREATED_DATE_KEY,
 	FRONTMATTER_GOOGLE_KEEP_UPDATED_DATE_KEY,
@@ -77,7 +80,11 @@ async function runFrontmatterFix(plugin: KeepSidianPlugin): Promise<void> {
 				continue;
 			}
 
-			const { updated, changed } = replaceHyphenatedKeys(frontmatterBlock);
+			const [, , properties] = extractFrontmatter(content, true);
+			readKeepNoteIdentity(properties, filePath);
+			// The shared reader adds compatibility aliases; collision checks need only stored keys.
+			const storedProperties = (parseYaml(frontmatterBlock) ?? {}) as Record<string, unknown>;
+			const { updated, changed } = replaceHyphenatedKeys(frontmatterBlock, storedProperties);
 			if (!changed) {
 				continue;
 			}
@@ -88,6 +95,7 @@ async function runFrontmatterFix(plugin: KeepSidianPlugin): Promise<void> {
 			const updatedContent = `${updatedFrontmatter}${remainder}`;
 
 			if (updatedContent !== content) {
+				readKeepNoteIdentity(extractFrontmatter(updatedContent, true)[2], filePath);
 				await Promise.resolve(adapter.write(filePath, updatedContent));
 			}
 		} catch (error) {
@@ -113,15 +121,17 @@ async function markFixComplete(plugin: KeepSidianPlugin): Promise<void> {
 	}
 }
 
-function replaceHyphenatedKeys(frontmatter: string): { updated: string; changed: boolean } {
+function replaceHyphenatedKeys(frontmatter: string, properties: Record<string, unknown>): { updated: string; changed: boolean } {
 	let updated = frontmatter;
 	let changed = false;
 
 	for (const { hyphenated, pascal } of FRONTMATTER_KEY_MAPPINGS) {
-		const pattern = new RegExp(`(^|\\r?\\n)(\\s*)${escapeRegExp(hyphenated)}(\\s*:)`, "g");
-		const next = updated.replace(pattern, (match, prefix, spacing, separator) => {
+		// Existing aliases remain readable; never turn them into duplicate YAML keys.
+		if (Object.prototype.hasOwnProperty.call(properties, pascal)) continue;
+		const pattern = new RegExp(`(^|\\r?\\n)${escapeRegExp(hyphenated)}([\\t ]*:)`, "g");
+		const next = updated.replace(pattern, (match, prefix, separator) => {
 			changed = true;
-			return `${prefix}${spacing}${pascal}${separator}`;
+			return `${prefix}${pascal}${separator}`;
 		});
 		if (next !== updated) {
 			updated = next;
