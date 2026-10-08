@@ -55,9 +55,11 @@ stop the scan. A note with no identity property remains a legitimate unlinked
 note. Discovery, AI admission and destination lookup use the same validated URL.
 Identity validation also precedes the one-time frontmatter casing migration.
 That migration preserves equivalent aliases when the canonical key already
-exists. It writes only when parsed data proves that the intended top-level keys
-are the sole change. Ambiguous or unsupported structures are left byte-for-byte
-unchanged, retaining the supported legacy aliases without repeat migration scans.
+exists. It only considers documents made of independently parseable single-line
+root properties, then verifies that parsed data changes only by the intended key
+renames. Original delimiter, newline and body bytes are retained. Multiline,
+ambiguous or unsupported structures remain byte-for-byte unchanged, keeping the
+supported legacy aliases without repeat migration scans.
 A cached suggestion still requires admission before it can be applied to
 an existing manual note; a fresh tag choice can reuse that result without a new
 provider call. Files beginning with a byte-order marker are held; save them as
