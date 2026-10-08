@@ -84,7 +84,6 @@ export async function enrichImportNotes(
 			if (paths.length > 1)
 				throw new Error("Multiple local notes share a Keep identity. Resolve them before enrichment.");
 			let record = state.records[key];
-			const prior = record?.source;
 			if (!record)
 				record = state.records[key] = {
 					source,
@@ -97,6 +96,10 @@ export async function enrichImportNotes(
 					owned: {},
 				};
 			await activeLedger.recover(record);
+			// Planning can observe a newer snapshot, but only an applied/confirmed
+			// receipt advances the baseline used for manual field reconciliation.
+			const seen = record.source;
+			const prior = record.local?.source ?? record.source;
 			const local = paths.length ? contents.get(paths[0]) : undefined;
 			const localTitle = local === undefined ? undefined : effectiveTitle(paths[0], local);
 			const localChangedTitle = record.local && localTitle !== record.local.title;
@@ -114,14 +117,13 @@ export async function enrichImportNotes(
 				if (
 					alias?.source.labels.includes(value) &&
 					!alias.projection.labels.includes(value) &&
-					prior &&
-					!prior.labels.includes(value)
+					!seen.labels.includes(value)
 				) {
 					if (!record.manualKeepLabels.includes(value)) record.manualKeepLabels.push(value);
 					record.suppressedValues = record.suppressedValues.filter((tag) => tag !== value);
 				}
 			}
-			for (const [raw, value] of Object.entries(record.owned))
+			for (const [raw, value] of [...Object.entries(record.owned), ...Object.entries(alias?.owned ?? {})])
 				if (removed.includes(value) && !record.suppressed.includes(raw)) record.suppressed.push(raw);
 			const removeValues = removed.filter((value) => record.local?.tags.includes(value));
 			for (const value of removed) {
@@ -224,7 +226,7 @@ export async function enrichImportNotes(
 				for (const feature of ["title", "tags"] as const) {
 					if (item.request!.features[feature === "title" ? "suggest_title" : "suggest_tags"]) {
 						const prior = state.cache[item.keys[feature]];
-						const attemptedCoverage = item.request!.features.suggest_tags?.max_tags ?? 0;
+						const attemptedCoverage = feature === "tags" ? (item.request!.features.suggest_tags?.max_tags ?? 0) : 0;
 						state.cache[item.keys[feature]] =
 							prior?.status === "ready"
 								? { ...prior, attemptedCoverage }
@@ -321,10 +323,10 @@ export async function enrichImportNotes(
 				];
 			}
 			if (
-				Object.values(keys).some(
-					(key) =>
+				Object.entries(keys).some(
+					([feature, key]) =>
 						state.cache[key]?.status === "uncertain" ||
-						(state.cache[key]?.attemptedCoverage ?? 0) > (state.cache[key]?.coverage ?? 0)
+						(feature === "tags" && (state.cache[key]?.attemptedCoverage ?? 0) > (state.cache[key]?.coverage ?? 0))
 				)
 			)
 				note.processing_warnings = [...(note.processing_warnings ?? []), "local_enrichment_uncertain"];

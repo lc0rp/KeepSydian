@@ -5,6 +5,7 @@ import { sha256, isSafeVaultPath } from "../local-deletions/state";
 
 const ProjectionSchema = z.object({ body: z.string(), title: z.string(), labels: z.array(z.string()) });
 const ReceiptSchema = z.object({
+	source: EnrichmentSourceSchema,
 	path: z
 		.string()
 		.max(4096)
@@ -24,7 +25,9 @@ export const RecordSchema = z.object({
 	manualKeepLabels: z.array(z.string()).max(1024),
 	owned: z.record(z.string(), z.string()),
 	local: ReceiptSchema.optional(),
-	alias: z.object({ source: EnrichmentSourceSchema, projection: ProjectionSchema }).optional(),
+	alias: z
+		.object({ source: EnrichmentSourceSchema, projection: ProjectionSchema, owned: z.record(z.string(), z.string()) })
+		.optional(),
 	journal: z.object({ before: z.string().optional(), after: z.string(), receipt: ReceiptSchema }).optional(),
 });
 export const StateSchema = z.object({
