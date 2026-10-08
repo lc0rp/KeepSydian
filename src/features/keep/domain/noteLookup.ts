@@ -1,4 +1,5 @@
 import { normalizePathSafe } from "@services/paths";
+import { resolveNoteLookupRoot } from "@services/note-path-resolver";
 import { canonicalKeepUrl } from "@integrations/server/keepDeletions";
 import { sha256 } from "../local-deletions/state";
 import { extractFrontmatter, getFrontmatterStringValue, normalizeKeepNoteUrl, type NormalizedNote } from "./note";
@@ -109,7 +110,7 @@ export async function buildExistingKeepNoteIndex(
 	strict = false
 ): Promise<ExistingKeepNoteIndex> {
 	const adapter = app.vault.adapter;
-	const normalizedRootFolder = normalizeVaultPathForScope(rootFolder);
+	const normalizedRootFolder = normalizeVaultPathForScope(resolveNoteLookupRoot(rootFolder));
 	if (normalizedRootFolder) {
 		const markdownFiles = await listMarkdownFilesRecursively(adapter, normalizedRootFolder, strict);
 		const existingPaths = new Set(markdownFiles.map((filePath) => normalizePathSafe(filePath)));
@@ -134,7 +135,9 @@ export async function buildExistingKeepNoteIndex(
 		};
 	}
 
-	const metadataBackedFiles = strict ? undefined : app.vault.getMarkdownFiles?.();
+	// Pattern roots can span old dates/titles. Cold metadata must not turn a
+	// linked file found by admission into a duplicate at destination selection.
+	const metadataBackedFiles = strict || /[{}]/.test(rootFolder) ? undefined : app.vault.getMarkdownFiles?.();
 	if (Array.isArray(metadataBackedFiles) && metadataBackedFiles.length > 0) {
 		const existingPaths = new Set(
 			metadataBackedFiles.map((file) => normalizePathSafe(file.path)).filter((path) => path.length > 0)

@@ -127,6 +127,16 @@ export function resolveCustomSaveLocation(pattern: string, note: NoteDateLike): 
 	return sanitizePatternPath(resolvePattern(effectivePattern, buildPatternValues(note)));
 }
 
+/** Search every resolved folder, including old dates and titles, by stable ID. */
+export function resolveNoteLookupRoot(pattern: string): string {
+	const parts = pattern
+		.trim()
+		.split("/")
+		.filter((part) => part.length > 0);
+	const dynamic = parts.findIndex((part) => /[{}]/.test(part));
+	return sanitizePatternPath((dynamic < 0 ? parts : parts.slice(0, dynamic)).join("/"));
+}
+
 export function resolveNoteFolder(_app: unknown, settings: NotePathSettings, note: NoteDateLike): string {
 	return resolveCustomSaveLocation(settings.saveLocation, note);
 }

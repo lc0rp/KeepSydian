@@ -43,6 +43,10 @@ Resolving a title conflict keeps unresolved tag conflicts. Title updates accept
 quoted keys and scalar blocks; unsafe title or tag YAML alias changes stop before
 a note write. Failed folder scans stop AI admission. A later manual import also
 clears admission granted only by an abandoned preview.
+Folder patterns search the fixed ancestor before the first variable, including
+older date/title folders. A variable in the first segment requires a vault-root
+scan. Admission and destination lookup read the same identity scope; a cold
+metadata cache cannot create another copy of a linked note.
 The ledger also guards uncertain requests so losing a reply cannot cause an
 automatic repeat charge. A failed larger-tag request keeps its earlier result.
 
