@@ -12,7 +12,7 @@ import type { PreNormalizedNote } from "../../domain/note";
 import { extractFrontmatter } from "../../domain/note";
 import { buildExistingKeepNoteIndex } from "../../domain/noteLookup";
 import { processAndSaveNote } from "../../sync";
-import { getEnrichmentLedger, EnrichmentLedger } from "../ledger";
+import { getEnrichmentLedger } from "../ledger";
 import { enrichImportNotes } from "../reuse";
 import { hash } from "../state";
 import type { enrichLocalNotes } from "@integrations/server/keepApi";
@@ -25,6 +25,8 @@ beforeAll(() => {
 it("uses real file writes and production download receipts for 650 notes and restart reuse", async () => {
 	const directory = await fs.mkdtemp(join(tmpdir(), "keepsydian-enrichment-"));
 	const full = (path: string) => join(directory, path);
+	let writtenBytes = 0;
+	let writeCount = 0;
 	const adapter = {
 		exists: async (path: string) => {
 			try {
@@ -36,6 +38,8 @@ it("uses real file writes and production download receipts for 650 notes and res
 		},
 		read: async (path: string) => fs.readFile(full(path), "utf8"),
 		write: async (path: string, value: string) => {
+			writtenBytes += Buffer.byteLength(value, "utf8");
+			writeCount += 1;
 			await fs.writeFile(full(path), value);
 		},
 		mkdir: async (path: string) => {
@@ -113,14 +117,29 @@ it("uses real file writes and production download receipts for 650 notes and res
 			"Keep/Suggested n0.md",
 			first.replace('tags: ["auto-topic"]', 'tags: ["manual"]') + "\nLocal body edit"
 		);
-		const restarted = new EnrichmentLedger(plugin);
-		const repeated = await enrichImportNotes(plugin, notes.slice(20), flags, restarted, provider);
-		await enrichImportNotes(plugin, notes, flags, restarted, provider);
+		const restartedPlugin = { ...plugin, settings: { ...plugin.settings } } as KeepSidianPlugin;
+		const restarted = getEnrichmentLedger(restartedPlugin);
+		const repeated = await enrichImportNotes(restartedPlugin, notes.slice(20), flags, restarted, provider);
+		const repeatIndex = await buildExistingKeepNoteIndex(restartedPlugin.app, "Keep");
+		const writesBeforeRepeat = writeCount;
+		for (const note of repeated) await processAndSaveNote(restartedPlugin, note, "Keep", undefined, repeatIndex);
+		expect(writeCount).toBe(writesBeforeRepeat);
+		await enrichImportNotes(restartedPlugin, notes, flags, restarted, provider);
 		expect(repeated).toHaveLength(630);
 		expect(provider).toHaveBeenCalledTimes(41);
 		const disk = await adapter.read(getEnrichmentLedger(plugin).path);
 		expect(disk.length).toBeLessThan(8 * 1024 * 1024);
 		expect(disk).not.toContain("Local body edit");
+		console.info(
+			JSON.stringify({
+				syntheticNotes: 650,
+				repeatedAppliedNotes: 630,
+				providerBatches: provider.mock.calls.length,
+				ledgerBytes: Buffer.byteLength(disk, "utf8"),
+				totalWrittenBytes: writtenBytes,
+				fileWrites: writeCount,
+			})
+		);
 	} finally {
 		await fs.rm(directory, { recursive: true, force: true });
 	}

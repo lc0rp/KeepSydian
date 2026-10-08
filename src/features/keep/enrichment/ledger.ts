@@ -198,12 +198,14 @@ export class EnrichmentLedger {
 			// subsequent own-upload alias to an older source projection.
 			const groundedBody = extractFrontmatter(content)[1] === normalizeNote(note).textWithoutFrontmatter;
 			const receipt = {
+				source: EnrichmentSourceSchema.parse(note.enrichment_source),
 				path,
 				title: effectiveTitle(path, content),
 				body: groundedBody ? await bodyHash(content) : "local-work",
 				tags: tags(content),
 				owned: nextOwned,
 			};
+			if (before === content && record.local && (await hash(receipt)) === (await hash(record.local))) return content;
 			record.journal = {
 				before: before === undefined ? undefined : await hash(before),
 				after: await hash(content),
@@ -218,7 +220,7 @@ export class EnrichmentLedger {
 		if (!note.local_enrichment) return;
 		await this.transaction(async (state, save) => {
 			const record = state.records[note.local_enrichment!.receipt];
-			if (record) {
+			if (record?.journal) {
 				await this.recover(record);
 				await save();
 			}
@@ -250,9 +252,21 @@ export class EnrichmentLedger {
 					(tag) => !Object.values(record.owned).includes(tag) || record.projection.labels.includes(tag)
 				),
 			};
-			record.alias = { source, projection };
+			record.alias = {
+				source,
+				projection,
+				owned: Object.fromEntries(
+					Object.entries(record.owned).filter(
+						([, value]) => source.labels.includes(value) && !projection.labels.includes(value)
+					)
+				),
+			};
 			record.source = source;
 			record.local.body = await bodyHash(content);
+			record.local.source = source;
+			record.local.title = effectiveTitle(path, content);
+			record.local.tags = tags(content);
+			record.local.owned = { ...record.owned };
 			await save();
 		});
 	}

@@ -381,3 +381,80 @@ it("propagates a Keep title edit and blocks a concurrent local title conflict", 
 	]);
 	await expect(f.ledger.assertUploadAllowed("Keep/AI Proposed.md")).rejects.toThrow("both sides");
 });
+
+it("retains Keep field changes through review preparation and selected execution", async () => {
+	const f = fixture(),
+		current = await note();
+	current.enrichment_source!.labels = ["manual"];
+	const [first] = await f.run([current]);
+	await f.apply(first);
+	const changed = {
+		...current,
+		enrichment_source: { ...current.enrichment_source!, title: "Keep edited", labels: [], source_hash: "d".repeat(64) },
+	};
+	const [prepared] = await f.run([changed], FLAGS, f.ledger, false);
+	expect(prepared.local_enrichment?.title).toBe("Keep edited");
+	expect(prepared.local_enrichment?.removeValues).toEqual(["manual"]);
+	const [selected] = await f.run([prepared]);
+	const applied = extractFrontmatter(await f.apply(selected))[2];
+	expect(applied.Title).toBe("Keep edited");
+	expect(applied.tags).toEqual(["auto-work", "auto-topic"]);
+});
+
+it("advances the human field receipt only after a confirmed upload", async () => {
+	const f = fixture(),
+		current = await note(),
+		[first] = await f.run([current]);
+	const initial = await f.apply(first);
+	const edited = initial.replace("---\nDecision", 'Title: "My uploaded title"\n---\nDecision');
+	f.stored.set("Keep/AI Proposed.md", edited);
+	const acknowledged = {
+		...current.enrichment_source!,
+		title: "My uploaded title",
+		labels: ["auto-work", "auto-topic"],
+		source_hash: "a".repeat(64),
+	};
+	await f.ledger.acknowledgeUpload("Keep/AI Proposed.md", edited, acknowledged);
+	const remote = {
+		...current,
+		enrichment_source: { ...acknowledged, title: "Later Keep title", source_hash: "b".repeat(64) },
+	};
+	const [prepared] = await f.run([remote], FLAGS, f.ledger, false);
+	const [selected] = await f.run([prepared]);
+	expect(extractFrontmatter(await f.apply(selected))[2].Title).toBe("Later Keep title");
+	await expect(f.ledger.assertUploadAllowed("Keep/AI Proposed.md")).resolves.toBeUndefined();
+});
+
+it("honors a Keep AI-tag removal after a local prefix change", async () => {
+	const f = fixture(),
+		current = await note(),
+		[first] = await f.run([current]);
+	const after = await f.apply(first);
+	const uploaded = {
+		...current.enrichment_source!,
+		title: "AI Proposed",
+		labels: ["auto-work", "auto-topic"],
+		source_hash: "e".repeat(64),
+	};
+	await f.ledger.acknowledgeUpload("Keep/AI Proposed.md", after, uploaded);
+	const flags = { ...FLAGS, suggest_tags: { ...FLAGS.suggest_tags!, prefix: "ai-" } };
+	const [prefixed] = await f.run([{ ...current, enrichment_source: uploaded }], flags);
+	await f.apply(prefixed);
+	const [removed] = await f.run(
+		[{ ...current, enrichment_source: { ...uploaded, labels: ["auto-topic"], source_hash: "f".repeat(64) } }],
+		flags
+	);
+	expect(extractFrontmatter(await f.apply(removed))[2].tags).toEqual(["ai-topic"]);
+	expect(f.generated()).toBe(1);
+});
+
+it("does not rewrite receipts for an identical applied image", async () => {
+	const f = fixture(),
+		[incoming] = await f.run([await note()]);
+	const before = await f.apply(incoming);
+	expect(incoming.processing_warnings).toBeUndefined();
+	f.adapter.write.mockClear();
+	expect(await f.ledger.stage(incoming, "Keep/AI Proposed.md", before, before)).toBe(before);
+	await f.ledger.finish(incoming);
+	expect(f.adapter.write).not.toHaveBeenCalled();
+});
