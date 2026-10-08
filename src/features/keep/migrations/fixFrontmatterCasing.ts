@@ -124,10 +124,11 @@ async function markFixComplete(plugin: KeepSidianPlugin): Promise<void> {
 function replaceHyphenatedKeys(frontmatter: string, properties: Record<string, unknown>): { updated: string; changed: boolean } {
 	let updated = frontmatter;
 	let changed = false;
+	const expected = { ...properties };
 
 	for (const { hyphenated, pascal } of FRONTMATTER_KEY_MAPPINGS) {
 		// Existing aliases remain readable; never turn them into duplicate YAML keys.
-		if (Object.prototype.hasOwnProperty.call(properties, pascal)) continue;
+		if (!Object.prototype.hasOwnProperty.call(properties, hyphenated) || Object.prototype.hasOwnProperty.call(properties, pascal)) continue;
 		const pattern = new RegExp(`(^|\\r?\\n)${escapeRegExp(hyphenated)}([\\t ]*:)`, "g");
 		const next = updated.replace(pattern, (match, prefix, separator) => {
 			changed = true;
@@ -135,10 +136,39 @@ function replaceHyphenatedKeys(frontmatter: string, properties: Record<string, u
 		});
 		if (next !== updated) {
 			updated = next;
+			expected[pascal] = properties[hyphenated];
+			delete expected[hyphenated];
 		}
 	}
 
+	// A column-zero match can still be inside a flow mapping or quoted value.
+	// Legacy aliases are supported: skip the whole rewrite unless only root keys changed.
+	if (changed && !sameYamlData(expected, parseYaml(updated))) return { updated: frontmatter, changed: false };
 	return { updated, changed };
+}
+
+function sameYamlData(left: unknown, right: unknown, ancestors = new Set<object>()): boolean {
+	if (Object.is(left, right)) return true;
+	if (left === null || right === null || typeof left !== "object" || typeof right !== "object") return false;
+	if (left instanceof Date || right instanceof Date)
+		return left instanceof Date && right instanceof Date && Object.is(left.getTime(), right.getTime());
+	const prototype = Object.getPrototypeOf(left) as unknown;
+	if (prototype !== Object.getPrototypeOf(right)) return false;
+	if (Array.isArray(left)) {
+		if (!Array.isArray(right) || left.length !== right.length) return false;
+	} else if (prototype !== Object.prototype && prototype !== null) return false;
+	// Unusual recursive/deep YAML is left byte-for-byte intact rather than guessed at.
+	if (ancestors.has(left) || ancestors.size >= 64) return false;
+	ancestors.add(left);
+	try {
+		const keys = Object.keys(left);
+		return keys.length === Object.keys(right).length && keys.every((key) =>
+			Object.prototype.hasOwnProperty.call(right, key) &&
+			sameYamlData((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key], ancestors)
+		);
+	} finally {
+		ancestors.delete(left);
+	}
 }
 
 async function listMarkdownFilesRecursively(
