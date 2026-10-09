@@ -6,6 +6,7 @@ import { extractFrontmatter, getFrontmatterStringValue, normalizeNote, type PreN
 import { CONFLICT_FILE_SUFFIX } from "../constants";
 import { KEEPSIDIAN_SERVER_URL } from "../../../config";
 import { permitsLegacyTags } from "./consent";
+import { enrichmentBackendIdentity } from "./identity";
 import {
 	StateSchema,
 	ApplicationJournalSchema,
@@ -54,7 +55,11 @@ export class EnrichmentLedger {
 	}
 
 	async namespace(): Promise<string> {
-		return hash(["keep-enrichment-local-v1", KEEPSIDIAN_SERVER_URL, this.plugin.settings.email.trim().toLowerCase()]);
+		return hash([
+			"keep-enrichment-local-v1",
+			enrichmentBackendIdentity(KEEPSIDIAN_SERVER_URL),
+			this.plugin.settings.email.trim().toLowerCase(),
+		]);
 	}
 
 	async key(source: EnrichmentSource): Promise<string> {
@@ -130,6 +135,13 @@ export class EnrichmentLedger {
 						: !applicationExists || (await adapter.read(this.applicationPath)) !== this.applicationDisk
 				) {
 					throw new Error("Enrichment application journal changed outside this session.");
+				}
+				if (this.state.namespaceVersion === undefined) {
+					// Unreleased URL-keyed ledgers lack enough provenance to rekey opaque
+					// cache selectors safely. Preserve every byte and refuse paid fallback.
+					if ([this.state.records, this.state.cache, this.state.vocabulary].some((items) => Object.keys(items).length))
+						throw new Error("Saved AI history needs a compatibility review. No AI request was sent.");
+					this.state.namespaceVersion = 1;
 				}
 			} catch (error) {
 				this.blocked = true;

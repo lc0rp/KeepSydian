@@ -34,6 +34,7 @@ export const RecordSchema = z.object({
 });
 export const StateSchema = z.object({
 	version: z.literal(1),
+	namespaceVersion: z.literal(1).optional(),
 	records: z.record(z.string(), RecordSchema),
 	cache: z.record(
 		z.string(),
@@ -56,7 +57,13 @@ export const ApplicationJournalSchema = z.object({
 export type EnrichmentState = z.infer<typeof StateSchema>;
 export type EnrichmentRecord = z.infer<typeof RecordSchema>;
 export type Projection = z.infer<typeof ProjectionSchema>;
-export const emptyState = (): EnrichmentState => ({ version: 1, records: {}, cache: {}, vocabulary: {} });
+export const emptyState = (): EnrichmentState => ({
+	version: 1,
+	namespaceVersion: 1,
+	records: {},
+	cache: {},
+	vocabulary: {},
+});
 function canonical(value: unknown): unknown {
 	if (Array.isArray(value)) return value.map(canonical);
 	if (value !== null && typeof value === "object")
