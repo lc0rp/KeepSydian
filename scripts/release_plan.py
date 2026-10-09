@@ -34,9 +34,7 @@ def load(path: Path, side: str) -> dict[str, Any]:
         "recovery_cores",
         "recovery_prefixes",
     }
-    expected = common | (
-        {"baseline", "client_dispatch_head"} if side == "server" else {"backend_core"}
-    )
+    expected = common | ({"baseline"} if side == "server" else {"backend_core"})
     if (
         not isinstance(plan, dict)
         or set(plan) != expected
@@ -85,10 +83,6 @@ def load(path: Path, side: str) -> dict[str, Any]:
     ):
         raise ValueError("Safe artifact name prefix required")
     if side == "server":
-        if not isinstance(plan["client_dispatch_head"], str) or not re.fullmatch(
-            SHA, plan["client_dispatch_head"]
-        ):
-            raise ValueError("Reviewed client dispatcher head required")
         if not isinstance(plan["baseline"], dict) or set(plan["baseline"]) != {
             "captured_at",
             "source",

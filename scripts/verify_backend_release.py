@@ -74,6 +74,23 @@ def verify(
         )
     receipt = json.loads((destination / "backend-release-receipt.json").read_text())
     validate_receipt(plan, receipt)
+    (destination / "backend-verification.json").write_text(
+        json.dumps(
+            {
+                "repository": REPO,
+                "run_id": run_id,
+                "artifact_id": artifact_id,
+                "head": head,
+                "core": core,
+                "stages": stages,
+                "origin": origin,
+                "receipt": receipt,
+            },
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n"
+    )
     return receipt
 
 

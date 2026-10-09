@@ -74,6 +74,33 @@ class ReadOnlyGraph(unittest.TestCase):
         self.assertNotIn("npm", body)
         self.assertNotIn("docker", body)
 
+    def test_two_button_graph_has_no_apps_or_automatic_cross_repo_dispatch(self):
+        for text in (self.core, self.wrapper):
+            for forbidden in (
+                "create-github-app-token",
+                "private_key",
+                "CLIENT_RELEASE_ACTOR",
+                "backend_app",
+                "client_dispatch",
+                "dispatch_release_client",
+                "verify_backend_release.py",
+            ):
+                self.assertNotIn(forbidden, text)
+            for body in jobs(text).values():
+                self.assertIn("github.actor_id == '2609441'", body)
+                self.assertIn("github.triggering_actor == 'lc0rp'", body)
+        if SIDE == "client":
+            for name in ("build", "publish"):
+                body = jobs(self.core)[name]
+                self.assertIn("backend_review.py check", body)
+                self.assertIn(
+                    "KEEPSIDIAN_BACKEND_REVIEW: ${{ inputs.backend_review }}", body
+                )
+                self.assertNotIn("backend-proof", body)
+        self.assertIn(
+            "inputs.expected_head == github.sha", jobs(self.wrapper)["release"]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

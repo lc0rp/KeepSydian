@@ -1,5 +1,4 @@
-name: "Client: publish reviewed plan after server proof"
-run-name: backend/${{ inputs.backend_run }}/${{ inputs.backend_artifact }}
+name: "Client: publish reviewed plan after authorized server review"
 on:
   workflow_dispatch:
     inputs:
@@ -24,16 +23,8 @@ on:
         description: "Reviewed original run head SHA"
         type: string
         default: ""
-      backend_run:
-        description: "Successful verified backend run ID"
-        type: string
-        default: ""
-      backend_artifact:
-        description: "Exact backend proof artifact ID"
-        type: string
-        default: ""
-      backend_head:
-        description: "Reviewed backend dispatcher head SHA"
+      backend_review:
+        description: "Opaque authorized-reviewer handoff JSON; private evidence stays private"
         type: string
         default: ""
 permissions:
@@ -48,7 +39,7 @@ jobs:
     with:
       mode: validate-beta8
   release:
-    if: inputs.mode == 'release' && github.repository_id == '822100323' && ((github.actor_id == '2609441' && github.triggering_actor == 'lc0rp') || (vars.CLIENT_RELEASE_ACTOR_ID != '' && vars.CLIENT_RELEASE_ACTOR_LOGIN != '' && github.actor_id == vars.CLIENT_RELEASE_ACTOR_ID && github.triggering_actor == vars.CLIENT_RELEASE_ACTOR_LOGIN)) && github.ref == 'refs/heads/main' && inputs.expected_head == github.sha
+    if: inputs.mode == 'release' && github.repository_id == '822100323' && (github.actor_id == '2609441' && github.triggering_actor == 'lc0rp') && github.ref == 'refs/heads/main' && inputs.expected_head == github.sha
     permissions:
       contents: write
       actions: read
@@ -61,9 +52,4 @@ jobs:
       recovery_run: ${{ inputs.recovery_run }}
       recovery_artifact: ${{ inputs.recovery_artifact }}
       recovery_head: ${{ inputs.recovery_head }}
-      backend_run: ${{ inputs.backend_run }}
-      backend_artifact: ${{ inputs.backend_artifact }}
-      backend_head: ${{ inputs.backend_head }}
-      backend_app_id: ${{ vars.BACKEND_RELEASE_APP_ID }}
-    secrets:
-      backend_app_private_key: ${{ secrets.BACKEND_RELEASE_APP_PRIVATE_KEY }}
+      backend_review: ${{ inputs.backend_review }}
