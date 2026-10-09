@@ -153,7 +153,7 @@ describe("status bar gating", () => {
 			})
 		);
 		expect(plugin.statusTextEl?.textContent).toBe("Last sync completed with warnings");
-		expect(setMessage).toHaveBeenCalledWith("Synced Google Keep Notes with 2 attachment warnings.");
+		expect(setMessage).toHaveBeenCalledWith("Synced Google Keep Notes with 2 warnings.");
 		expect(plugin.progressContainerEl?.classList.contains("complete")).toBe(true);
 	});
 });

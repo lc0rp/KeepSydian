@@ -111,6 +111,7 @@ const SAVE_PLAN_ACTIONS: Record<NoteSaveAction, SyncPlanAction> = {
 
 interface NoteSaveMetrics {
 	action: NoteSaveAction;
+	notePath?: string;
 	totalDurationMs: number;
 	resolveExistingPathDurationMs: number;
 	existsCheckDurationMs: number;
@@ -255,6 +256,7 @@ export interface SyncCallbacks {
 	setTotalNotes?: (total: number) => void;
 	reportProgress?: () => void;
 	reportPlanProgress?: (processed: number, total?: number) => void;
+	onEntrySaved?: (entryId: string, path: string) => void;
 	onEntrySettled?: (entryId: string, success: boolean, outcome?: SyncPlanAction) => void;
 	onAttachmentWarning?: (warning: SyncAttachmentWarning) => void;
 	onEnrichmentWarning?: () => void;
@@ -1054,6 +1056,7 @@ export async function processAndSaveNotes(
 
 					callbacks?.reportProgress?.();
 					if (entryId) {
+						if (metrics.notePath) callbacks?.onEntrySaved?.(entryId, metrics.notePath);
 						if (callbacks?.mergeAction) callbacks.onEntrySettled?.(entryId, true, SAVE_PLAN_ACTIONS[metrics.action]);
 						else callbacks?.onEntrySettled?.(entryId, true);
 					}
@@ -1145,6 +1148,7 @@ export async function processAndSaveNote(
 			saveLocation
 		)) ?? resolvedNotePath;
 	metrics.resolveExistingPathDurationMs = getNowMs() - resolveExistingPathStartedAt;
+	metrics.notePath = normalizePathSafe(noteFilePath);
 	const noteLink = `[${noteTitle}](${normalizePathSafe(noteFilePath)})`;
 	const noteFolder = dirnameSafe(noteFilePath);
 	let retainedImageNames: string[] = [];
@@ -1326,6 +1330,7 @@ export async function processAndSaveNote(
 					metrics.action = "conflict";
 					onMergeConflict?.(normalizePathSafe(noteFilePath));
 					noteFilePath = `${noteFilePath.replace(/\.md$/, "")}${CONFLICT_FILE_SUFFIX}${lastSyncedDate}.md`;
+					metrics.notePath = normalizePathSafe(noteFilePath);
 					mdFrontmatter = withSyncState(mdFrontmatter, false, baseline);
 				} else {
 					metrics.action = decision.action === "overwrite" ? "overwritten" : "merged";
