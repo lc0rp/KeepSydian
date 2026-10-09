@@ -20,7 +20,7 @@ The intended sequence is an externally created server tag triggering Cloud Build
 4. Availability of resolved source provenance during WORKING is unproven. Fail closed; never substitute an operator-maintained SHA or silently relax identity checks.
 5. New engine/core pins are draft checkpoints, not independent-review approval. Mutable builder images need reviewed immutable digests before activation.
 
-The review's earlier baseline and API-prefix findings were addressed in the working draft; regression tests and a second independent review remain necessary before claiming those findings closed.
+The review's earlier baseline and API-prefix findings were addressed in the working draft; the scoped second review confirmed all three fixes. Reviewer ran 32 tests and six offline API rejection checks. Overall approval remains withheld for the open findings above.
 
 ## Actual trust finding and approval boundary
 
@@ -42,3 +42,7 @@ This is a design/permission inventory, not a grant command or an exact approval 
 No old budget carries over. First inspect connector/trigger/build/service/IAM metadata with supported read-only access. Then approve exact versions/source tags, immutable configuration, persistent grants and spend limits. Proposed jobs are bounded to 30 minutes each; normal client runs currently perform up to 15 application GETs across prebuild verification, prepublication verification and publication checks. These smoke routes invoke no AI; deployment/build/registry/Actions costs remain real and unapproved.
 
 Required evidence: one new backend build and verified version URL; paired client publication; a second explicitly approved client version reusing that backend with zero backend build; injected partial failures recovered using exact original image/assets; rejected conflicting alias and mismatched artifact without mutation. Record native IDs, immutable image digests, revision readiness, all traffic before/after, exact GitHub run/artifact/core/source IDs and asset hashes. Until actually run, each live result is NOT RUN, never PASS based on mocks.
+
+## Local validation checkpoint
+
+Server full suite: 681 passed, 4 skipped, 90.09% coverage. Client Python suite: 113 tests, 7 skipped. Ruff and changed-workflow actionlint passed. New native mapper tests cover lost/rejected PATCH, conflicts, idempotence, backend reuse, source/image identity failures, readiness/runtime failures and smoke failure recovery. Four server baseline tests cover later aliases, runtime drift, non-convergence and existing version rejection. These are offline checks; live E2E is NOT RUN.
