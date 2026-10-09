@@ -1,13 +1,55 @@
-name: "Client: publish beta.8 after server verification"
+name: "Client: publish reviewed plan after authorized server review"
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "Read-only beta.8 validation or separately approved release"
+        type: choice
+        options: [validate-beta8, release]
+        default: validate-beta8
+      expected_head:
+        description: "Exact reviewed client dispatcher SHA"
+        type: string
+        required: true
+      recovery_run:
+        description: "Original completed run ID (blank for a new build)"
+        type: string
+        default: ""
+      recovery_artifact:
+        description: "Exact retained image/build artifact ID"
+        type: string
+        default: ""
+      recovery_head:
+        description: "Reviewed original run head SHA"
+        type: string
+        default: ""
+      backend_review:
+        description: "Opaque authorized-reviewer handoff JSON; private evidence stays private"
+        type: string
+        default: ""
 permissions:
   contents: read
 jobs:
+  validate-beta8:
+    if: inputs.mode == 'validate-beta8' && inputs.expected_head == github.sha && github.repository_id == '822100323' && github.actor_id == '2609441' && github.triggering_actor == 'lc0rp' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      actions: read
+    uses: lc0rp/KeepSydian/.github/workflows/release-client-core.yml@894fa0bf72734809ca8162951457a1e2c3deb590
+    with:
+      mode: validate-beta8
   release:
-    if: github.repository_id == '822100323' && github.actor_id == '2609441' && github.triggering_actor == 'lc0rp' && github.ref == 'refs/heads/main'
+    if: inputs.mode == 'release' && false && github.repository_id == '822100323' && (github.actor_id == '2609441' && github.triggering_actor == 'lc0rp') && github.ref == 'refs/heads/main' && inputs.expected_head == github.sha
     permissions:
       contents: write
+      actions: read
       id-token: write
       attestations: write
-    uses: lc0rp/KeepSydian/.github/workflows/release-client-core.yml@553ac867c679dd46e432aebbd09667a8d7854679
+    uses: lc0rp/KeepSydian/.github/workflows/release-client-core.yml@894fa0bf72734809ca8162951457a1e2c3deb590
+    with:
+      mode: release
+      expected_head: ${{ inputs.expected_head }}
+      recovery_run: ${{ inputs.recovery_run }}
+      recovery_artifact: ${{ inputs.recovery_artifact }}
+      recovery_head: ${{ inputs.recovery_head }}
+      backend_review: ${{ inputs.backend_review }}
