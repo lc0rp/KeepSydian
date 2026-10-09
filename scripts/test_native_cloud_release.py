@@ -311,6 +311,17 @@ class NativeReleaseTests(unittest.TestCase):
                 c.run()
             self.assertEqual(c.writes, [])
 
+    def test_observed_canonical_project_number_is_same_fixed_project(self):
+        c = FakeCloud()
+        c.build["name"] = f"projects/{n.PROJECT_NUMBER}/locations/global/builds/{BUILD}"
+        c.run()
+        self.assertEqual(len(c.writes), 1)
+        c = FakeCloud()
+        c.build["name"] = f"projects/999999999999/locations/global/builds/{BUILD}"
+        with self.assertRaisesRegex(RuntimeError, "name/location"):
+            c.run()
+        self.assertEqual(c.writes, [])
+
     def test_wrong_native_repository_and_location_fail(self):
         for field in ("repoName", "projectId"):
             c = FakeCloud()
