@@ -64,10 +64,48 @@ export interface LocalEnrichmentRequest {
 	title_context?: string;
 }
 
-export async function enrichLocalNotes(email: string, token: string, notes: LocalEnrichmentRequest[], supporterKey?: string) {
+export async function prepareLocalEnrichment(email: string, token: string, supporterKey?: string): Promise<string> {
+	const headers = withSupporterKey(
+		{ "X-User-Email": email, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+		supporterKey
+	);
+	// Obsidian's native transport may replay a POST before returning an error.
+	// Bind that one attempt to a server process; never refresh/retry after POST.
+	const capability = await httpGetJson<{ version: number; epoch: string; issued_at_ms: number }>(
+		`${KEEPSIDIAN_SERVER_URL}/keep/enrich/local/capabilities`,
+		headers
+	);
+	if (
+		capability?.version !== 1 ||
+		!/^[a-f0-9]{32}$/.test(capability.epoch) ||
+		!Number.isSafeInteger(capability.issued_at_ms) ||
+		capability.issued_at_ms <= 0
+	)
+		throw new Error("Safe enrichment transport is unavailable.");
+	return `${capability.epoch}:${capability.issued_at_ms}:${crypto.randomUUID()}`;
+}
+
+export async function enrichLocalNotes(
+	email: string,
+	token: string,
+	notes: LocalEnrichmentRequest[],
+	supporterKey?: string,
+	operation?: string
+) {
+	if (!operation) throw new Error("Enrichment transport must be prepared before admission.");
+	const headers = withSupporterKey(
+		{
+			"X-User-Email": email,
+			Authorization: `Bearer ${token}`,
+			"Content-Type": "application/json",
+			"X-Enrichment-Operation": operation,
+		},
+		supporterKey
+	);
 	const raw = await httpPostJson<unknown, { notes: LocalEnrichmentRequest[] }>(
-		`${KEEPSIDIAN_SERVER_URL}/keep/enrich/local/v1`, { notes },
-		withSupporterKey({ "X-User-Email": email, Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, supporterKey)
+		`${KEEPSIDIAN_SERVER_URL}/keep/enrich/local/v1`,
+		{ notes },
+		headers
 	);
 	return LocalEnrichmentResponseSchema.parse(raw);
 }

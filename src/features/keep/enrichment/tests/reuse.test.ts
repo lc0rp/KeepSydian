@@ -105,6 +105,24 @@ it("fetches premium filters without sending AI generation flags", () => {
 	});
 });
 
+it("does not leave a paid-attempt guard when transport preflight fails", async () => {
+	const f = fixture(),
+		current = await note();
+	const preflight = jest.spyOn(keepApi, "prepareLocalEnrichment").mockRejectedValueOnce(new Error("Offline preflight"));
+	const provider = jest.spyOn(keepApi, "enrichLocalNotes").mockImplementation(f.provider);
+	try {
+		await expect(enrichImportNotes(f.plugin, [current], FLAGS, f.ledger)).rejects.toThrow("Offline preflight");
+		expect(provider).not.toHaveBeenCalled();
+		expect(JSON.parse(f.stored.get(METADATA)!).state.cache).toEqual({});
+		preflight.mockResolvedValueOnce("synthetic-operation");
+		await enrichImportNotes(f.plugin, [current], FLAGS, f.ledger);
+		expect(provider).toHaveBeenCalledTimes(1);
+	} finally {
+		preflight.mockRestore();
+		provider.mockRestore();
+	}
+});
+
 it("blocks paid work after a lost upload acknowledgement until an upload is confirmed", async () => {
 	const f = fixture(),
 		current = await note();
@@ -413,6 +431,7 @@ it.each(["legacy", "review"] as const)(
 			.spyOn(keepApi, "fetchNotesWithPremiumFeatures")
 			.mockResolvedValue({ notes: [current], total_notes: 1 });
 		const capability = jest.spyOn(keepApi, "getReplayEpoch").mockResolvedValue(undefined);
+		const enrichmentCapability = jest.spyOn(keepApi, "prepareLocalEnrichment").mockResolvedValue("synthetic-operation");
 		const generate = jest.spyOn(keepApi, "enrichLocalNotes").mockImplementation(f.provider);
 		try {
 			if (caller === "legacy") await runImportNotesFlow(f.plugin, false, () => "failed");
@@ -432,6 +451,7 @@ it.each(["legacy", "review"] as const)(
 		} finally {
 			fetch.mockRestore();
 			capability.mockRestore();
+			enrichmentCapability.mockRestore();
 			generate.mockRestore();
 		}
 	}

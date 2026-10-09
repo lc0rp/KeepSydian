@@ -67,6 +67,14 @@ UTF-8 without BOM before retrying, because title/tag writers do not consistently
 support that format yet.
 The ledger also guards uncertain requests so losing a reply cannot cause an
 automatic repeat charge. A failed larger-tag request keeps its earlier result.
+Native transports can resend a POST internally. Each paid batch therefore first
+gets a server process capability, then saves its local guard and sends one bound
+operation. The matching server replays completed duplicates or holds uncertain
+ones. Failed capability preflight can be retried without a paid-attempt guard.
+After a paid POST, the client never refreshes the capability automatically.
+Server restarts or requests reaching a different worker fail closed; production
+routing availability must be validated before release. The bounded server replay
+memory is separate from durable reuse in the vault.
 
 This local branch needs the matching server contract. It has no automatic cache
 expiry or regeneration on model-default changes. It has no explicit retry/reset
