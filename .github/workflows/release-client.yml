@@ -10,4 +10,4 @@ jobs:
       contents: write
       id-token: write
       attestations: write
-    uses: lc0rp/KeepSydian/.github/workflows/release-client-core.yml@09daa04c3f3654d0600af4551d68a8380428dc6e
+    uses: lc0rp/KeepSydian/.github/workflows/release-client-core.yml@553ac867c679dd46e432aebbd09667a8d7854679
