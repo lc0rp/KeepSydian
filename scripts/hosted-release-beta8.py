@@ -35,6 +35,24 @@ if os.environ.get("KEEPSIDIAN_RELEASE_PLAN"):
     TAG = "v" + VERSION
     BACKEND = PLAN["backend"]
 
+if os.environ.get("KEEPSIDIAN_NATIVE_SELECTION"):
+    from native_client_selection import load as load_native
+
+    PLAN = load_native(Path(os.environ["KEEPSIDIAN_NATIVE_SELECTION"]))
+    VERSION = PLAN["client_version"]
+    TAG = PLAN["client_tag"]
+    BACKEND = PLAN["backend"]
+
+
+def release_authority(plan: dict[str, Any]) -> dict[str, Any]:
+    if os.environ.get("KEEPSIDIAN_NATIVE_SELECTION"):
+        from native_client_selection import mapping_receipt
+
+        return mapping_receipt(plan, Path(os.environ["KEEPSIDIAN_MAPPING_RECEIPT"]))
+    from backend_review import from_environment
+
+    return from_environment(plan)
+
 
 def command(args: list[str]) -> Any:
     result = subprocess.run(args, capture_output=True, timeout=60, check=False)
@@ -279,20 +297,18 @@ def reconcile(
         if source != PLAN["client_source"]:
             raise RuntimeError("Client source differs from reviewed plan")
         verify_build(root, source, local)
-        from backend_review import from_environment
-
-        backend_review = from_environment(PLAN)
+        backend_review = release_authority(PLAN)
         original_run = run
 
         def reviewed_run(args: list[str]) -> Any:
             if "--method" in args and args[args.index("--method") + 1] != "GET":
-                from_environment(PLAN)
+                release_authority(PLAN)
             return original_run(args)
 
         run = reviewed_run
     epoch = backend(get)
     if "PLAN" in globals():
-        backend_review = from_environment(PLAN)
+        backend_review = release_authority(PLAN)
     actual = run(["git", "-C", str(root), "rev-parse", "HEAD"])
     if actual.decode().strip() != source:
         raise RuntimeError("Built checkout differs from the reviewed client source")
@@ -307,6 +323,16 @@ def reconcile(
         ref = run(["gh", "api", ref_path])
         if ref is None and not required:
             return None
+        if os.environ.get("KEEPSIDIAN_NATIVE_SELECTION") and isinstance(ref, dict):
+            from native_client_selection import select
+
+            resolved = select(
+                TAG,
+                PLAN["server_tag"],
+                PLAN["build_id"],
+                lambda path: run(["gh", "api", path]),
+            )
+            ref = {"object": {"type": "commit", "sha": resolved["client_source"]}}
         if (
             not isinstance(ref, dict)
             or ref.get("object", {}).get("type") != "commit"
@@ -392,6 +418,20 @@ def reconcile(
     # Discover and validate before the first remote mutation.
     release = find_release()
     ref = check_ref(required=False)
+    if os.environ.get("KEEPSIDIAN_NATIVE_SELECTION"):
+        if ref is None:
+            raise RuntimeError(
+                "Externally created client tag is required before publication"
+            )
+        if release is None and not intent_path.exists():
+            save(
+                {
+                    "source": source,
+                    "tag": TAG,
+                    "status": "tag-confirmed",
+                    "assets": local,
+                }
+            )
     if release is not None:
         release = check_release(release)
         if ref is None:
@@ -426,7 +466,11 @@ def reconcile(
                 check_ref()
             notes = (
                 f"KeepSydian {VERSION}\n\nClient source: {source}\nBackend: {BACKEND}/\n"
-                "Assets match the reviewed source and URL. Private backend evidence was checked by the authorized reviewer; this client job does not independently verify it.\n"
+                + (
+                    "Assets match the source and URL; native Cloud Build and Cloud Run were independently verified.\n"
+                    if os.environ.get("KEEPSIDIAN_NATIVE_SELECTION")
+                    else "Assets match the reviewed source and URL; backend evidence was checked by the authorized reviewer.\n"
+                )
             )
             intent = {
                 "source": source,
@@ -539,7 +583,7 @@ def reconcile(
     if set(inspect()) != set(ASSETS):
         raise RuntimeError("Published asset readback incomplete")
     if "PLAN" in globals():
-        backend_review = from_environment(PLAN)
+        backend_review = release_authority(PLAN)
     receipt = {
         "source": source,
         "tag": TAG,
