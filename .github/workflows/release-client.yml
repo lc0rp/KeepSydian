@@ -1,4 +1,4 @@
-name: "Client: publish beta.7 after server verification"
+name: "Client: publish beta.8 after server verification"
 on:
   workflow_dispatch:
 permissions:
@@ -10,4 +10,4 @@ jobs:
       contents: write
       id-token: write
       attestations: write
-    uses: lc0rp/KeepSydian/.github/workflows/release-client-core.yml@a5646b0a61a98742fbe8441c3d162d15cfb73db6
+    uses: lc0rp/KeepSydian/.github/workflows/release-client-core.yml@e3ea22ebfca709e396c9e95451ca171426b77fde
