@@ -1,4 +1,5 @@
 """Offline publisher checks. Sockets and real commands are blocked."""
+
 import copy
 import hashlib
 import importlib.util
@@ -9,7 +10,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location("release_beta8", Path(__file__).with_name("hosted-release-beta8.py"))
+spec = importlib.util.spec_from_file_location(
+    "release_beta8", Path(__file__).with_name("hosted-release-beta8.py")
+)
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 SOURCE = "1" * 40
@@ -22,15 +25,23 @@ class ReleaseTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         for target in ("socket.create_connection", "socket.socket", "subprocess.run"):
-            blocker = patch(target, side_effect=AssertionError("No network or real commands allowed"))
+            blocker = patch(
+                target,
+                side_effect=AssertionError("No network or real commands allowed"),
+            )
             blocker.start()
             self.addCleanup(blocker.stop)
         for name in ("manifest.json", "package.json"):
             self.write_json(name, {"version": m.VERSION, "minAppVersion": "1.6.5"})
-        self.write_json("package-lock.json", {"version": m.VERSION, "packages": {"": {"version": m.VERSION}}})
+        self.write_json(
+            "package-lock.json",
+            {"version": m.VERSION, "packages": {"": {"version": m.VERSION}}},
+        )
         self.write_json("versions.json", {m.VERSION: "1.6.5"})
-        self.bundle = ('var rawServerUrl = "' + m.BACKEND + '";\n'
-                       '// src/services/recovery-uat.ts\nvar import_obsidian10 = require("obsidian");\nvar enabled = false;\n')
+        self.bundle = (
+            'var rawServerUrl = "' + m.BACKEND + '";\n'
+            '// src/services/recovery-uat.ts\nvar import_obsidian10 = require("obsidian");\nvar enabled = false;\n'
+        )
         (self.root / "main.js").write_text(self.bundle)
         (self.root / "styles.css").write_text(".plugin { color: inherit; }")
         self.hashes = m.validate(self.root)
@@ -48,15 +59,33 @@ class ReleaseTests(unittest.TestCase):
     def get(self, url):
         self.gets.append(url)
         if url.endswith("/enrich/local/capabilities"):
-            return json.dumps({"version": 1, "epoch": "c" * 32, "issued_at_ms": len(self.gets)}).encode()
-        return json.dumps({"replay_version": 1, "replay_epoch": EPOCH}).encode() if url.endswith("/capabilities") else b"OK"
+            return json.dumps(
+                {"version": 1, "epoch": "c" * 32, "issued_at_ms": len(self.gets)}
+            ).encode()
+        return (
+            json.dumps({"replay_version": 1, "replay_epoch": EPOCH}).encode()
+            if url.endswith("/capabilities")
+            else b"OK"
+        )
 
     def complete_release(self, draft=False):
         self.ref = {"object": {"type": "commit", "sha": SOURCE}}
-        self.release = {"id": 42, "tag_name": m.TAG, "draft": draft, "prerelease": True,
-                        "html_url": f"https://github.com/{m.REPO}/releases/tag/{m.TAG}"}
-        self.assets = {name: {"id": i, "name": name, "state": "uploaded", "digest": self.hashes[name]}
-                       for i, name in enumerate(m.ASSETS, start=100)}
+        self.release = {
+            "id": 42,
+            "tag_name": m.TAG,
+            "draft": draft,
+            "prerelease": True,
+            "html_url": f"https://github.com/{m.REPO}/releases/tag/{m.TAG}",
+        }
+        self.assets = {
+            name: {
+                "id": i,
+                "name": name,
+                "state": "uploaded",
+                "digest": self.hashes[name],
+            }
+            for i, name in enumerate(m.ASSETS, start=100)
+        }
 
     def run_cli(self, args):
         self.calls.append(args)
@@ -84,7 +113,12 @@ class ReleaseTests(unittest.TestCase):
                 self.assertEqual(method, "POST")
                 name = path.split("name=")[1]
                 self.assertNotIn(name, self.assets)
-                self.assets[name] = {"id": 100, "name": name, "state": "uploaded", "digest": self.hashes[name]}
+                self.assets[name] = {
+                    "id": 100,
+                    "name": name,
+                    "state": "uploaded",
+                    "digest": self.hashes[name],
+                }
                 return copy.deepcopy(self.assets[name])
             if method == "PATCH":
                 self.assertTrue(path.endswith("/releases/42"))
@@ -131,7 +165,92 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(set(self.assets), set(m.ASSETS))
         self.assertFalse(self.release["draft"])
         self.assertEqual(len(self.gets), 5)
-        self.assertEqual(sum("/releases?" in arg for args in self.calls for arg in args), 1)
+        self.assertEqual(
+            sum("/releases?" in arg for args in self.calls for arg in args), 1
+        )
+
+    def test_same_version_other_source_artifact_is_rejected(self):
+        proof = {
+            "source": "9" * 40,
+            "version": m.VERSION,
+            "backend": m.BACKEND,
+            "assets": self.hashes,
+        }
+        (self.root / "release-build.json").write_text(json.dumps(proof))
+        with self.assertRaisesRegex(RuntimeError, "different source"):
+            m.verify_build(self.root, SOURCE, self.hashes)
+        proof["source"] = SOURCE
+        (self.root / "release-build.json").write_text(json.dumps(proof))
+        m.verify_build(self.root, SOURCE, self.hashes)
+        proof["assets"]["main.js"] = "sha256:" + "f" * 64
+        (self.root / "release-build.json").write_text(json.dumps(proof))
+        with self.assertRaisesRegex(RuntimeError, "different source"):
+            m.verify_build(self.root, SOURCE, m.validate(self.root))
+
+    def test_lost_tag_response_reconciles_exact_ref(self):
+        original = self.run_cli
+
+        def lost(args):
+            result = original(args)
+            if "POST" in args and args[4].endswith("/git/refs"):
+                raise TimeoutError("accepted tag response lost")
+            return result
+
+        receipt = m.reconcile(SOURCE, self.root, lost, self.get)
+        self.assertEqual(receipt["source"], SOURCE)
+        self.assertEqual(
+            sum(args[4].endswith("/git/refs") for args in self.writes()), 1
+        )
+
+    def test_interruption_after_tag_can_resume_with_restored_intent(self):
+        original = self.run_cli
+
+        def interrupted(args):
+            result = original(args)
+            if "POST" in args and args[4].endswith("/git/refs"):
+                raise KeyboardInterrupt("runner stopped after tag acceptance")
+            return result
+
+        with self.assertRaises(KeyboardInterrupt):
+            m.reconcile(SOURCE, self.root, interrupted, self.get)
+        self.assertEqual(
+            json.loads((self.root / "release-intent.json").read_text())["status"],
+            "tag-started",
+        )
+        self.reconcile()
+        self.assertEqual(len(self.creations()), 1)
+        self.assertEqual(
+            sum(args[4].endswith("/git/refs") for args in self.writes()), 1
+        )
+
+    def test_ref_denial_retains_intent_before_first_write(self):
+        original = self.run_cli
+
+        def denied(args):
+            if "POST" in args and args[4].endswith("/git/refs"):
+                self.assertTrue((self.root / "release-intent.json").exists())
+                raise RuntimeError("HTTP 403")
+            return original(args)
+
+        with self.assertRaisesRegex(RuntimeError, "HTTP 403"):
+            m.reconcile(SOURCE, self.root, denied, self.get)
+        self.assertEqual(self.creations(), [])
+        self.assertIsNone(self.ref)
+
+    def test_restored_tag_intent_different_asset_bytes_blocks_release_creation(self):
+        (self.root / "release-intent.json").write_text(
+            json.dumps(
+                {
+                    "source": SOURCE,
+                    "tag": m.TAG,
+                    "status": "tag-confirmed",
+                    "assets": {},
+                }
+            )
+        )
+        with self.assertRaisesRegex(RuntimeError, "different source or assets"):
+            self.reconcile()
+        self.assertEqual(self.writes(), [])
 
     def test_partial_draft_retry_uploads_missing_only(self):
         self.complete_release(draft=True)
@@ -157,7 +276,15 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(self.writes(), [])
 
     def test_ref_asset_published_missing_wrong_metadata_blocks_writes(self):
-        for drift in ("source", "asset", "missing", "prerelease", "tag", "duplicate_asset", "unexpected_asset"):
+        for drift in (
+            "source",
+            "asset",
+            "missing",
+            "prerelease",
+            "tag",
+            "duplicate_asset",
+            "unexpected_asset",
+        ):
             with self.subTest(drift=drift):
                 self.calls = []
                 self.complete_release()
@@ -183,7 +310,9 @@ class ReleaseTests(unittest.TestCase):
         self.drift_after_create = True
         with self.assertRaisesRegex(RuntimeError, "unreviewed source"):
             self.reconcile()
-        self.assertFalse(any("uploads.github.com" in arg for args in self.calls for arg in args))
+        self.assertFalse(
+            any("uploads.github.com" in arg for args in self.calls for arg in args)
+        )
         self.assertFalse(any("PATCH" in args for args in self.calls))
 
     def test_ambiguous_post_never_recreates_when_list_lags(self):
@@ -211,7 +340,9 @@ class ReleaseTests(unittest.TestCase):
             self.reconcile()
         (self.root / "release-intent.json").unlink()
         self.list_lag = 10
-        with self.assertRaisesRegex(RuntimeError, "Existing source tag has no visible release"):
+        with self.assertRaisesRegex(
+            RuntimeError, "Existing source tag has no visible release"
+        ):
             self.reconcile()
         self.assertEqual(len(self.creations()), 1)
 
@@ -225,24 +356,56 @@ class ReleaseTests(unittest.TestCase):
 
     def test_exhausted_canonical_read_retains_id_and_resumes_without_list(self):
         self.id_lag = m.READ_ATTEMPTS
-        with self.assertRaisesRegex(RuntimeError, "Canonical release readback unavailable"):
+        with self.assertRaisesRegex(
+            RuntimeError, "Canonical release readback unavailable"
+        ):
             self.reconcile()
-        self.assertEqual(json.loads((self.root / "release-intent.json").read_text())["release_id"], 42)
+        self.assertEqual(
+            json.loads((self.root / "release-intent.json").read_text())["release_id"],
+            42,
+        )
         self.list_lag = 10
         self.reconcile()
         self.assertEqual(len(self.creations()), 1)
 
     def test_bad_versions_minimum_url_and_uat_block_remote_work(self):
-        original = {name: (self.root / name).read_text() for name in
-                    ("manifest.json", "package.json", "package-lock.json", "versions.json", "main.js")}
-        cases = [("manifest.json", '{"version":"wrong"}'), ("package.json", '{"version":"wrong"}'),
-                 ("package-lock.json", json.dumps({"version": m.VERSION, "packages": {"": {"version": "wrong"}}})),
-                 ("package-lock.json", json.dumps({"version": "wrong", "packages": {"": {"version": m.VERSION}}})),
-                 ("manifest.json", json.dumps({"version": m.VERSION, "minAppVersion": "1.0.0"})),
-                 ("versions.json", json.dumps({m.VERSION: "1.0.0"})),
-                 ("main.js", self.bundle + '\n"https://keepsidianserver-i55qr5tvea-uc.a.run.app"'),
-                 ("main.js", self.bundle.replace("beta-8", "beta-6b")),
-                 ("main.js", self.bundle.replace("enabled = false", "enabled = true"))]
+        original = {
+            name: (self.root / name).read_text()
+            for name in (
+                "manifest.json",
+                "package.json",
+                "package-lock.json",
+                "versions.json",
+                "main.js",
+            )
+        }
+        cases = [
+            ("manifest.json", '{"version":"wrong"}'),
+            ("package.json", '{"version":"wrong"}'),
+            (
+                "package-lock.json",
+                json.dumps(
+                    {"version": m.VERSION, "packages": {"": {"version": "wrong"}}}
+                ),
+            ),
+            (
+                "package-lock.json",
+                json.dumps(
+                    {"version": "wrong", "packages": {"": {"version": m.VERSION}}}
+                ),
+            ),
+            (
+                "manifest.json",
+                json.dumps({"version": m.VERSION, "minAppVersion": "1.0.0"}),
+            ),
+            ("versions.json", json.dumps({m.VERSION: "1.0.0"})),
+            (
+                "main.js",
+                self.bundle + '\n"https://keepsidianserver-i55qr5tvea-uc.a.run.app"',
+            ),
+            ("main.js", self.bundle.replace("beta-8", "beta-6b")),
+            ("main.js", self.bundle.replace("enabled = false", "enabled = true")),
+        ]
         for name, payload in cases:
             with self.subTest(name=name, payload=payload):
                 (self.root / name).write_text(payload)
@@ -264,22 +427,36 @@ class ReleaseTests(unittest.TestCase):
             m.validate(self.root)
 
     def test_capability_profile_epoch_or_change_blocks_remote_work(self):
-        for value in ({"replay_version": 0, "replay_epoch": None},
-                      {"replay_version": True, "replay_epoch": EPOCH},
-                      {"replay_version": 1, "replay_epoch": "bad"},
-                      {"replay_version": 1, "replay_epoch": EPOCH, "extra": 1}):
+        for value in (
+            {"replay_version": 0, "replay_epoch": None},
+            {"replay_version": True, "replay_epoch": EPOCH},
+            {"replay_version": 1, "replay_epoch": "bad"},
+            {"replay_version": 1, "replay_epoch": EPOCH, "extra": 1},
+        ):
             with self.assertRaises(RuntimeError):
-                m.reconcile(SOURCE, self.root, self.run_cli, lambda _: json.dumps(value).encode())
+                m.reconcile(
+                    SOURCE,
+                    self.root,
+                    self.run_cli,
+                    lambda _: json.dumps(value).encode(),
+                )
             self.assertEqual(self.calls, [])
-        replies = iter([json.dumps({"replay_version": 1, "replay_epoch": EPOCH}).encode(), b"OK",
-                        json.dumps({"replay_version": 1, "replay_epoch": "b" * 32}).encode()])
+        replies = iter(
+            [
+                json.dumps({"replay_version": 1, "replay_epoch": EPOCH}).encode(),
+                b"OK",
+                json.dumps({"replay_version": 1, "replay_epoch": "b" * 32}).encode(),
+            ]
+        )
         with self.assertRaisesRegex(RuntimeError, "epoch changed"):
             m.reconcile(SOURCE, self.root, self.run_cli, lambda _: next(replies))
         self.assertEqual(self.calls, [])
 
     def test_redirect_and_http_error_do_not_retry(self):
         with self.assertRaisesRegex(RuntimeError, "must not redirect"):
-            m.NoRedirect().redirect_request(None, None, 302, "", {}, "https://elsewhere.example")
+            m.NoRedirect().redirect_request(
+                None, None, 302, "", {}, "https://elsewhere.example"
+            )
         opener = unittest.mock.MagicMock()
         opener.open.return_value.__enter__.return_value.status = 503
         with patch.object(m, "build_opener", return_value=opener):
@@ -299,20 +476,28 @@ class ReleaseTests(unittest.TestCase):
             args = ["gh", "api", "repos/example/releases"]
             if method:
                 args += ["--method", method]
-            with patch.object(m.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, b"", f"HTTP {status}".encode())):
+            with patch.object(
+                m.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess(
+                    [], 1, b"", f"HTTP {status}".encode()
+                ),
+            ):
                 if method is None and status == 404:
                     self.assertIsNone(m.command(args))
                 else:
                     with self.assertRaises(RuntimeError):
                         m.command(args)
 
-
     def test_missing_or_foreign_enrichment_capability_blocks_publication(self):
-        for bad in ({"version": 1, "epoch": "c" * 32},
-                    {"version": True, "epoch": "c" * 32, "issued_at_ms": 123},
-                    {"version": 1, "epoch": "c" * 32, "issued_at_ms": True},
-                    {"version": 1, "epoch": "d" * 32, "issued_at_ms": 124}):
+        for bad in (
+            {"version": 1, "epoch": "c" * 32},
+            {"version": True, "epoch": "c" * 32, "issued_at_ms": 123},
+            {"version": 1, "epoch": "c" * 32, "issued_at_ms": True},
+            {"version": 1, "epoch": "d" * 32, "issued_at_ms": 124},
+        ):
             count = []
+
             def get(url):
                 result = self.get(url)
                 if url.endswith("/enrich/local/capabilities"):
@@ -320,9 +505,11 @@ class ReleaseTests(unittest.TestCase):
                     if len(count) == 2:
                         return json.dumps(bad).encode()
                 return result
+
             with self.assertRaises(RuntimeError):
                 m.reconcile(SOURCE, self.root, self.run_cli, get)
             self.assertEqual(self.writes(), [])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
