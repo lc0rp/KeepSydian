@@ -35,7 +35,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: lc0rp/KeepSydian/.github/workflows/release-client-core.yml@8126d2e8f3d8e853fd93220a2f033d950eac4128
+    uses: lc0rp/KeepSydian/.github/workflows/release-client-core.yml@894fa0bf72734809ca8162951457a1e2c3deb590
     with:
       mode: validate-beta8
   release:
@@ -45,7 +45,7 @@ jobs:
       actions: read
       id-token: write
       attestations: write
-    uses: lc0rp/KeepSydian/.github/workflows/release-client-core.yml@8126d2e8f3d8e853fd93220a2f033d950eac4128
+    uses: lc0rp/KeepSydian/.github/workflows/release-client-core.yml@894fa0bf72734809ca8162951457a1e2c3deb590
     with:
       mode: release
       expected_head: ${{ inputs.expected_head }}
