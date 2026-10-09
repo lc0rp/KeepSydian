@@ -1,4 +1,7 @@
 from copy import deepcopy
+import base64
+import json
+from unittest.mock import patch
 from pathlib import Path
 import unittest
 import native_cloud_release as n
@@ -11,6 +14,7 @@ CLIENT = "v2.1.0-beta.8b"
 def fixture():
     build = {
         "id": BUILD,
+        "name": f"projects/{n.PROJECT}/locations/global/builds/{BUILD}",
         "projectId": n.PROJECT,
         "buildTriggerId": n.TRIGGER,
         "serviceAccount": n.BUILD_SA,
@@ -21,7 +25,13 @@ def fixture():
             "REPO_NAME": "KeepSidianServer",
             "REPO_FULL_NAME": "lc0rp/KeepSidianServer",
         },
-        "sourceProvenance": {"resolvedRepoSource": {"commitSha": "a" * 40}},
+        "sourceProvenance": {
+            "resolvedRepoSource": {
+                "commitSha": "a" * 40,
+                "projectId": n.PROJECT,
+                "repoName": "github_lc0rp_KeepSidianServer",
+            }
+        },
         "results": {
             "images": [
                 {"name": n.IMAGE + ":build-" + BUILD, "digest": "sha256:" + "b" * 64}
@@ -63,6 +73,20 @@ def fixture():
         ],
     }
     service["trafficStatuses"] = deepcopy(service["traffic"])
+    proof = {
+        "schema": 1,
+        "root_build_id": BUILD,
+        "origin_build_id": "",
+        "source": "a" * 40,
+        "image": identity["image"],
+        "config_digest": "sha256:" + "c" * 64,
+        "compressed_bytes": 100,
+        "baseline": {"test": "baseline"},
+    }
+    build["steps"] = [{"id": "capture-push", "status": "SUCCESS"}]
+    build["results"]["buildStepOutputs"] = [
+        base64.b64encode(json.dumps(proof).encode()).decode()
+    ]
     return build, revision, service
 
 
@@ -73,6 +97,27 @@ class FakeCloud:
         self.mode = mode
         self.writes = []
         self.smokes = []
+        self.runtime = {
+            "spec": {
+                "containers": [
+                    {
+                        "image": self.revision["containers"][0]["image"],
+                        "env": [
+                            {
+                                "name": "secret",
+                                "valueFrom": {
+                                    "secretKeyRef": {"name": "test-only", "key": "1"}
+                                },
+                            }
+                        ],
+                    }
+                ]
+            },
+            "metadata": {"annotations": {"runtime": "test"}},
+        }
+        self.runtime_expected = deepcopy(self.runtime)
+        self.network = {"metadata": {"annotations": {"ingress": "test"}}}
+        self.network_expected = deepcopy(self.network)
 
     def read(self, url, body=None):
         if body is not None:
@@ -92,16 +137,37 @@ class FakeCloud:
             return {"name": "operation"}
         if url == n.build_url(BUILD):
             return deepcopy(self.build)
+        if url.startswith(n.V1 + "/revisions/"):
+            return deepcopy(self.runtime)
+        if url == n.V1 + "/services/" + n.SERVICE:
+            return deepcopy(self.network)
         if "/revisions/" in url:
             return deepcopy(self.revision)
         if url == n.RUN:
             return deepcopy(self.service)
         raise AssertionError(url)
 
-    def run(self, tag=CLIENT):
-        return n.map_client(
-            BUILD, SERVER, tag, self.read, self.smokes.append, lambda _: None
-        )
+    def run(self, tag=CLIENT, smoke=None):
+        spec = deepcopy(self.runtime_expected["spec"])
+        spec["containers"][0].pop("image")
+        with patch.multiple(
+            n,
+            PROFILE_SPEC_HASH=n.fingerprint(spec),
+            PROFILE_ANNOTATIONS_HASH=n.fingerprint(
+                self.runtime_expected["metadata"]["annotations"]
+            ),
+            SERVICE_ANNOTATIONS_HASH=n.fingerprint(
+                self.network_expected["metadata"]["annotations"]
+            ),
+        ):
+            return n.map_client(
+                BUILD,
+                SERVER,
+                tag,
+                self.read,
+                smoke or self.smokes.append,
+                lambda _: None,
+            )
 
 
 class NativeReleaseTests(unittest.TestCase):
@@ -220,9 +286,50 @@ class NativeReleaseTests(unittest.TestCase):
             raise RuntimeError("smoke failed")
 
         with self.assertRaisesRegex(RuntimeError, "smoke failed"):
-            n.map_client(BUILD, SERVER, CLIENT, c.read, fail, lambda _: None)
+            c.run(smoke=fail)
         c.run()
         self.assertEqual(len(c.writes), 1)
+
+    def test_full_runtime_and_network_drift_stop_before_write(self):
+        for kind in ("secret", "resource", "volume", "network", "annotation"):
+            c = FakeCloud()
+            if kind == "secret":
+                c.runtime["spec"]["containers"][0]["env"][0]["valueFrom"][
+                    "secretKeyRef"
+                ]["name"] = "wrong"
+            if kind == "resource":
+                c.runtime["spec"]["containers"][0]["resources"] = {
+                    "limits": {"memory": "8Gi"}
+                }
+            if kind == "volume":
+                c.runtime["spec"]["volumes"] = [{"name": "extra"}]
+            if kind == "network":
+                c.network["metadata"]["annotations"]["ingress"] = "all"
+            if kind == "annotation":
+                c.runtime["metadata"]["annotations"]["runtime"] = "wrong"
+            with self.assertRaisesRegex(RuntimeError, "profile"):
+                c.run()
+            self.assertEqual(c.writes, [])
+
+    def test_wrong_native_repository_and_location_fail(self):
+        for field in ("repoName", "projectId"):
+            c = FakeCloud()
+            c.build["sourceProvenance"]["resolvedRepoSource"][field] = "wrong"
+            with self.assertRaises(RuntimeError):
+                c.run()
+            self.assertEqual(c.writes, [])
+        c = FakeCloud()
+        c.build["name"] = c.build["name"].replace("/global/", "/other/")
+        with self.assertRaises(RuntimeError):
+            c.run()
+        self.assertEqual(c.writes, [])
+
+    def test_missing_checkpoint_cannot_be_rebuilt_or_mapped(self):
+        c = FakeCloud()
+        c.build["results"]["buildStepOutputs"] = []
+        with self.assertRaisesRegex(RuntimeError, "checkpoint"):
+            c.run()
+        self.assertEqual(c.writes, [])
 
     def test_checked_in_policy_is_disabled(self):
         with self.assertRaisesRegex(RuntimeError, "disabled"):
