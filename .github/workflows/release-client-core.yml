@@ -36,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 3b117eb12133c28d3dfc3ba0376488ce74d84700
+          ref: edfa8a0784ca2ddc41cb848b69570fee197f0ee3
           persist-credentials: false
       - name: Test closed validation transport and drift rejection offline
         run: python3 -B scripts/test_validate_beta8_readonly.py
@@ -85,7 +85,7 @@ jobs:
           PYVALIDATE
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 3b117eb12133c28d3dfc3ba0376488ce74d84700
+          ref: edfa8a0784ca2ddc41cb848b69570fee197f0ee3
           path: engine
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -189,7 +189,7 @@ jobs:
           PYVALIDATE
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 3b117eb12133c28d3dfc3ba0376488ce74d84700
+          ref: edfa8a0784ca2ddc41cb848b69570fee197f0ee3
           path: engine
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
