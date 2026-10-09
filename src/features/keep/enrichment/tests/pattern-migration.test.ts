@@ -109,6 +109,7 @@ async function fixture(pattern: string, ai = true) {
 		.mockImplementation(async () => ({ notes: [note], total_notes: 1 }));
 	jest.spyOn(keepApi, "fetchNotes").mockImplementation(async () => ({ notes: [note], total_notes: 1 }));
 	jest.spyOn(keepApi, "getReplayEpoch").mockResolvedValue(undefined);
+	jest.spyOn(keepApi, "prepareLocalEnrichment").mockResolvedValue("synthetic-operation");
 	jest.spyOn(keepApi, "enrichLocalNotes").mockImplementation(provider);
 	const run = async (legacyTagConsent?: LegacyTagConsent, currentPlugin = plugin) => {
 		const plan = await buildManualSyncPlan(currentPlugin, "import", { legacyTagConsent }, { kind: "all" });

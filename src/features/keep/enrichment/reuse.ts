@@ -1,5 +1,10 @@
 import type KeepSidianPlugin from "@app/main";
-import { enrichLocalNotes, type LocalEnrichmentRequest, type PremiumFeatureFlags } from "@integrations/server/keepApi";
+import {
+	enrichLocalNotes,
+	prepareLocalEnrichment,
+	type LocalEnrichmentRequest,
+	type PremiumFeatureFlags,
+} from "@integrations/server/keepApi";
 import { EnrichmentSourceSchema } from "@schemas/keep";
 import { CONFLICT_FILE_SUFFIX } from "../constants";
 import { buildExistingKeepNoteIndex, readKeepNoteIdentity } from "../domain/noteLookup";
@@ -261,6 +266,15 @@ export async function enrichImportNotes(
 		for (let offset = 0; offset < missing.length; offset += 16) {
 			plugin.throwIfSyncCancelled?.();
 			const batch = missing.slice(offset, offset + 16);
+			// Capability failure proves no paid POST was attempted. Do this before
+			// persisting uncertainty; an ordinary retry can safely try preflight again.
+			assertContext();
+			const operation =
+				provider === enrichLocalNotes
+					? await prepareLocalEnrichment(credentials.email, credentials.token, credentials.supporterKey)
+					: undefined;
+			assertContext();
+			plugin.throwIfSyncCancelled?.();
 			for (const item of batch) if (item.request!.features.suggest_tags) item.record.tagsAdmitted = true;
 			for (const item of batch)
 				for (const feature of ["title", "tags"] as const) {
@@ -285,7 +299,8 @@ export async function enrichImportNotes(
 					credentials.email,
 					credentials.token,
 					batch.map((item) => item.request!),
-					credentials.supporterKey
+					credentials.supporterKey,
+					operation
 				);
 				if (
 					response.results.length !== batch.length ||
