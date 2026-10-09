@@ -1,4 +1,4 @@
-name: Build and publish reviewed beta.7 after server verification
+name: Build and publish reviewed beta.8 after server verification
 on:
   workflow_call:
 permissions:
@@ -18,21 +18,21 @@ jobs:
     outputs:
       artifact_id: ${{ steps.release-assets.outputs.artifact-id }}
     env:
-      KEEPSIDIAN_SERVER_URL: https://v2-1-0-beta-7---keepsidianserver-i55qr5tvea-uc.a.run.app
+      KEEPSIDIAN_SERVER_URL: https://v2-1-0-beta-8---keepsidianserver-i55qr5tvea-uc.a.run.app
       KEEPSIDIAN_RECOVERY_UAT: "false"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 7d44785950193670012b428229e97d037a02072e
+          ref: 0e07e1b12a994ec2a80edf72bc1db847d70a3049
           persist-credentials: false
       - name: Verify frozen source and offline publication contracts
         run: |
-          test "$(git rev-parse HEAD)" = '7d44785950193670012b428229e97d037a02072e'
-          python3 -B scripts/test_hosted_release_beta7.py
+          test "$(git rev-parse HEAD)" = '0e07e1b12a994ec2a80edf72bc1db847d70a3049'
+          python3 -B scripts/test_hosted_release_beta8.py
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22.x"
-      - name: Install locked dependencies and build exact beta.7 URL
+      - name: Install locked dependencies and build exact beta.8 URL
         run: |
           cutoff="$(python3 -c 'from datetime import datetime, timedelta, timezone; print((datetime.now(timezone.utc) - timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
           npm ci --before="$cutoff"
@@ -41,7 +41,7 @@ jobs:
           python3 - <<'PYVERIFY'
           import importlib.util
           from pathlib import Path
-          spec = importlib.util.spec_from_file_location('release', 'scripts/hosted-release-beta7.py')
+          spec = importlib.util.spec_from_file_location('release', 'scripts/hosted-release-beta8.py')
           release = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(release)
           release.validate(Path.cwd())
@@ -56,7 +56,7 @@ jobs:
       - id: release-assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: keepsidian-beta7-${{ github.run_id }}-${{ github.run_attempt }}
+          name: keepsidian-beta8-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             main.js
             manifest.json
@@ -73,7 +73,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 7d44785950193670012b428229e97d037a02072e
+          ref: 0e07e1b12a994ec2a80edf72bc1db847d70a3049
           persist-credentials: false
       - name: Require the successful build's single artifact ID
         env:
@@ -95,13 +95,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 scripts/hosted-release-beta7.py publish --source 7d44785950193670012b428229e97d037a02072e
+          python3 scripts/hosted-release-beta8.py publish --source 0e07e1b12a994ec2a80edf72bc1db847d70a3049
           cat release-receipt.json >> "$GITHUB_STEP_SUMMARY"
       - name: Retain publication intent/receipt even after an ambiguous failure
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: keepsidian-beta7-client-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          name: keepsidian-beta8-client-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             release-intent.json
             release-receipt.json
