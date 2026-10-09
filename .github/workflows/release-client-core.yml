@@ -23,11 +23,11 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 0e07e1b12a994ec2a80edf72bc1db847d70a3049
+          ref: 4f435c3313581ea60fb67434037a9eafaac39fc7
           persist-credentials: false
       - name: Verify frozen source and offline publication contracts
         run: |
-          test "$(git rev-parse HEAD)" = '0e07e1b12a994ec2a80edf72bc1db847d70a3049'
+          test "$(git rev-parse HEAD)" = '4f435c3313581ea60fb67434037a9eafaac39fc7'
           python3 -B scripts/test_hosted_release_beta8.py
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -73,7 +73,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 0e07e1b12a994ec2a80edf72bc1db847d70a3049
+          ref: 4f435c3313581ea60fb67434037a9eafaac39fc7
           persist-credentials: false
       - name: Require the successful build's single artifact ID
         env:
@@ -95,7 +95,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 scripts/hosted-release-beta8.py publish --source 0e07e1b12a994ec2a80edf72bc1db847d70a3049
+          python3 scripts/hosted-release-beta8.py publish --source 4f435c3313581ea60fb67434037a9eafaac39fc7
           cat release-receipt.json >> "$GITHUB_STEP_SUMMARY"
       - name: Retain publication intent/receipt even after an ambiguous failure
         if: always()
