@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "enabled": false,
+  "enabled": true,
   "trigger_id": "43a37949-e2fa-4539-8bac-4404840f8c72",
   "build_service_account": "projects/lc0rp-labs/serviceAccounts/keepsidian-cloudbuild@lc0rp-labs.iam.gserviceaccount.com",
   "recovery_core": "4f635e4143e7416631f88bd587aac1274544ff31"
