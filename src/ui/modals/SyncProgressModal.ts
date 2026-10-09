@@ -409,6 +409,7 @@ export class SyncProgressModal extends Modal {
 		await this.refreshUI();
 		try {
 			const result = await this.options.runSyncPlan(this.preparedPlan, {
+				onEntrySaved: (entryId, path) => this.handleEntrySaved(entryId, path),
 				onEntrySettled: (entryId, success, outcome) => this.handleEntrySettled(entryId, success, outcome),
 			});
 			if (result.nextPlan) {
@@ -456,6 +457,14 @@ export class SyncProgressModal extends Modal {
 			else entryStates.set(entry.id, "pending");
 		}
 		this.executionSnapshot = { plan: snapshotPlan, entryStates }; this.reviewFilterKey = "notes";
+	}
+	private handleEntrySaved(entryId: string, path: string) {
+		const entry = this.executionSnapshot?.plan.entries.find((candidate) => candidate.id === entryId);
+		if (!entry || !entry.selected || !entry.selectable) return;
+		entry.path = path;
+		entry.title = path.split("/").pop()?.replace(/\.md$/i, "") ?? entry.title;
+		if (entry.meta?.detail === "New AI suggestions are requested only for selected notes.") delete entry.meta.detail;
+		this.updateExecutionRowInPlace(entryId);
 	}
 	private handleEntrySettled(entryId: string, success: boolean, outcome?: SyncPlanAction) {
 		if (!this.executionSnapshot) return;
@@ -591,7 +600,7 @@ export class SyncProgressModal extends Modal {
 			if (this.lastResult?.status === "canceled") return `Sync canceled after ${this.lastResult.processed} notes.`;
 			if (this.lastResult?.status === "warning") {
 				const warningCount = this.lastResult.attachmentWarnings;
-				return `Sync complete with ${warningCount} attachment warning${warningCount === 1 ? "" : "s"}. Processed ${this.lastResult.processed} notes.`;
+				return `Sync complete with ${warningCount} warning${warningCount === 1 ? "" : "s"}. Processed ${this.lastResult.processed} notes.`;
 			}
 			return this.lastResult?.status === "success" ? `Sync complete. Processed ${this.lastResult.processed} notes.` : "Sync failed.";
 		}
@@ -931,6 +940,11 @@ export class SyncProgressModal extends Modal {
 		refs.row.classList.remove("is-pending", "is-done", "is-failed", "is-unchecked", "is-instant"); refs.row.classList.add(`is-${state}`);
 		refs.statusSymbolEl.textContent = state === "done" || state === "instant" ? "✓" : state === "failed" ? "!" : state === "unchecked" ? "–" : "…";
 		refs.badgeEl.textContent = getRuntimeStatusLabel(entry, state);
+		const titleEl = refs.row.querySelector(".keepsidian-sync-plan-row-title");
+		const pathEl = refs.row.querySelector(".keepsidian-sync-plan-row-path");
+		if (titleEl) titleEl.textContent = entry.title;
+		if (pathEl) pathEl.textContent = entry.path;
+		if (!entry.meta?.detail) refs.row.querySelector(".keepsidian-sync-plan-row-detail")?.remove();
 	}
 	private renderEntryBody(body: HTMLElement, entry: SyncPlanEntry, badgeText: string): HTMLSpanElement {
 		const titleLine = createChild(body, "div"); titleLine.classList.add("keepsidian-sync-plan-row-title-line");

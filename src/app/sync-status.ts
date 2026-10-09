@@ -39,9 +39,10 @@ function getSummaryStatus(summary: LastSyncSummary): SyncRunStatus {
 	return summary.status ?? (summary.success ? "success" : "failed");
 }
 
-function formatAttachmentWarnings(summary: LastSyncSummary): string {
+function formatWarnings(summary: LastSyncSummary): string {
+	// The persisted legacy counter includes attachment and AI warnings.
 	const count = summary.attachmentWarnings ?? 0;
-	return `${count} attachment warning${count === 1 ? "" : "s"}`;
+	return `${count} warning${count === 1 ? "" : "s"}`;
 }
 
 export function formatStatusBarText(summary: LastSyncSummary | null): string {
@@ -79,7 +80,7 @@ export function formatStatusBarTooltip(summary: LastSyncSummary | null): string 
 	}
 	if (status === "warning") {
 		const count = formatCount(summary);
-		return `KeepSidian last sync completed with ${formatAttachmentWarnings(summary)}: ${formattedTime} (processed ${count}).`;
+		return `KeepSidian last sync completed with ${formatWarnings(summary)}: ${formattedTime} (processed ${count}).`;
 	}
 	const count = formatCount(summary);
 	return `KeepSidian last synced: ${formattedTime} (${count}).`;
@@ -97,7 +98,7 @@ export function formatModalSummary(summary: LastSyncSummary | null): string {
 		return `Last ${modeText} completed on ${formattedTime}: Synced ${count}.`;
 	}
 	if (status === "warning") {
-		return `Last ${modeText} completed on ${formattedTime}: Synced ${count} with ${formatAttachmentWarnings(summary)}.`;
+		return `Last ${modeText} completed on ${formattedTime}: Synced ${count} with ${formatWarnings(summary)}.`;
 	}
 	if (status === "canceled") {
 		return `Last ${modeText} attempt on ${formattedTime} was canceled after ${count}.`;

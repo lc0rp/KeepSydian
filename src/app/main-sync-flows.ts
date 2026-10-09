@@ -78,6 +78,7 @@ export interface SyncPlanBuildCallbacks {
 }
 
 export interface SyncPlanRunCallbacks {
+	onEntrySaved?: (entryId: string, path: string) => void;
 	onEntrySettled?: (entryId: string, success: boolean, outcome?: SyncPlanAction) => void;
 }
 
@@ -365,6 +366,7 @@ export async function runPreparedSyncPlan(
 		},
 		setTotalNotes: (n: number) => uiSetTotalNotes(plugin, n),
 		reportProgress: () => reportSyncProgress(plugin),
+		onEntrySaved: (entryId: string, path: string) => runCallbacks?.onEntrySaved?.(entryId, path),
 		onEntrySettled: (entryId: string, success: boolean, outcome?: SyncPlanAction) => {
 			if (success && outcome === "merge" && preparedPlan.stage === "import") {
 				const path = preparedPlan.plan.entries.find((entry) => entry.id === entryId)?.path;
