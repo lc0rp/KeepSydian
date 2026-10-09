@@ -104,6 +104,7 @@ jobs:
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
         with:
           workload_identity_provider: projects/162887264002/locations/global/workloadIdentityPools/keepsidian-client-release/providers/github-client-main
+          audience: https://iam.googleapis.com/projects/162887264002/locations/global/workloadIdentityPools/keepsidian-client-release/providers/github-client-main
           service_account: keepsidian-client-mapper@lc0rp-labs.iam.gserviceaccount.com
           token_format: access_token
           access_token_lifetime: 900s
@@ -152,6 +153,7 @@ jobs:
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
         with:
           workload_identity_provider: projects/162887264002/locations/global/workloadIdentityPools/keepsidian-client-release/providers/github-client-main
+          audience: https://iam.googleapis.com/projects/162887264002/locations/global/workloadIdentityPools/keepsidian-client-release/providers/github-client-main
           service_account: keepsidian-client-mapper@lc0rp-labs.iam.gserviceaccount.com
           token_format: access_token
           access_token_lifetime: 900s
