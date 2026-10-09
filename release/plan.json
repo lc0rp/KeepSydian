@@ -9,9 +9,10 @@
   "model": "gpt-6-luna",
   "allow_new_build": false,
   "recovery_cores": [
-    "553ac867c679dd46e432aebbd09667a8d7854679"
+    "553ac867c679dd46e432aebbd09667a8d7854679",
+    "e542f5dff4dea02a0e063807c7c1b5ef69b25582"
   ],
-  "backend_core": "43db9a2cf399d63290085813cd77569cd9af58ae",
+  "backend_core": "a85b63be4206ae8f7d4ba7db1c2e3227f4daba32",
   "recovery_prefixes": [
     "keepsidian-beta8",
     "keepsidian-client",

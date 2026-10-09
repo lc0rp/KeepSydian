@@ -1,13 +1,55 @@
-name: "Client: publish beta.8 after server verification"
+name: "Client: publish reviewed plan after server proof"
+run-name: backend/${{ inputs.backend_run }}/${{ inputs.backend_artifact }}
 on:
   workflow_dispatch:
+    inputs:
+      expected_head:
+        description: "Exact reviewed client dispatcher SHA"
+        type: string
+        required: true
+      recovery_run:
+        description: "Original completed run ID (blank for a new build)"
+        type: string
+        default: ""
+      recovery_artifact:
+        description: "Exact retained image/build artifact ID"
+        type: string
+        default: ""
+      recovery_head:
+        description: "Reviewed original run head SHA"
+        type: string
+        default: ""
+      backend_run:
+        description: "Successful verified backend run ID"
+        type: string
+        required: true
+      backend_artifact:
+        description: "Exact backend proof artifact ID"
+        type: string
+        required: true
+      backend_head:
+        description: "Reviewed backend dispatcher head SHA"
+        type: string
+        required: true
 permissions:
   contents: read
 jobs:
   release:
-    if: github.repository_id == '822100323' && github.actor_id == '2609441' && github.triggering_actor == 'lc0rp' && github.ref == 'refs/heads/main'
+    if: github.repository_id == '822100323' && ((github.actor_id == '2609441' && github.triggering_actor == 'lc0rp') || (vars.CLIENT_RELEASE_ACTOR_ID != '' && vars.CLIENT_RELEASE_ACTOR_LOGIN != '' && github.actor_id == vars.CLIENT_RELEASE_ACTOR_ID && github.triggering_actor == vars.CLIENT_RELEASE_ACTOR_LOGIN)) && github.ref == 'refs/heads/main' && inputs.expected_head == github.sha
     permissions:
       contents: write
+      actions: read
       id-token: write
       attestations: write
-    uses: lc0rp/KeepSydian/.github/workflows/release-client-core.yml@553ac867c679dd46e432aebbd09667a8d7854679
+    uses: lc0rp/KeepSydian/.github/workflows/release-client-core.yml@e542f5dff4dea02a0e063807c7c1b5ef69b25582
+    with:
+      expected_head: ${{ inputs.expected_head }}
+      recovery_run: ${{ inputs.recovery_run }}
+      recovery_artifact: ${{ inputs.recovery_artifact }}
+      recovery_head: ${{ inputs.recovery_head }}
+      backend_run: ${{ inputs.backend_run }}
+      backend_artifact: ${{ inputs.backend_artifact }}
+      backend_head: ${{ inputs.backend_head }}
+      backend_app_id: ${{ vars.BACKEND_RELEASE_APP_ID }}
+    secrets:
+      backend_app_private_key: ${{ secrets.BACKEND_RELEASE_APP_PRIVATE_KEY }}
