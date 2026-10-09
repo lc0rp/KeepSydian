@@ -32,6 +32,13 @@ Relevant content or prompt changes can request a new result. Prefix changes and
 lower tag limits use the same raw tags. Review preparation does no AI work; a
 missing suggestion is requested only when its note is selected for execution.
 
+Official versioned release routes share one stable service identity, so upgrading
+the plugin keeps cache entries, ownership and uncertain-attempt guards. Accounts
+and unrelated/custom backend endpoints remain isolated. Existing nonempty ledgers
+from unreleased URL-keyed builds are preserved and block new AI work until their
+history can be reviewed safely; the client never clears them to retry. Public
+beta.7 predates this ledger format.
+
 Existing titles and tags start as manual. Saved AI settings do not start tag
 generation for previously imported notes. A default-off choice in each download
 can admit selected notes to tag generation; those notes then reuse accepted
