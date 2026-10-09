@@ -2,9 +2,12 @@ name: Publish reviewed client plan after canonical backend proof
 on:
   workflow_call:
     inputs:
+      mode:
+        type: string
+        default: release
       expected_head:
         type: string
-        required: true
+        default: ""
       recovery_run:
         type: string
         default: ""
@@ -16,27 +19,55 @@ on:
         default: ""
       backend_run:
         type: string
-        required: true
+        default: ""
       backend_artifact:
         type: string
-        required: true
+        default: ""
       backend_head:
         type: string
-        required: true
+        default: ""
       backend_app_id:
         type: string
-        required: true
+        default: ""
     secrets:
       backend_app_private_key:
-        required: true
+        required: false
 permissions:
   contents: read
 concurrency:
   group: keepsidian-client-hosted-release
   cancel-in-progress: false
 jobs:
+  validate-beta8:
+    if: inputs.mode == 'validate-beta8' && github.repository_id == '822100323' && github.actor_id == '2609441' && github.triggering_actor == 'lc0rp' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 3b117eb12133c28d3dfc3ba0376488ce74d84700
+          persist-credentials: false
+      - name: Test closed validation transport and drift rejection offline
+        run: python3 -B scripts/test_validate_beta8_readonly.py
+      - name: Observe fixed beta.8 state without release mutations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/validate_beta8_readonly.py client
+      - name: Retain validation observations only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: keepsidian-beta8-readonly-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            validation/validation-receipt.json
+            validation/recovered/artifact-origin.json
+          if-no-files-found: warn
+          retention-days: 7
   build:
-    if: inputs.recovery_run == '' && github.repository_id == '822100323' && ((github.actor_id == '2609441' && github.triggering_actor == 'lc0rp') || (vars.CLIENT_RELEASE_ACTOR_ID != '' && vars.CLIENT_RELEASE_ACTOR_LOGIN != '' && github.actor_id == vars.CLIENT_RELEASE_ACTOR_ID && github.triggering_actor == vars.CLIENT_RELEASE_ACTOR_LOGIN)) && github.ref == 'refs/heads/main' && inputs.expected_head == github.sha && github.event_name == 'workflow_dispatch'
+    if: inputs.mode == 'release' && (inputs.recovery_run == '' && github.repository_id == '822100323' && ((github.actor_id == '2609441' && github.triggering_actor == 'lc0rp') || (vars.CLIENT_RELEASE_ACTOR_ID != '' && vars.CLIENT_RELEASE_ACTOR_LOGIN != '' && github.actor_id == vars.CLIENT_RELEASE_ACTOR_ID && github.triggering_actor == vars.CLIENT_RELEASE_ACTOR_LOGIN)) && github.ref == 'refs/heads/main' && inputs.expected_head == github.sha && github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -66,7 +97,7 @@ jobs:
           PYVALIDATE
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: b61ec4b06c5becb98df9548d49f2901b23046dae
+          ref: 3b117eb12133c28d3dfc3ba0376488ce74d84700
           path: engine
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -161,7 +192,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
   publish:
-    if: always() && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.recovery_run != '')) && github.repository_id == '822100323' && ((github.actor_id == '2609441' && github.triggering_actor == 'lc0rp') || (vars.CLIENT_RELEASE_ACTOR_ID != '' && vars.CLIENT_RELEASE_ACTOR_LOGIN != '' && github.actor_id == vars.CLIENT_RELEASE_ACTOR_ID && github.triggering_actor == vars.CLIENT_RELEASE_ACTOR_LOGIN)) && github.ref == 'refs/heads/main' && inputs.expected_head == github.sha && github.event_name == 'workflow_dispatch'
+    if: inputs.mode == 'release' && (always() && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.recovery_run != '')) && github.repository_id == '822100323' && ((github.actor_id == '2609441' && github.triggering_actor == 'lc0rp') || (vars.CLIENT_RELEASE_ACTOR_ID != '' && vars.CLIENT_RELEASE_ACTOR_LOGIN != '' && github.actor_id == vars.CLIENT_RELEASE_ACTOR_ID && github.triggering_actor == vars.CLIENT_RELEASE_ACTOR_LOGIN)) && github.ref == 'refs/heads/main' && inputs.expected_head == github.sha && github.event_name == 'workflow_dispatch')
     needs: build
     env:
       KEEPSIDIAN_RELEASE_PLAN: ${{ github.workspace }}/plan/release/plan.json
@@ -188,7 +219,7 @@ jobs:
           PYVALIDATE
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: b61ec4b06c5becb98df9548d49f2901b23046dae
+          ref: 3b117eb12133c28d3dfc3ba0376488ce74d84700
           path: engine
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
