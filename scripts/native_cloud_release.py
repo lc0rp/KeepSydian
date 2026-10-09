@@ -6,6 +6,8 @@ Client-only releases use exactly the same verifier/mapper as paired releases.
 
 from __future__ import annotations
 import argparse
+import base64
+import hashlib
 from copy import deepcopy
 import json
 import os
@@ -30,6 +32,63 @@ UUID = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
 SUFFIX = "---keepsidianserver-i55qr5tvea-uc.a.run.app"
 
 
+V1 = "https://run.googleapis.com/apis/serving.knative.dev/v1/namespaces/" + PROJECT
+PROFILE_SPEC_HASH = "bc732af944735aa9d1418618513fd07d457417dc0287558bf2e30cf3ea10230d"
+PROFILE_ANNOTATIONS_HASH = (
+    "89a8ab83f445fa3a8a8440a48a70f1b543505d026cdda47c4a67c91542bf7467"
+)
+SERVICE_ANNOTATIONS_HASH = (
+    "c4262e4d0a744de3c9be36b83cac472e4540faa9c55200b4e11bfc44ea1b239c"
+)
+OUTPUT_ANNOTATIONS = {
+    "run.googleapis.com/client-name",
+    "run.googleapis.com/client-version",
+    "run.googleapis.com/operation-id",
+    "run.googleapis.com/urls",
+    "run.googleapis.com/ingress-status",
+    "serving.knative.dev/creator",
+    "serving.knative.dev/lastModifier",
+    "run.googleapis.com/build-id",
+    "run.googleapis.com/build-image-uri",
+    "run.googleapis.com/build-name",
+    "run.googleapis.com/build-source-location",
+}
+
+
+def fingerprint(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def configured_annotations(value: dict[str, str]) -> dict[str, str]:
+    return {k: v for k, v in value.items() if k not in OUTPUT_ANNOTATIONS}
+
+
+def verify_runtime(read: Callable[..., Any], identity: dict[str, str]) -> None:
+    revision = read(V1 + "/revisions/" + identity["revision"])
+    spec = deepcopy(revision.get("spec", {}))
+    containers = spec.get("containers", [])
+    if len(containers) != 1 or containers[0].pop("image", None) != identity["image"]:
+        raise RuntimeError("Runtime image/profile mismatch")
+    if (
+        fingerprint(spec) != PROFILE_SPEC_HASH
+        or fingerprint(
+            configured_annotations(revision.get("metadata", {}).get("annotations", {}))
+        )
+        != PROFILE_ANNOTATIONS_HASH
+    ):
+        raise RuntimeError("Full runtime resources/secrets/network profile mismatch")
+    service = read(V1 + "/services/" + SERVICE)
+    if (
+        fingerprint(
+            configured_annotations(service.get("metadata", {}).get("annotations", {}))
+        )
+        != SERVICE_ANNOTATIONS_HASH
+    ):
+        raise RuntimeError("Service ingress/network/billing profile mismatch")
+
+
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args: Any) -> None:
         raise RuntimeError("Redirect refused")
@@ -50,6 +109,10 @@ def request(url: str, token: str, body: dict[str, Any] | None = None) -> Any:
             url == RUN
             or re.fullmatch(build_pattern, url)
             or re.fullmatch(revision_pattern, url)
+            or url == V1 + "/services/" + SERVICE
+            or re.fullmatch(
+                re.escape(V1 + "/revisions/") + r"keepsidianserver-b-[0-9a-f]{16}", url
+            )
         )
     else:
         allowed = (
@@ -118,6 +181,27 @@ def build_identity(
     ):
         raise RuntimeError("Missing or ambiguous native resolved source provenance")
     source = commits[0]
+    resolved = provenance.get("resolvedGitSource")
+    repo = provenance.get("resolvedRepoSource")
+    # Accept only the reviewed first-generation GitHub repository, never names
+    # supplied solely through user-overridable build substitutions.
+    if resolved is not None:
+        if resolved.get("url") not in (
+            "https://github.com/lc0rp/KeepSidianServer",
+            "https://github.com/lc0rp/KeepSidianServer.git",
+        ) or resolved.get("dir", "") not in ("", "."):
+            raise RuntimeError("Native Git source repository mismatch")
+    elif repo is not None:
+        if (
+            repo.get("projectId") != PROJECT
+            or repo.get("repoName") != "github_lc0rp_KeepSidianServer"
+            or repo.get("dir", "") not in ("", ".")
+        ):
+            raise RuntimeError("Native repository source mismatch")
+    else:
+        raise RuntimeError("Unapproved native connection source type")
+    if build.get("name") != f"projects/{PROJECT}/locations/global/builds/{build_id}":
+        raise RuntimeError("Native build resource name/location mismatch")
     if (
         build.get("id") != build_id
         or build.get("projectId") != PROJECT
@@ -148,6 +232,119 @@ def build_identity(
             )
         result["image"] = IMAGE + "@" + images[0]["digest"]
     return result
+
+
+def checkpoint(build: dict[str, Any]) -> dict[str, Any]:
+    steps = build.get("steps", [])
+    indices = [i for i, step in enumerate(steps) if step.get("id") == "capture-push"]
+    if len(indices) != 1 or steps[indices[0]].get("status") != "SUCCESS":
+        raise RuntimeError(
+            "No completed native image checkpoint; do not rebuild automatically"
+        )
+    outputs = build.get("results", {}).get("buildStepOutputs", [])
+    try:
+        raw = base64.b64decode(outputs[indices[0]], validate=True)
+        if len(raw) > 48000:
+            raise ValueError("oversized")
+        value = json.loads(raw)
+    except (IndexError, ValueError, TypeError):
+        raise RuntimeError("Missing or invalid durable native checkpoint") from None
+    if (
+        set(value)
+        != {
+            "schema",
+            "root_build_id",
+            "origin_build_id",
+            "source",
+            "image",
+            "config_digest",
+            "compressed_bytes",
+            "baseline",
+        }
+        or value["schema"] != 1
+    ):
+        raise RuntimeError("Invalid native checkpoint schema")
+    build_url(value["root_build_id"])
+    if value["origin_build_id"]:
+        build_url(value["origin_build_id"])
+    if not re.fullmatch(
+        re.escape(IMAGE) + r"@sha256:[0-9a-f]{64}", value["image"]
+    ) or not re.fullmatch(r"sha256:[0-9a-f]{64}", value["config_digest"]):
+        raise RuntimeError("Invalid immutable checkpoint image")
+    if (
+        type(value["compressed_bytes"]) is not int
+        or not 0 < value["compressed_bytes"] <= 1073741824
+        or not isinstance(value["baseline"], dict)
+    ):
+        raise RuntimeError("Invalid checkpoint size/baseline")
+    return value
+
+
+def resolve_build(
+    read: Callable[..., Any],
+    build_id: str,
+    server_tag: str,
+    require_success: bool = True,
+    max_builds: int = 5,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    current = build_id
+    visited: set[str] = set()
+    first = None
+    first_identity = None
+    for depth in range(max_builds):
+        if current in visited:
+            raise RuntimeError("Cyclic recovery lineage")
+        visited.add(current)
+        build = read(build_url(current))
+        if build.get("status") not in (
+            ("SUCCESS",)
+            if depth == 0 and require_success
+            else ("SUCCESS", "FAILURE", "TIMEOUT", "CANCELLED")
+        ):
+            raise RuntimeError(
+                "Original native build is not terminal or successful as required"
+            )
+        # Identity validation is independent of terminal outcome. No caller can
+        # cause a failed build to masquerade as successful to the client.
+        identity = build_identity(
+            {**build, "status": "WORKING"}, current, server_tag, successful=False
+        )
+        proof = checkpoint(build)
+        if proof["source"] != identity["source"] or proof[
+            "origin_build_id"
+        ] != build.get("substitutions", {}).get("_RECOVER_BUILD_ID", ""):
+            raise RuntimeError("Recovery checkpoint source/origin mismatch")
+        if first is None:
+            first, first_identity = proof, identity
+            if require_success:
+                successful = build_identity(build, current, server_tag)
+                if successful["image"] != proof["image"]:
+                    raise RuntimeError(
+                        "Native result image differs from durable checkpoint"
+                    )
+        elif any(
+            proof[k] != first[k]
+            for k in (
+                "root_build_id",
+                "source",
+                "image",
+                "config_digest",
+                "compressed_bytes",
+                "baseline",
+            )
+        ):
+            raise RuntimeError("Recovery changed original image or baseline")
+        if not proof["origin_build_id"]:
+            if proof["root_build_id"] != current:
+                raise RuntimeError("Recovery root identity mismatch")
+            first_identity["revision"] = (
+                "keepsidianserver-b-" + current.replace("-", "")[:16]
+            )
+            first_identity["image"] = first["image"]
+            first_identity["root_build_id"] = current
+            return first_identity, first
+        current = proof["origin_build_id"]
+    raise RuntimeError("Recovery lineage exceeds five builds")
 
 
 def verify_revision(revision: dict[str, Any], identity: dict[str, str]) -> None:
@@ -233,9 +430,10 @@ def map_client(
     pause: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     alias(client_tag, "v")
-    identity = build_identity(read(build_url(build_id)), build_id, server_tag)
+    identity, _ = resolve_build(read, build_id, server_tag)
     revision_url = RUN + "/revisions/" + identity["revision"]
     verify_revision(read(revision_url), identity)
+    verify_runtime(read, identity)
     before = read(RUN)
     desired = desired_mapping(before, identity, client_tag)
     if routes(desired) != routes(before["traffic"]):
@@ -268,6 +466,7 @@ def map_client(
             "Mapping outcome unresolved; read back on next invocation, do not resubmit now"
         )
     verify_revision(read(revision_url), identity)
+    verify_runtime(read, identity)
     url = "https://" + alias(client_tag, "v") + SUFFIX
     smoke(url)
     final = read(RUN)
