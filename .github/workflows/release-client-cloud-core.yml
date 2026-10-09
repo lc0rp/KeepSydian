@@ -11,6 +11,9 @@ on:
       build_id:
         type: string
         default: ""
+      fault_stage:
+        type: string
+        default: ""
       recovery_run:
         type: string
         default: ""
@@ -42,7 +45,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 4bccfcb8db34e9e6bf7f49d97602d38c2013ae3e
+          ref: c66ea471066eb4507a1c0a48aefd304d18572ea1
           path: engine
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -59,12 +62,14 @@ jobs:
           CLIENT_TAG: ${{ inputs.client_tag }}
           SERVER_TAG: ${{ inputs.server_tag }}
           BUILD_ID: ${{ inputs.build_id }}
+          FAULT_STAGE: ${{ inputs.fault_stage }}
           ORIGIN_RUN: ${{ inputs.recovery_run }}
           ORIGIN_ARTIFACT: ${{ inputs.recovery_artifact }}
           ORIGIN_HEAD: ${{ inputs.recovery_head }}
         run: |
           python3 - <<'PYINPUT'
           import os, re
+          if os.environ['FAULT_STAGE'] not in ('', 'after-attestation'): raise RuntimeError('Unapproved E2E fault')
           values=[os.environ[k] for k in ('ORIGIN_RUN','ORIGIN_ARTIFACT','ORIGIN_HEAD')]
           if any(values) and not (re.fullmatch(r'[1-9][0-9]*',values[0]) and re.fullmatch(r'[1-9][0-9]*',values[1]) and re.fullmatch(r'[0-9a-f]{40}',values[2])):
               raise RuntimeError('Complete exact recovery tuple required')
@@ -138,6 +143,11 @@ jobs:
             app/main.js
             app/manifest.json
             app/styles.css
+      - name: Controlled E2E partial failure retaining exact attested bytes
+        if: inputs.fault_stage == 'after-attestation'
+        run: |
+          echo 'Intentional E2E fault after build and attestation; recover the retained exact artifact.'
+          exit 1
       - id: recheck-auth
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
         with:
