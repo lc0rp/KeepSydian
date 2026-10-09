@@ -3,6 +3,11 @@ run-name: backend/${{ inputs.backend_run }}/${{ inputs.backend_artifact }}
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: "Read-only beta.8 validation or separately approved release"
+        type: choice
+        options: [validate-beta8, release]
+        default: validate-beta8
       expected_head:
         description: "Exact reviewed client dispatcher SHA"
         type: string
@@ -22,27 +27,36 @@ on:
       backend_run:
         description: "Successful verified backend run ID"
         type: string
-        required: true
+        default: ""
       backend_artifact:
         description: "Exact backend proof artifact ID"
         type: string
-        required: true
+        default: ""
       backend_head:
         description: "Reviewed backend dispatcher head SHA"
         type: string
-        required: true
+        default: ""
 permissions:
   contents: read
 jobs:
+  validate-beta8:
+    if: inputs.mode == 'validate-beta8' && inputs.expected_head == github.sha && github.repository_id == '822100323' && github.actor_id == '2609441' && github.triggering_actor == 'lc0rp' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      actions: read
+    uses: lc0rp/KeepSydian/.github/workflows/release-client-core.yml@8126d2e8f3d8e853fd93220a2f033d950eac4128
+    with:
+      mode: validate-beta8
   release:
-    if: github.repository_id == '822100323' && ((github.actor_id == '2609441' && github.triggering_actor == 'lc0rp') || (vars.CLIENT_RELEASE_ACTOR_ID != '' && vars.CLIENT_RELEASE_ACTOR_LOGIN != '' && github.actor_id == vars.CLIENT_RELEASE_ACTOR_ID && github.triggering_actor == vars.CLIENT_RELEASE_ACTOR_LOGIN)) && github.ref == 'refs/heads/main' && inputs.expected_head == github.sha
+    if: inputs.mode == 'release' && github.repository_id == '822100323' && ((github.actor_id == '2609441' && github.triggering_actor == 'lc0rp') || (vars.CLIENT_RELEASE_ACTOR_ID != '' && vars.CLIENT_RELEASE_ACTOR_LOGIN != '' && github.actor_id == vars.CLIENT_RELEASE_ACTOR_ID && github.triggering_actor == vars.CLIENT_RELEASE_ACTOR_LOGIN)) && github.ref == 'refs/heads/main' && inputs.expected_head == github.sha
     permissions:
       contents: write
       actions: read
       id-token: write
       attestations: write
-    uses: lc0rp/KeepSydian/.github/workflows/release-client-core.yml@e542f5dff4dea02a0e063807c7c1b5ef69b25582
+    uses: lc0rp/KeepSydian/.github/workflows/release-client-core.yml@8126d2e8f3d8e853fd93220a2f033d950eac4128
     with:
+      mode: release
       expected_head: ${{ inputs.expected_head }}
       recovery_run: ${{ inputs.recovery_run }}
       recovery_artifact: ${{ inputs.recovery_artifact }}
