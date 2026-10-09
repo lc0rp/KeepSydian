@@ -1,6 +1,6 @@
 # Native release transition — inactive draft
 
-The native Cloud Build design supersedes the earlier two-button reviewer-assertion proposal. This branch is not activation-ready. Both native policies are disabled. No trigger, IAM, WIF, release tag, deployment, merge, or paid validation run was changed by this work.
+The native Cloud Build design supersedes the earlier two-button reviewer-assertion proposal. This branch awaits exact activation approval and live preflight. Both native policies are disabled. No trigger, IAM, WIF, release tag, deployment, merge, or paid validation run was changed by this work.
 
 The intended sequence is an externally created server tag triggering Cloud Build, then an externally created client tag selected by the manual GitHub client workflow. The client verifies native build identity, exact image/revision readiness, and maps its version URL before building or publishing. A later client version can reuse that same backend. No GitHub App private key is proposed.
 
@@ -12,15 +12,13 @@ The intended sequence is an externally created server tag triggering Cloud Build
 - Server preflight captures current routing while comparing the runtime/security profile to reviewed configuration. The captured baseline stays fixed throughout that build; later releases can preserve aliases added since beta.8.
 - Old manual write wrappers disabled in the proposed tree; legacy public release publisher remains retired.
 
-## Independent review — remaining implementation blockers
+## Implementation review update
 
-1. Native server terminal-failure recovery is incomplete. If deployment succeeds but smoke or final images publication fails, the native build is not SUCCESS and the client correctly refuses it. A new build must not be treated as recovery. A durable receipt/native-image lineage and explicit deploy-only recovery path still need implementation and review.
-2. Native repository identity must be bound beyond repository-name substitutions. The exact installed connector/source-provenance shape needs supported read-only inspection. Build resource name/location should also be checked.
-3. Client verification currently checks exact source/image/readiness/runtime account/model/replay, but not the entire approved resources/secrets/network profile. Do not label it full runtime-profile verification.
-4. Availability of resolved source provenance during WORKING is unproven. Fail closed; never substitute an operator-maintained SHA or silently relax identity checks.
-5. New engine/core pins are draft checkpoints, not independent-review approval. Mutable builder images need reviewed immutable digests before activation.
+Native terminal recovery, repository binding and full runtime verification are now implemented. Recovery uses Cloud Build's completed capture-push step output and preserves the original image, baseline and revision across bounded native build lineage. Client-only aliases added later remain preserved. Recovery never rebuilds the backend. The client accepts only a successful selected build whose native image result equals its verified checkpoint lineage.
 
-The review's earlier baseline and API-prefix findings were addressed in the working draft; the scoped second review confirmed all three fixes. Reviewer ran 32 tests and six offline API rejection checks. Overall approval remains withheld for the open findings above.
+Independent scoped review passed 61 tests including a retained real revision profile and the maximum recovery-depth boundary. Full server validation: 697 passed, 4 skipped, 90.09% coverage. Client Python validation: 126 tests, 7 skipped. These are local results, not live E2E proof.
+
+Live gates remain: installed native provenance shape while WORKING, durable output retention after terminal failure, fresh effective permissions/connection metadata and approval of exact persistent grants plus bounded runs. Before-checkpoint failure remains fail-closed and cannot silently rebuild an ambiguous pushed image. Refer to the new exact activation packet; the earlier open-code-gap list is superseded.
 
 ## Actual trust finding and approval boundary
 
@@ -46,3 +44,5 @@ Required evidence: one new backend build and verified version URL; paired client
 ## Local validation checkpoint
 
 Server full suite: 681 passed, 4 skipped, 90.09% coverage. Client Python suite: 113 tests, 7 skipped. Ruff and changed-workflow actionlint passed. New native mapper tests cover lost/rejected PATCH, conflicts, idempotence, backend reuse, source/image identity failures, readiness/runtime failures and smoke failure recovery. Four server baseline tests cover later aliases, runtime drift, non-convergence and existing version rejection. These are offline checks; live E2E is NOT RUN.
+
+Exact approval packet: https://github.com/lc0rp/KeepSidianServer/blob/fix/resumable-release-ci/docs/08-operations/native-activation-approval.md
