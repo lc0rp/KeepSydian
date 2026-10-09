@@ -16,6 +16,14 @@ import * as api from "@integrations/server/keepApi";
 
 const URL7 = "https://v2-1-0-beta-7---keepsidianserver-i55qr5tvea-uc.a.run.app";
 const URL8 = "https://v2-1-0-beta-8---keepsidianserver-i55qr5tvea-uc.a.run.app";
+// Release tooling accepts a numeric or alphanumeric/hyphen second identifier.
+const releaseRoutes = [
+	URL8,
+	URL8.replace("beta-8", "beta-8a1"),
+	URL8.replace("beta-8", "beta-8aa"),
+	URL8.replace("beta-8", "alpha-preview"),
+	URL8.replace("beta-8", "beta-build-42"),
+];
 const flags = { suggest_title: {}, suggest_tags: { max_tags: 5, prefix: "auto-", restrict_tags: false } };
 const path = ".obsidian/plugins/keepsidian/enrichment-v1.json";
 beforeAll(() => {
@@ -77,7 +85,7 @@ async function fixture() {
 	return { disk, plugin, note, preflight, provider, run };
 }
 
-it("reuses an accepted result after only a release endpoint change", async () => {
+it.each(releaseRoutes)("reuses an accepted result after a release upgrade to %s", async (endpoint) => {
 	const f = await fixture();
 	await f.run();
 	await f.run();
@@ -86,12 +94,12 @@ it("reuses an accepted result after only a release endpoint change", async () =>
 	expect(
 		Object.values(JSON.parse(f.disk.get(path)!).state.cache).every((x) => (x as { status: string }).status === "ready")
 	).toBe(true);
-	process.env.REVIEW_RELEASE_URL = URL8;
+	process.env.REVIEW_RELEASE_URL = endpoint;
 	await f.run();
 	expect(f.provider).toHaveBeenCalledTimes(1);
 });
 
-it("retains an uncertain paid-attempt guard after only a release endpoint change", async () => {
+it.each(releaseRoutes)("retains an uncertain paid-attempt guard after a release upgrade to %s", async (endpoint) => {
 	const f = await fixture();
 	f.provider.mockRejectedValueOnce(new Error("paid result response lost"));
 	await f.run();
@@ -102,7 +110,7 @@ it("retains an uncertain paid-attempt guard after only a release endpoint change
 			(x) => (x as { status: string }).status === "uncertain"
 		)
 	).toBe(true);
-	process.env.REVIEW_RELEASE_URL = URL8;
+	process.env.REVIEW_RELEASE_URL = endpoint;
 	await f.run();
 	expect(f.provider).toHaveBeenCalledTimes(1);
 });
@@ -190,7 +198,7 @@ it.each([
 });
 
 it.each([
-	URL8,
+	...releaseRoutes,
 	"https://v2-1-0-beta-9---keepsidianserver-i55qr5tvea-uc.a.run.app",
 	"https://v2-1-0-beta-6b---keepsidianserver-i55qr5tvea-uc.a.run.app",
 	"https://v2-1-0---keepsidianserver-i55qr5tvea-uc.a.run.app",

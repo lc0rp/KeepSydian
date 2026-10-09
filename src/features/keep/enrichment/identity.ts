@@ -10,7 +10,7 @@ export function enrichmentBackendIdentity(endpoint: string): { service: string }
 			url.pathname === "/" &&
 			!url.search &&
 			!url.hash &&
-			/^(?:s?v\d+-\d+-\d+(?:-(?:alpha|beta)-\d+[a-z]?)?---)?keepsidianserver-i55qr5tvea-uc\.a\.run\.app$/.test(
+			/^(?:s?v\d+-\d+-\d+(?:-(?:alpha|beta)-[0-9a-z-]+)?---)?keepsidianserver-i55qr5tvea-uc\.a\.run\.app$/.test(
 				url.hostname
 			)
 		)
