@@ -1,6 +1,34 @@
-name: Build and publish reviewed beta.8 after server verification
+name: Publish reviewed client plan after canonical backend proof
 on:
   workflow_call:
+    inputs:
+      expected_head:
+        type: string
+        required: true
+      recovery_run:
+        type: string
+        default: ""
+      recovery_artifact:
+        type: string
+        default: ""
+      recovery_head:
+        type: string
+        default: ""
+      backend_run:
+        type: string
+        required: true
+      backend_artifact:
+        type: string
+        required: true
+      backend_head:
+        type: string
+        required: true
+      backend_app_id:
+        type: string
+        required: true
+    secrets:
+      backend_app_private_key:
+        required: true
 permissions:
   contents: read
 concurrency:
@@ -8,7 +36,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   build:
-    if: github.repository_id == '822100323' && github.actor_id == '2609441' && github.triggering_actor == 'lc0rp' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    if: inputs.recovery_run == '' && github.repository_id == '822100323' && ((github.actor_id == '2609441' && github.triggering_actor == 'lc0rp') || (vars.CLIENT_RELEASE_ACTOR_ID != '' && vars.CLIENT_RELEASE_ACTOR_LOGIN != '' && github.actor_id == vars.CLIENT_RELEASE_ACTOR_ID && github.triggering_actor == vars.CLIENT_RELEASE_ACTOR_LOGIN)) && github.ref == 'refs/heads/main' && inputs.expected_head == github.sha && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -18,64 +46,195 @@ jobs:
     outputs:
       artifact_id: ${{ steps.release-assets.outputs.artifact-id }}
     env:
-      KEEPSIDIAN_SERVER_URL: https://v2-1-0-beta-8---keepsidianserver-i55qr5tvea-uc.a.run.app
+      KEEPSIDIAN_RELEASE_PLAN: ${{ github.workspace }}/plan/release/plan.json
+      KEEPSIDIAN_BACKEND_PROOF: ${{ github.workspace }}/backend-proof
       KEEPSIDIAN_RECOVERY_UAT: "false"
     steps:
+      - name: Validate recovery identity inputs before any cloud work
+        env:
+          ORIGIN_RUN: ${{ inputs.recovery_run }}
+          ORIGIN_ARTIFACT: ${{ inputs.recovery_artifact }}
+          ORIGIN_HEAD: ${{ inputs.recovery_head }}
+        run: |
+          python3 - <<'PYVALIDATE'
+          import os, re
+          values = [os.environ[k] for k in ('ORIGIN_RUN', 'ORIGIN_ARTIFACT', 'ORIGIN_HEAD')]
+          if any(values) and not (re.fullmatch(r'[1-9][0-9]*', values[0]) and
+                                  re.fullmatch(r'[1-9][0-9]*', values[1]) and
+                                  re.fullmatch(r'[0-9a-f]{40}', values[2])):
+              raise RuntimeError('Recovery requires the complete reviewed run/artifact/head tuple')
+          PYVALIDATE
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 2f615130928abc5ccb0dbf4911e2a46813551b8d
+          ref: b61ec4b06c5becb98df9548d49f2901b23046dae
+          path: engine
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          path: plan
+          sparse-checkout: release/plan.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Validate release plan
+        id: plan
+        env:
+          ORIGIN_RUN: ${{ inputs.recovery_run }}
+        run: |
+          if [ -z "$ORIGIN_RUN" ]; then
+            python3 engine/scripts/release_plan.py client "$KEEPSIDIAN_RELEASE_PLAN" --new-build >> "$GITHUB_OUTPUT"
+          else
+            python3 engine/scripts/release_plan.py client "$KEEPSIDIAN_RELEASE_PLAN" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Verify tag target workflow compatibility before new builds
+        if: inputs.recovery_run == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_SOURCE: ${{ steps.plan.outputs.client_source }}
+          DISPATCH_HEAD: ${{ github.sha }}
+        run: python3 engine/scripts/verify_tag_target.py --repo lc0rp/KeepSydian --source "$APP_SOURCE" --head "$DISPATCH_HEAD"
+      - name: Mint short-lived read-only backend proof token
+        id: backend-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ inputs.backend_app_id }}
+          private-key: ${{ secrets.backend_app_private_key }}
+          owner: lc0rp
+          repositories: KeepSidianServer
+          permission-actions: read
+      - name: Verify canonical successful backend proof before client work
+        env:
+          GH_TOKEN: ${{ steps.backend-token.outputs.token }}
+          BACKEND_RUN: ${{ inputs.backend_run }}
+          BACKEND_ARTIFACT: ${{ inputs.backend_artifact }}
+          BACKEND_HEAD: ${{ inputs.backend_head }}
+        run: |
+          test -n "$GH_TOKEN" || { echo 'Approved read access to the private backend repository is required'; exit 1; }
+          python3 engine/scripts/verify_backend_release.py --plan "$KEEPSIDIAN_RELEASE_PLAN" \
+            --run-id "$BACKEND_RUN" --artifact-id "$BACKEND_ARTIFACT" --head "$BACKEND_HEAD" \
+            --destination backend-proof
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ steps.plan.outputs.client_source }}
+          path: app
           persist-credentials: false
       - name: Verify frozen source and offline publication contracts
         run: |
-          test "$(git rev-parse HEAD)" = '2f615130928abc5ccb0dbf4911e2a46813551b8d'
-          python3 -B scripts/test_hosted_release_beta8.py
+          env -u KEEPSIDIAN_RELEASE_PLAN python3 -B engine/scripts/test_hosted_release_beta8.py
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "22.x"
-      - name: Install locked dependencies and build exact beta.8 URL
+      - name: Install locked dependencies and build exact reviewed URL
+        working-directory: app
+        env:
+          KEEPSIDIAN_SERVER_URL: ${{ steps.plan.outputs.backend }}
         run: |
           cutoff="$(python3 -c 'from datetime import datetime, timedelta, timezone; print((datetime.now(timezone.utc) - timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
           npm ci --before="$cutoff"
           node --test scripts/release-version.test.mjs
           npm run build
           python3 - <<'PYVERIFY'
-          import importlib.util
+          import importlib.util, sys
+          sys.path.insert(0, str(__import__("pathlib").Path("../engine/scripts").resolve()))
           from pathlib import Path
-          spec = importlib.util.spec_from_file_location('release', 'scripts/hosted-release-beta8.py')
+          spec = importlib.util.spec_from_file_location('release', '../engine/scripts/hosted-release-beta8.py')
           release = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(release)
-          release.validate(Path.cwd())
+          release.record_build(Path.cwd())
           PYVERIFY
       - name: Attest the three built assets
         uses: actions/attest@36051bcae73b7c2a8a6945a48cbf80953c6baa35
         with:
           subject-path: |
-            main.js
-            manifest.json
-            styles.css
+            app/main.js
+            app/manifest.json
+            app/styles.css
       - id: release-assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: keepsidian-beta8-${{ github.run_id }}-${{ github.run_attempt }}
+          name: keepsidian-client-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            main.js
-            manifest.json
-            styles.css
+            app/main.js
+            app/manifest.json
+            app/styles.css
+            app/release-build.json
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 30
   publish:
-    if: github.repository_id == '822100323' && github.actor_id == '2609441' && github.triggering_actor == 'lc0rp' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    if: always() && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.recovery_run != '')) && github.repository_id == '822100323' && ((github.actor_id == '2609441' && github.triggering_actor == 'lc0rp') || (vars.CLIENT_RELEASE_ACTOR_ID != '' && vars.CLIENT_RELEASE_ACTOR_LOGIN != '' && github.actor_id == vars.CLIENT_RELEASE_ACTOR_ID && github.triggering_actor == vars.CLIENT_RELEASE_ACTOR_LOGIN)) && github.ref == 'refs/heads/main' && inputs.expected_head == github.sha && github.event_name == 'workflow_dispatch'
     needs: build
+    env:
+      KEEPSIDIAN_RELEASE_PLAN: ${{ github.workspace }}/plan/release/plan.json
+      KEEPSIDIAN_BACKEND_PROOF: ${{ github.workspace }}/backend-proof
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: write
+      actions: read
     steps:
+      - name: Validate recovery identity inputs before any cloud work
+        env:
+          ORIGIN_RUN: ${{ inputs.recovery_run }}
+          ORIGIN_ARTIFACT: ${{ inputs.recovery_artifact }}
+          ORIGIN_HEAD: ${{ inputs.recovery_head }}
+        run: |
+          python3 - <<'PYVALIDATE'
+          import os, re
+          values = [os.environ[k] for k in ('ORIGIN_RUN', 'ORIGIN_ARTIFACT', 'ORIGIN_HEAD')]
+          if any(values) and not (re.fullmatch(r'[1-9][0-9]*', values[0]) and
+                                  re.fullmatch(r'[1-9][0-9]*', values[1]) and
+                                  re.fullmatch(r'[0-9a-f]{40}', values[2])):
+              raise RuntimeError('Recovery requires the complete reviewed run/artifact/head tuple')
+          PYVALIDATE
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 2f615130928abc5ccb0dbf4911e2a46813551b8d
+          ref: b61ec4b06c5becb98df9548d49f2901b23046dae
+          path: engine
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          path: plan
+          sparse-checkout: release/plan.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Validate release plan
+        id: plan
+        env:
+          ORIGIN_RUN: ${{ inputs.recovery_run }}
+        run: |
+          if [ -z "$ORIGIN_RUN" ]; then
+            python3 engine/scripts/release_plan.py client "$KEEPSIDIAN_RELEASE_PLAN" --new-build >> "$GITHUB_OUTPUT"
+          else
+            python3 engine/scripts/release_plan.py client "$KEEPSIDIAN_RELEASE_PLAN" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Mint short-lived read-only backend proof token
+        id: backend-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ inputs.backend_app_id }}
+          private-key: ${{ secrets.backend_app_private_key }}
+          owner: lc0rp
+          repositories: KeepSidianServer
+          permission-actions: read
+      - name: Verify canonical successful backend proof before client work
+        env:
+          GH_TOKEN: ${{ steps.backend-token.outputs.token }}
+          BACKEND_RUN: ${{ inputs.backend_run }}
+          BACKEND_ARTIFACT: ${{ inputs.backend_artifact }}
+          BACKEND_HEAD: ${{ inputs.backend_head }}
+        run: |
+          test -n "$GH_TOKEN" || { echo 'Approved read access to the private backend repository is required'; exit 1; }
+          python3 engine/scripts/verify_backend_release.py --plan "$KEEPSIDIAN_RELEASE_PLAN" \
+            --run-id "$BACKEND_RUN" --artifact-id "$BACKEND_ARTIFACT" --head "$BACKEND_HEAD" \
+            --destination backend-proof
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ steps.plan.outputs.client_source }}
+          path: app
           persist-credentials: false
       - name: Require the successful build's single artifact ID
+        if: inputs.recovery_run == ''
         env:
           ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
         run: |
@@ -85,25 +244,53 @@ jobs:
               raise RuntimeError('A single successful build artifact ID is required')
           PYVERIFY
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        if: inputs.recovery_run == ''
         with:
           artifact-ids: ${{ needs.build.outputs.artifact_id }}
           merge-multiple: true
-          path: .
-      # Orchestrator dispatches only after backend success + fresh live metadata.
-      # Public capability checks prove routing, not model/image identity.
-      - name: Recheck tagged routing and reconcile prerelease by canonical ID
+          path: app
+      - name: Restore exact prior built bytes
+        if: inputs.recovery_run != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          ORIGIN_RUN: ${{ inputs.recovery_run }}
+          ORIGIN_ARTIFACT: ${{ inputs.recovery_artifact }}
+          ORIGIN_HEAD: ${{ inputs.recovery_head }}
         run: |
-          python3 scripts/hosted-release-beta8.py publish --source 2f615130928abc5ccb0dbf4911e2a46813551b8d
+          python3 engine/scripts/restore_release_artifact.py \
+            --repo lc0rp/KeepSydian --run-id "$ORIGIN_RUN" \
+            --artifact-id "$ORIGIN_ARTIFACT" --head "$ORIGIN_HEAD" \
+            --plan "$KEEPSIDIAN_RELEASE_PLAN" --side client --destination recovered \
+            --required main.js --required manifest.json --required styles.css \
+            --allowed main.js --allowed manifest.json --allowed styles.css \
+            --allowed release-intent.json --allowed release-receipt.json --allowed release-command-error.json \
+            --allowed release-build.json --allowed build-artifact-origin.json
+          cp recovered/main.js recovered/manifest.json recovered/styles.css app/
+          if [ -f recovered/release-intent.json ]; then cp recovered/release-intent.json app/; fi
+          if [ -f recovered/release-build.json ]; then cp recovered/release-build.json app/; fi
+          cp recovered/artifact-origin.json app/build-artifact-origin.json
+      # Canonical backend proof binds the source/model/image; public checks verify routing.
+      - name: Recheck tagged routing and reconcile prerelease by canonical ID
+        working-directory: app
+        env:
+          CLIENT_SOURCE: ${{ steps.plan.outputs.client_source }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 ../engine/scripts/hosted-release-beta8.py publish --source "$CLIENT_SOURCE"
           cat release-receipt.json >> "$GITHUB_STEP_SUMMARY"
       - name: Retain publication intent/receipt even after an ambiguous failure
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: keepsidian-beta8-client-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          name: keepsidian-client-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            release-intent.json
-            release-receipt.json
+            app/main.js
+            app/manifest.json
+            app/styles.css
+            app/release-build.json
+            app/release-intent.json
+            app/release-receipt.json
+            app/release-command-error.json
+            app/build-artifact-origin.json
           if-no-files-found: warn
-          retention-days: 1
+          retention-days: 30
