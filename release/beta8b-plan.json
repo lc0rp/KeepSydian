@@ -1,11 +1,11 @@
 {
   "schema": 1,
-  "server_source": "59f64e43359ace106b1716e7cc457a82f65397fd",
-  "client_source": "de8cb10363c19e37189213537245651b80496093",
+  "server_source": "0edb59b343173a08067e9108bbbaec6ecf2fa6b8",
+  "client_source": "ce3dcb05f29e427b49a29729180e06f143e26c22",
   "client_version": "2.1.0-beta.8b",
   "server_version": "0.1.0-beta.8b",
-  "revision": "keepsidianserver-beta8b-59f64e4",
-  "image_tag": "beta8b-59f64e4",
+  "revision": "keepsidianserver-beta8b-0edb59b",
+  "image_tag": "beta8b-0edb59b",
   "model": "gpt-6-luna",
   "allow_new_build": false,
   "recovery_cores": [
