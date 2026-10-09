@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "server_source": "59f64e43359ace106b1716e7cc457a82f65397fd",
+  "client_source": "de8cb10363c19e37189213537245651b80496093",
+  "client_version": "2.1.0-beta.8b",
+  "server_version": "0.1.0-beta.8b",
+  "revision": "keepsidianserver-beta8b-59f64e4",
+  "image_tag": "beta8b-59f64e4",
+  "model": "gpt-6-luna",
+  "allow_new_build": false,
+  "recovery_cores": [
+    "553ac867c679dd46e432aebbd09667a8d7854679",
+    "e542f5dff4dea02a0e063807c7c1b5ef69b25582",
+    "8126d2e8f3d8e853fd93220a2f033d950eac4128"
+  ],
+  "backend_core": "82af9da0fa50e003d01c247f04e4f04d53154b8c",
+  "recovery_prefixes": [
+    "keepsidian-beta8",
+    "keepsidian-client",
+    "keepsidian-client-evidence"
+  ]
+}
