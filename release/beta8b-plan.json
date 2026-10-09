@@ -11,9 +11,10 @@
   "recovery_cores": [
     "553ac867c679dd46e432aebbd09667a8d7854679",
     "e542f5dff4dea02a0e063807c7c1b5ef69b25582",
-    "8126d2e8f3d8e853fd93220a2f033d950eac4128"
+    "8126d2e8f3d8e853fd93220a2f033d950eac4128",
+    "894fa0bf72734809ca8162951457a1e2c3deb590"
   ],
-  "backend_core": "82af9da0fa50e003d01c247f04e4f04d53154b8c",
+  "backend_core": "53f1a2c34e108cf530da0f9fca7f29c251839416",
   "recovery_prefixes": [
     "keepsidian-beta8",
     "keepsidian-client",
