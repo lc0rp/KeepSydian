@@ -19,6 +19,7 @@ from urllib.request import Request, build_opener, HTTPRedirectHandler
 from urllib.error import HTTPError
 
 PROJECT = "lc0rp-labs"
+PROJECT_NUMBER = "162887264002"
 REGION = "us-central1"
 SERVICE = "keepsidianserver"
 RESOURCE = f"projects/{PROJECT}/locations/{REGION}/services/{SERVICE}"
@@ -200,7 +201,10 @@ def build_identity(
             raise RuntimeError("Native repository source mismatch")
     else:
         raise RuntimeError("Unapproved native connection source type")
-    if build.get("name") != f"projects/{PROJECT}/locations/global/builds/{build_id}":
+    if build.get("name") not in {
+        f"projects/{PROJECT}/locations/global/builds/{build_id}",
+        f"projects/{PROJECT_NUMBER}/locations/global/builds/{build_id}",
+    }:
         raise RuntimeError("Native build resource name/location mismatch")
     if (
         build.get("id") != build_id
