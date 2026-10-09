@@ -1,0 +1,47 @@
+name: Client release with native backend verification
+on:
+  workflow_dispatch:
+    inputs:
+      expected_head:
+        description: Exact reviewed main dispatcher SHA
+        required: true
+        type: string
+      client_tag:
+        description: Externally created client Git tag (v2.1.0-beta.8b)
+        required: true
+        type: string
+      server_tag:
+        description: Chosen immutable server version (sv0.1.0-beta.8b)
+        required: true
+        type: string
+      build_id:
+        description: Exact successful native Cloud Build UUID
+        required: true
+        type: string
+      recovery_run:
+        type: string
+        default: ""
+      recovery_artifact:
+        type: string
+        default: ""
+      recovery_head:
+        type: string
+        default: ""
+permissions:
+  contents: read
+jobs:
+  release:
+    if: github.repository_id == '822100323' && github.actor_id == '2609441' && github.triggering_actor == 'lc0rp' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.expected_head == github.sha
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+      attestations: write
+    uses: lc0rp/KeepSydian/.github/workflows/release-client-cloud-core.yml@42570fab57c465b35d4bfdb90ad06c3f0b2e79a4
+    with:
+      client_tag: ${{ inputs.client_tag }}
+      server_tag: ${{ inputs.server_tag }}
+      build_id: ${{ inputs.build_id }}
+      recovery_run: ${{ inputs.recovery_run }}
+      recovery_artifact: ${{ inputs.recovery_artifact }}
+      recovery_head: ${{ inputs.recovery_head }}

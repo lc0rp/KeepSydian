@@ -39,7 +39,7 @@ jobs:
     with:
       mode: validate-beta8
   release:
-    if: inputs.mode == 'release' && github.repository_id == '822100323' && (github.actor_id == '2609441' && github.triggering_actor == 'lc0rp') && github.ref == 'refs/heads/main' && inputs.expected_head == github.sha
+    if: inputs.mode == 'release' && false && github.repository_id == '822100323' && (github.actor_id == '2609441' && github.triggering_actor == 'lc0rp') && github.ref == 'refs/heads/main' && inputs.expected_head == github.sha
     permissions:
       contents: write
       actions: read
