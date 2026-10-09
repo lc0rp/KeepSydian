@@ -1,4 +1,4 @@
-name: Publish reviewed client plan after canonical backend proof
+name: Publish reviewed client plan after authorized backend review
 on:
   workflow_call:
     inputs:
@@ -17,21 +17,9 @@ on:
       recovery_head:
         type: string
         default: ""
-      backend_run:
+      backend_review:
         type: string
         default: ""
-      backend_artifact:
-        type: string
-        default: ""
-      backend_head:
-        type: string
-        default: ""
-      backend_app_id:
-        type: string
-        default: ""
-    secrets:
-      backend_app_private_key:
-        required: false
 permissions:
   contents: read
 concurrency:
@@ -67,7 +55,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
   build:
-    if: inputs.mode == 'release' && (inputs.recovery_run == '' && github.repository_id == '822100323' && ((github.actor_id == '2609441' && github.triggering_actor == 'lc0rp') || (vars.CLIENT_RELEASE_ACTOR_ID != '' && vars.CLIENT_RELEASE_ACTOR_LOGIN != '' && github.actor_id == vars.CLIENT_RELEASE_ACTOR_ID && github.triggering_actor == vars.CLIENT_RELEASE_ACTOR_LOGIN)) && github.ref == 'refs/heads/main' && inputs.expected_head == github.sha && github.event_name == 'workflow_dispatch')
+    if: inputs.mode == 'release' && (inputs.recovery_run == '' && github.repository_id == '822100323' && (github.actor_id == '2609441' && github.triggering_actor == 'lc0rp') && github.ref == 'refs/heads/main' && inputs.expected_head == github.sha && github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -78,7 +66,7 @@ jobs:
       artifact_id: ${{ steps.release-assets.outputs.artifact-id }}
     env:
       KEEPSIDIAN_RELEASE_PLAN: ${{ github.workspace }}/plan/release/plan.json
-      KEEPSIDIAN_BACKEND_PROOF: ${{ github.workspace }}/backend-proof
+      KEEPSIDIAN_BACKEND_REVIEW: ${{ inputs.backend_review }}
       KEEPSIDIAN_RECOVERY_UAT: "false"
     steps:
       - name: Validate recovery identity inputs before any cloud work
@@ -124,26 +112,8 @@ jobs:
           APP_SOURCE: ${{ steps.plan.outputs.client_source }}
           DISPATCH_HEAD: ${{ github.sha }}
         run: python3 engine/scripts/verify_tag_target.py --repo lc0rp/KeepSydian --source "$APP_SOURCE" --head "$DISPATCH_HEAD"
-      - name: Mint short-lived read-only backend proof token
-        id: backend-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
-        with:
-          app-id: ${{ inputs.backend_app_id }}
-          private-key: ${{ secrets.backend_app_private_key }}
-          owner: lc0rp
-          repositories: KeepSidianServer
-          permission-actions: read
-      - name: Verify canonical successful backend proof before client work
-        env:
-          GH_TOKEN: ${{ steps.backend-token.outputs.token }}
-          BACKEND_RUN: ${{ inputs.backend_run }}
-          BACKEND_ARTIFACT: ${{ inputs.backend_artifact }}
-          BACKEND_HEAD: ${{ inputs.backend_head }}
-        run: |
-          test -n "$GH_TOKEN" || { echo 'Approved read access to the private backend repository is required'; exit 1; }
-          python3 engine/scripts/verify_backend_release.py --plan "$KEEPSIDIAN_RELEASE_PLAN" \
-            --run-id "$BACKEND_RUN" --artifact-id "$BACKEND_ARTIFACT" --head "$BACKEND_HEAD" \
-            --destination backend-proof
+      - name: Validate authorized reviewer assertion before client work
+        run: python3 engine/scripts/backend_review.py check --plan "$KEEPSIDIAN_RELEASE_PLAN"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ steps.plan.outputs.client_source }}
@@ -192,11 +162,11 @@ jobs:
           if-no-files-found: error
           retention-days: 30
   publish:
-    if: inputs.mode == 'release' && (always() && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.recovery_run != '')) && github.repository_id == '822100323' && ((github.actor_id == '2609441' && github.triggering_actor == 'lc0rp') || (vars.CLIENT_RELEASE_ACTOR_ID != '' && vars.CLIENT_RELEASE_ACTOR_LOGIN != '' && github.actor_id == vars.CLIENT_RELEASE_ACTOR_ID && github.triggering_actor == vars.CLIENT_RELEASE_ACTOR_LOGIN)) && github.ref == 'refs/heads/main' && inputs.expected_head == github.sha && github.event_name == 'workflow_dispatch')
+    if: inputs.mode == 'release' && (always() && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.recovery_run != '')) && github.repository_id == '822100323' && (github.actor_id == '2609441' && github.triggering_actor == 'lc0rp') && github.ref == 'refs/heads/main' && inputs.expected_head == github.sha && github.event_name == 'workflow_dispatch')
     needs: build
     env:
       KEEPSIDIAN_RELEASE_PLAN: ${{ github.workspace }}/plan/release/plan.json
-      KEEPSIDIAN_BACKEND_PROOF: ${{ github.workspace }}/backend-proof
+      KEEPSIDIAN_BACKEND_REVIEW: ${{ inputs.backend_review }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -239,26 +209,8 @@ jobs:
           else
             python3 engine/scripts/release_plan.py client "$KEEPSIDIAN_RELEASE_PLAN" >> "$GITHUB_OUTPUT"
           fi
-      - name: Mint short-lived read-only backend proof token
-        id: backend-token
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
-        with:
-          app-id: ${{ inputs.backend_app_id }}
-          private-key: ${{ secrets.backend_app_private_key }}
-          owner: lc0rp
-          repositories: KeepSidianServer
-          permission-actions: read
-      - name: Verify canonical successful backend proof before client work
-        env:
-          GH_TOKEN: ${{ steps.backend-token.outputs.token }}
-          BACKEND_RUN: ${{ inputs.backend_run }}
-          BACKEND_ARTIFACT: ${{ inputs.backend_artifact }}
-          BACKEND_HEAD: ${{ inputs.backend_head }}
-        run: |
-          test -n "$GH_TOKEN" || { echo 'Approved read access to the private backend repository is required'; exit 1; }
-          python3 engine/scripts/verify_backend_release.py --plan "$KEEPSIDIAN_RELEASE_PLAN" \
-            --run-id "$BACKEND_RUN" --artifact-id "$BACKEND_ARTIFACT" --head "$BACKEND_HEAD" \
-            --destination backend-proof
+      - name: Validate authorized reviewer assertion before client work
+        run: python3 engine/scripts/backend_review.py check --plan "$KEEPSIDIAN_RELEASE_PLAN"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ steps.plan.outputs.client_source }}
@@ -300,7 +252,8 @@ jobs:
           if [ -f recovered/release-intent.json ]; then cp recovered/release-intent.json app/; fi
           if [ -f recovered/release-build.json ]; then cp recovered/release-build.json app/; fi
           cp recovered/artifact-origin.json app/build-artifact-origin.json
-      # Canonical backend proof binds the source/model/image; public checks verify routing.
+      # Private backend evidence was checked by the authorized reviewer, not this job.
+      # The assertion binds the plan; public checks verify current tagged routing.
       - name: Recheck tagged routing and reconcile prerelease by canonical ID
         working-directory: app
         env:

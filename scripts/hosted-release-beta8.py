@@ -274,32 +274,25 @@ def reconcile(
     if not re.fullmatch(r"[0-9a-f]{40}", source):
         raise ValueError("A full reviewed source SHA is required")
     local = validate(root)
-    backend_proof = None
+    backend_review = None
     if "PLAN" in globals():
         if source != PLAN["client_source"]:
             raise RuntimeError("Client source differs from reviewed plan")
         verify_build(root, source, local)
-        from verify_backend_release import validate_receipt
+        from backend_review import from_environment
 
-        proof_root = Path(os.environ["KEEPSIDIAN_BACKEND_PROOF"])
-        payload = (proof_root / "backend-release-receipt.json").read_bytes()
-        origin = json.loads((proof_root / "artifact-origin.json").read_text())
-        if (
-            origin.get("files", {}).get("backend-release-receipt.json")
-            != "sha256:" + hashlib.sha256(payload).hexdigest()
-        ):
-            raise RuntimeError(
-                "Backend proof bytes changed after provenance verification"
-            )
-        proof = json.loads(payload)
-        validate_receipt(PLAN, proof)
-        backend_proof = {
-            "source": proof["source"],
-            "image": proof["image"],
-            "revision": proof["revision"],
-            "origin": origin,
-        }
+        backend_review = from_environment(PLAN)
+        original_run = run
+
+        def reviewed_run(args: list[str]) -> Any:
+            if "--method" in args and args[args.index("--method") + 1] != "GET":
+                from_environment(PLAN)
+            return original_run(args)
+
+        run = reviewed_run
     epoch = backend(get)
+    if "PLAN" in globals():
+        backend_review = from_environment(PLAN)
     actual = run(["git", "-C", str(root), "rev-parse", "HEAD"])
     if actual.decode().strip() != source:
         raise RuntimeError("Built checkout differs from the reviewed client source")
@@ -433,7 +426,7 @@ def reconcile(
                 check_ref()
             notes = (
                 f"KeepSydian {VERSION}\n\nClient source: {source}\nBackend: {BACKEND}/\n"
-                "Assets are bound to the reviewed source and verified backend release proof.\n"
+                "Assets match the reviewed source and URL. Private backend evidence was checked by the authorized reviewer; this client job does not independently verify it.\n"
             )
             intent = {
                 "source": source,
@@ -545,6 +538,8 @@ def reconcile(
     check_ref()
     if set(inspect()) != set(ASSETS):
         raise RuntimeError("Published asset readback incomplete")
+    if "PLAN" in globals():
+        backend_review = from_environment(PLAN)
     receipt = {
         "source": source,
         "tag": TAG,
@@ -553,7 +548,7 @@ def reconcile(
         "release_id": release_id,
         "url": final["html_url"],
         "assets": local,
-        "backend_proof": backend_proof,
+        "backend_review": backend_review,
     }
     (root / "release-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     return receipt

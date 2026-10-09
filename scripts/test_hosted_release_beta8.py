@@ -510,6 +510,53 @@ class ReleaseTests(unittest.TestCase):
                 m.reconcile(SOURCE, self.root, self.run_cli, get)
             self.assertEqual(self.writes(), [])
 
+    def test_plan_release_requires_review_before_smoke_or_writes(self):
+        with (
+            patch.object(m, "PLAN", {"client_source": SOURCE}, create=True),
+            patch.object(m, "verify_build"),
+            patch(
+                "backend_review.from_environment",
+                side_effect=ValueError("expired review"),
+            ),
+        ):
+            with self.assertRaisesRegex(ValueError, "expired review"):
+                m.reconcile(SOURCE, self.root, self.run_cli, self.get)
+        self.assertEqual(self.gets, [])
+        self.assertEqual(self.writes(), [])
+
+    def test_review_expiry_during_metadata_reads_blocks_first_tag_write(self):
+        checks = []
+
+        def review(plan):
+            checks.append(1)
+            if len(checks) >= 3:
+                raise ValueError("expired review")
+            return {"independent_backend_verification": False}
+
+        with (
+            patch.object(m, "PLAN", {"client_source": SOURCE}, create=True),
+            patch.object(m, "verify_build"),
+            patch("backend_review.from_environment", side_effect=review),
+        ):
+            with self.assertRaisesRegex(ValueError, "expired review"):
+                m.reconcile(SOURCE, self.root, self.run_cli, self.get)
+        self.assertEqual(len(self.gets), 5)
+        self.assertEqual(self.writes(), [])
+
+    def test_existing_publication_recovery_also_requires_fresh_review(self):
+        self.complete_release()
+        with (
+            patch.object(m, "PLAN", {"client_source": SOURCE}, create=True),
+            patch.object(m, "verify_build"),
+            patch(
+                "backend_review.from_environment",
+                side_effect=ValueError("expired review"),
+            ),
+        ):
+            with self.assertRaisesRegex(ValueError, "expired review"):
+                m.reconcile(SOURCE, self.root, self.run_cli, self.get)
+        self.assertEqual(self.writes(), [])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
