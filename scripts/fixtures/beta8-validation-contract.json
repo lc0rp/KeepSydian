@@ -1,0 +1,38 @@
+{
+  "side": "client",
+  "client": {
+    "repository": "lc0rp/KeepSydian",
+    "run_id": 37883112419,
+    "artifact_id": 11595093861,
+    "head_sha": "344c619150c71f4f1998535be36e10fdda48618f",
+    "core": "lc0rp/KeepSydian/.github/workflows/release-client-core.yml@553ac867c679dd46e432aebbd09667a8d7854679",
+    "attempt": 1,
+    "archive_digest": "sha256:014b6d7aefb072395788da874e5f49f0c80e67cdf29938a77f1ea4f395659e02",
+    "files": {
+      "manifest.json": "sha256:aab7a39bfd78a779db3c951b570cd22de4f3df2c34527f0885bd94faa7edaa10",
+      "styles.css": "sha256:ecc8e3c64a1d500704eae201801cf285ea230520187042c719935a813eef356c",
+      "main.js": "sha256:94ea3cac4ef9a7b6a6ea9d5b45d3f4025d043bddc16d4583c096d41a3263d847"
+    },
+    "artifact_prefix": "keepsidian-beta8",
+    "source": "2f615130928abc5ccb0dbf4911e2a46813551b8d",
+    "release_id": 408002984,
+    "tag": "v2.1.0-beta.8",
+    "assets": {
+      "main.js": {
+        "id": 625229947,
+        "size": 1096148,
+        "digest": "sha256:94ea3cac4ef9a7b6a6ea9d5b45d3f4025d043bddc16d4583c096d41a3263d847"
+      },
+      "manifest.json": {
+        "id": 625230028,
+        "size": 257,
+        "digest": "sha256:aab7a39bfd78a779db3c951b570cd22de4f3df2c34527f0885bd94faa7edaa10"
+      },
+      "styles.css": {
+        "id": 625230099,
+        "size": 32036,
+        "digest": "sha256:ecc8e3c64a1d500704eae201801cf285ea230520187042c719935a813eef356c"
+      }
+    }
+  }
+}

@@ -1,12 +1,12 @@
-name: Release Keepsidian plugin
+name: Retired legacy plugin publisher
 
 on:
-  push:
-    tags:
-      - "*"
+  workflow_dispatch:
 
 jobs:
   build:
+    # Release-client is the only publisher for new source commits.
+    if: false
     runs-on: ubuntu-latest
     permissions:
       attestations: write

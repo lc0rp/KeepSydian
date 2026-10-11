@@ -41,6 +41,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Test hosted release recovery contracts without network access
+        run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
+
       - name: Run tests with coverage
         run: npm run coverage
 
