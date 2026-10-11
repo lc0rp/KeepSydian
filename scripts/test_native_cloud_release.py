@@ -3,6 +3,7 @@ import base64
 import json
 from unittest.mock import patch
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 import native_cloud_release as n
 
@@ -342,11 +343,44 @@ class NativeReleaseTests(unittest.TestCase):
             c.run()
         self.assertEqual(c.writes, [])
 
-    def test_checked_in_policy_is_disabled(self):
-        with self.assertRaisesRegex(RuntimeError, "disabled"):
-            n.load_policy(
-                Path(__file__).parents[1] / "release/cloud-release-policy.json"
-            )
+    def test_policy_accepts_exact_enabled_configuration(self):
+        policy = {
+            "schema": 1,
+            "enabled": True,
+            "trigger_id": n.TRIGGER,
+            "build_service_account": n.BUILD_SA,
+            "recovery_core": "a" * 40,
+        }
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.json"
+            path.write_text(json.dumps(policy))
+            self.assertIsNone(n.load_policy(path))
+
+    def test_policy_rejects_disabled_or_mismatched_configuration(self):
+        policy = {
+            "schema": 1,
+            "enabled": True,
+            "trigger_id": n.TRIGGER,
+            "build_service_account": n.BUILD_SA,
+            "recovery_core": "a" * 40,
+        }
+        cases = [
+            ("enabled", False, "disabled"),
+            ("schema", 2, "not exactly approved"),
+            ("trigger_id", "wrong-trigger", "not exactly approved"),
+            ("build_service_account", "wrong-account", "not exactly approved"),
+            ("unexpected", True, "not exactly approved"),
+            ("recovery_core", "main", "Invalid approved recovery core"),
+            ("recovery_core", "a" * 39, "Invalid approved recovery core"),
+            ("recovery_core", "g" * 40, "Invalid approved recovery core"),
+        ]
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.json"
+            for field, value, message in cases:
+                with self.subTest(field=field, value=value):
+                    path.write_text(json.dumps({**policy, field: value}))
+                    with self.assertRaisesRegex(RuntimeError, message):
+                        n.load_policy(path)
 
     def test_invalid_version_and_build_rejected_without_api(self):
         for tag in ("v2.1.0/evil", "v2.1.0?x", "v02.1.0", "main"):
