@@ -1,4 +1,5 @@
 import { normalizePath } from "obsidian";
+import { assertRelativePath, portableComponent, portableFile } from "./portable-path";
 import {
 	DEFAULT_NOTE_FILE_NAME_PATTERN,
 	DEFAULT_SAVE_LOCATION_MODE,
@@ -56,12 +57,20 @@ function toDate(value?: string | Date | null): Date | null {
 }
 
 function sanitizePathSegment(value: string): string {
-	return value.replace(/[<>:"/\\|?*]/g, "_").trim();
+	return portableComponent(value);
 }
 
 function sanitizePatternPath(value: string): string {
+	const relative = value.replace(/^\/+|\/+$/g, "");
+	assertRelativePath(relative, true);
+	if (!relative) return "";
+	// Do not silently redirect existing configured folders under the new policy.
+	for (const segment of relative.split("/").filter(Boolean)) {
+		const legacy = segment.replace(/[<>:"/\\|?*]/g, "_").trim();
+		if (portableComponent(legacy) !== legacy) throw new Error("The configured folder is not portable. Choose a safe vault folder; existing files were not moved.");
+	}
 	return normalizePath(
-		value
+		relative
 			.split("/")
 			.map((segment) => sanitizePathSegment(segment))
 			.filter((segment) => segment.length > 0)
@@ -89,7 +98,7 @@ function buildDatePatternValues(date: Date): DatePatternValues {
 
 function buildPatternValues(note: NoteDateLike): NotePatternValues {
 	return {
-		title: sanitizePathSegment(note.title?.trim() ?? ""),
+		title: note.title?.trim() ? portableComponent(note.title.trim()) : "",
 		now: buildDatePatternValues(toDate(note.now) ?? new Date()),
 		note: buildDatePatternValues(resolveNoteDate(note)),
 	};
@@ -146,7 +155,7 @@ export function resolveNoteFileName(pattern: string, note: NoteDateLike): string
 		pattern?.trim() || DEFAULT_NOTE_FILE_NAME_PATTERN,
 		buildPatternValues(note)
 	);
-	return `${sanitizePathSegment(resolved) || "Untitled KeepSidian Note"}.md`;
+	return portableFile(resolved.trim() || "Untitled KeepSidian Note", ".md");
 }
 
 export function resolveNotePath(app: unknown, settings: NotePathSettings, note: NoteDateLike): string {

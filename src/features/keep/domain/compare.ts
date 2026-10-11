@@ -9,7 +9,7 @@ import { buildNotePath } from "@services/index";
 import { findExistingKeepNotePath, type ExistingKeepNoteIndex } from "./noteLookup";
 import { stripManagedImageEmbeds } from "./attachmentEmbeds";
 import { hasPendingUpload } from "./sync-state";
-import { localStateBaseline, storedLocalBaseline } from "./local-state";
+import { isLocalStateUnchanged, storedLocalBaseline } from "./local-state";
 
 interface UpdatedFileInfo {
 	textWithoutFrontmatter: string;
@@ -57,7 +57,7 @@ async function getExistingFileInfo(noteFilePath: string, app: App): Promise<Exis
 	const fsCreatedDate = fsCreatedDateTimeStamp ? new Date(fsCreatedDateTimeStamp) : null;
 	const fsUpdatedDate = fsUpdatedDateTimeStamp ? new Date(fsUpdatedDateTimeStamp) : null;
 	const stored = storedLocalBaseline(existingContent);
-	const current = stored ? await localStateBaseline(app.vault.adapter, noteFilePath, existingContent) : undefined;
+	const unchanged = stored ? await isLocalStateUnchanged(app.vault.adapter, noteFilePath, existingContent) : false;
 
 	return {
 		sourceContent: existingContent,
@@ -69,8 +69,8 @@ async function getExistingFileInfo(noteFilePath: string, app: App): Promise<Exis
 		fsUpdatedDate: fsUpdatedDate,
 		lastSyncedDate: existingLastSyncedDate,
 		pendingUpload: hasPendingUpload(existingFrontmatter),
-		localUnchanged: Boolean(stored && current === stored),
-		localChanged: Boolean(stored && current !== stored),
+		localUnchanged: Boolean(stored && unchanged),
+		localChanged: Boolean(stored && !unchanged),
 	};
 }
 

@@ -60,7 +60,7 @@ describe("processAttachments", () => {
 		});
 
 		const blobUrls = ["https://example.com/image1.jpg"];
-		const saveLocation = "/test/location";
+		const saveLocation = "test/location";
 
 		const result = await processAttachments(mockPlugin.app, blobUrls, saveLocation);
 
@@ -72,7 +72,7 @@ describe("processAttachments", () => {
 
 		// Verify writeBinary was called correctly
 		expect(mockPlugin.app.vault.adapter.writeBinary).toHaveBeenCalledWith(
-			"/test/location/media/image1.jpg",
+			"test/location/media/image1.jpg",
 			mockArrayBuffer
 		);
 		expectAttachmentMetrics(result, { downloaded: 1, skippedIdentical: 0 });
@@ -86,12 +86,12 @@ describe("processAttachments", () => {
 		const result = await processAttachments(
 			mockPlugin.app,
 			["https://example.com/keep/media/note/blob"],
-			"/test/location",
+			"test/location",
 			["Embedded_image0"]
 		);
 
 		expect(mockPlugin.app.vault.adapter.writeBinary).toHaveBeenCalledWith(
-			"/test/location/media/Embedded_image0.png",
+			"test/location/media/Embedded_image0.png",
 			pngBytes
 		);
 		expect(result.fileNames).toEqual(["Embedded_image0.png"]);
@@ -104,7 +104,7 @@ describe("processAttachments", () => {
 		const result = await processAttachments(
 			mockPlugin.app,
 			["https://example.com/keep/media/note/blob"],
-			"/test/location",
+			"test/location",
 			["Release_v2.0_0"]
 		);
 
@@ -121,7 +121,7 @@ describe("processAttachments", () => {
 			.mockResolvedValueOnce({ arrayBuffer: mockArrayBuffer2 });
 
 		const blobUrls = ["https://example.com/image1.jpg", "https://example.com/image2.png"];
-		const saveLocation = "/test/location";
+		const saveLocation = "test/location";
 
 		const result = await processAttachments(mockPlugin.app, blobUrls, saveLocation);
 
@@ -140,12 +140,12 @@ describe("processAttachments", () => {
 		expect(mockPlugin.app.vault.adapter.writeBinary).toHaveBeenCalledTimes(2);
 		expect(mockPlugin.app.vault.adapter.writeBinary).toHaveBeenNthCalledWith(
 			1,
-			"/test/location/media/image1.jpg",
+			"test/location/media/image1.jpg",
 			mockArrayBuffer1
 		);
 		expect(mockPlugin.app.vault.adapter.writeBinary).toHaveBeenNthCalledWith(
 			2,
-			"/test/location/media/image2.png",
+			"test/location/media/image2.png",
 			mockArrayBuffer2
 		);
 		expectAttachmentMetrics(result, { downloaded: 2, skippedIdentical: 0 });
@@ -163,7 +163,7 @@ describe("processAttachments", () => {
 		const result = await processAttachments(
 			mockPlugin.app,
 			["https://example.com/missing.jpg", "https://example.com/available.jpg"],
-			"/test/location"
+			"test/location"
 		);
 
 		expect(result.downloaded).toBe(1);
@@ -175,13 +175,13 @@ describe("processAttachments", () => {
 			},
 		]);
 		expect(mockPlugin.app.vault.adapter.writeBinary).toHaveBeenCalledWith(
-			"/test/location/media/available.jpg",
+			"test/location/media/available.jpg",
 			downloadedBlob
 		);
 	});
 
 	it("should handle empty blob URLs array", async () => {
-		const result = await processAttachments(mockPlugin.app, [], "/test/location");
+		const result = await processAttachments(mockPlugin.app, [], "test/location");
 
 		// Verify no calls were made
 		expect(requestUrl).not.toHaveBeenCalled();
@@ -198,7 +198,7 @@ describe("processAttachments", () => {
 			.mockRejectedValueOnce(new Error("Network error"));
 
 		const blobUrls = ["https://example.com/image1.jpg"];
-		const saveLocation = "/test/location";
+		const saveLocation = "test/location";
 
 		const promise = processAttachments(mockPlugin.app, blobUrls, saveLocation);
 		await jest.runOnlyPendingTimersAsync();
@@ -226,7 +226,7 @@ describe("processAttachments", () => {
 				arrayBuffer: mockArrayBuffer,
 			});
 
-		const promise = processAttachments(mockPlugin.app, ["https://example.com/image1.jpg"], "/test/location");
+		const promise = processAttachments(mockPlugin.app, ["https://example.com/image1.jpg"], "test/location");
 
 		await jest.runOnlyPendingTimersAsync();
 		await jest.runOnlyPendingTimersAsync();
@@ -235,7 +235,7 @@ describe("processAttachments", () => {
 
 		expect(requestUrl).toHaveBeenCalledTimes(3);
 		expect(mockPlugin.app.vault.adapter.writeBinary).toHaveBeenCalledWith(
-			"/test/location/media/image1.jpg",
+			"test/location/media/image1.jpg",
 			mockArrayBuffer
 		);
 		expectAttachmentMetrics(result, { downloaded: 1, skippedIdentical: 0 });
@@ -244,7 +244,7 @@ describe("processAttachments", () => {
 	it("should report non-retryable attachment fetch errors without retrying", async () => {
 		(requestUrl as jest.Mock).mockRejectedValueOnce(new NetworkError("Google Keep attachment not found", 404));
 
-		const result = await processAttachments(mockPlugin.app, ["https://example.com/image1.jpg"], "/test/location");
+		const result = await processAttachments(mockPlugin.app, ["https://example.com/image1.jpg"], "test/location");
 
 		expect(requestUrl).toHaveBeenCalledTimes(1);
 		expect(mockPlugin.app.vault.adapter.writeBinary).not.toHaveBeenCalled();
@@ -261,7 +261,7 @@ describe("processAttachments", () => {
 		jest.useFakeTimers();
 		(requestUrl as jest.Mock).mockRejectedValue(new NetworkError("Google Keep attachment access denied", 403));
 
-		const promise = processAttachments(mockPlugin.app, ["https://example.com/denied.jpg"], "/test/location");
+		const promise = processAttachments(mockPlugin.app, ["https://example.com/denied.jpg"], "test/location");
 		await jest.runOnlyPendingTimersAsync();
 		await jest.runOnlyPendingTimersAsync();
 		const result = await promise;
@@ -287,8 +287,8 @@ describe("processAttachments", () => {
 			})
 			.mockResolvedValueOnce({ status: 200, arrayBuffer: downloadedBlob });
 
-		const promise = processAttachments(mockPlugin.app, ["https://example.com/rate-limited.jpg"], "/test/location");
-		await Promise.resolve();
+		const promise = processAttachments(mockPlugin.app, ["https://example.com/rate-limited.jpg"], "test/location");
+		await jest.advanceTimersByTimeAsync(0);
 		expect(requestUrl).toHaveBeenCalledTimes(1);
 
 		await jest.advanceTimersByTimeAsync(4_999);
@@ -311,7 +311,7 @@ describe("processAttachments", () => {
 		jest.spyOn(mockPlugin.app.vault.adapter, "writeBinary").mockRejectedValueOnce(new Error("Write error"));
 
 		const blobUrls = ["https://example.com/image1.jpg"];
-		const saveLocation = "/test/location";
+		const saveLocation = "test/location";
 
 		const result = await processAttachments(mockPlugin.app, blobUrls, saveLocation);
 
@@ -327,7 +327,7 @@ describe("processAttachments", () => {
 
 	it("should handle invalid blob URLs", async () => {
 		const blobUrls = ["invalid-url-no-filename"];
-		const saveLocation = "/test/location";
+		const saveLocation = "test/location";
 
 		const result = await processAttachments(mockPlugin.app, blobUrls, saveLocation);
 
@@ -349,7 +349,7 @@ describe("processAttachments", () => {
 		(mockPlugin.app.vault.adapter.readBinary as jest.Mock).mockResolvedValue(mockArrayBuffer);
 
 		const blobUrls = ["https://example.com/image1.jpg"];
-		const saveLocation = "/test/location";
+		const saveLocation = "test/location";
 
 		const result = await processAttachments(mockPlugin.app, blobUrls, saveLocation);
 
@@ -364,7 +364,7 @@ describe("processAttachments", () => {
 		});
 
 		const blobUrls = ["/files/image1.jpg"];
-		const saveLocation = "/test/location";
+		const saveLocation = "test/location";
 
 		const result = await processAttachments(mockPlugin.app, blobUrls, saveLocation);
 
@@ -373,7 +373,7 @@ describe("processAttachments", () => {
 			method: "GET",
 		});
 		expect(mockPlugin.app.vault.adapter.writeBinary).toHaveBeenCalledWith(
-			"/test/location/media/image1.jpg",
+			"test/location/media/image1.jpg",
 			mockArrayBuffer
 		);
 		expectAttachmentMetrics(result, { downloaded: 1, skippedIdentical: 0 });
@@ -385,7 +385,7 @@ describe("processAttachments", () => {
 			arrayBuffer: mockArrayBuffer,
 		});
 
-		await processAttachments(mockPlugin.app, ["/keep/media/note-1/blob-2"], "/test/location", undefined, {
+		await processAttachments(mockPlugin.app, ["/keep/media/note-1/blob-2"], "test/location", undefined, {
 			email: "test@example.com",
 			token: "test-token",
 		});
@@ -408,17 +408,17 @@ describe("processAttachments", () => {
 
 		const blobUrls = ["https://example.com/download?id=123"];
 		const blobNames = ["folder/image 1.png"];
-		const saveLocation = "/test/location";
+		const saveLocation = "test/location";
 
 		await processAttachments(mockPlugin.app, blobUrls, saveLocation, blobNames);
 
 		expect(mockPlugin.app.vault.adapter.writeBinary).toHaveBeenCalledWith(
-			"/test/location/media/folder_image 1.png",
+			"test/location/media/folder_image 1.png",
 			mockArrayBuffer
 		);
 	});
 
-	it("should overwrite when existing attachment differs", async () => {
+	it("preserves existing bytes and allocates a version when an attachment differs", async () => {
 		const mockArrayBuffer = new ArrayBuffer(8);
 		const existingBuffer = new ArrayBuffer(8);
 		const existingView = new Uint8Array(existingBuffer);
@@ -427,16 +427,16 @@ describe("processAttachments", () => {
 		(requestUrl as jest.Mock).mockResolvedValueOnce({
 			arrayBuffer: mockArrayBuffer,
 		});
-		(mockPlugin.app.vault.adapter.exists as jest.Mock).mockResolvedValue(true);
+		(mockPlugin.app.vault.adapter.exists as jest.Mock).mockImplementation(async (name: string) => name === "test/location/media/image1.jpg");
 		(mockPlugin.app.vault.adapter.readBinary as jest.Mock).mockResolvedValue(existingBuffer);
 
 		const blobUrls = ["https://example.com/image1.jpg"];
-		const saveLocation = "/test/location";
+		const saveLocation = "test/location";
 
 		const result = await processAttachments(mockPlugin.app, blobUrls, saveLocation);
 
 		expect(mockPlugin.app.vault.adapter.writeBinary).toHaveBeenCalledWith(
-			"/test/location/media/image1.jpg",
+			expect.stringMatching(/^test\/location\/media\/image1--media-[a-f0-9]+\.jpg$/),
 			mockArrayBuffer
 		);
 		expectAttachmentMetrics(result, { downloaded: 1, skippedIdentical: 0 });

@@ -1,4 +1,5 @@
 import { normalizePathSafe } from "@services/paths";
+import { assertRelativePath, equivalentPath, portableFile, portableKey } from "@services/portable-path";
 import { resolveNoteLookupRoot } from "@services/note-path-resolver";
 import { canonicalKeepUrl } from "@integrations/server/keepDeletions";
 import { sha256 } from "../local-deletions/state";
@@ -171,7 +172,7 @@ async function resolveIdentitySafePath(
 ): Promise<string> {
 	const identity = incomingKeepUrl;
 	if (!identity) return preferredPath;
-	const exists = async (path: string) => index?.existingPaths.has(path) || (await adapter.exists?.(path)) || false;
+	assertRelativePath(preferredPath);
 	const matches = async (path: string) => {
 		const [, , properties] = extractFrontmatter(await adapter.read(path), true);
 		return readKeepNoteIdentity(properties, path) === identity;
@@ -180,25 +181,24 @@ async function resolveIdentitySafePath(
 	// await the same vacant path, so claim it only after rechecking its owner.
 	const claims = index ? (index.plannedPathIdentities ??= new Map<string, string>()) : new Map<string, string>();
 	const claim = async (path: string): Promise<boolean> => {
-		const owner = claims.get(path);
+		const key = portableKey(path);
+		const owner = claims.get(key);
 		if (owner && owner !== identity) return false;
-		if ((await exists(path)) && !(await matches(path))) return false;
-		const currentOwner = claims.get(path);
+		const existing = await equivalentPath(adapter, path, index?.existingPaths);
+		if (existing && !(await matches(existing))) return false;
+		const currentOwner = claims.get(key);
 		if (currentOwner && currentOwner !== identity) return false;
-		claims.set(path, identity);
+		claims.set(key, identity);
 		return true;
 	};
 	if (await claim(preferredPath)) return preferredPath;
 
 	const separator = preferredPath.lastIndexOf("/");
 	const directory = preferredPath.slice(0, separator + 1);
-	let stem = preferredPath.slice(separator + 1).replace(/\.md$/i, "");
-	// Leave room for the full identity hash and collision counter, including UTF-8 titles.
-	const encoder = new TextEncoder();
-	while (encoder.encode(stem).length > 160) stem = Array.from(stem).slice(0, -1).join("");
+	const stem = preferredPath.slice(separator + 1).replace(/\.md$/i, "");
 	const suffix = await sha256(identity);
 	for (let counter = 1; counter <= 1000; counter++) {
-		const candidate = `${directory}${stem || "Keep note"}--keep-${suffix}${counter === 1 ? "" : `-${counter}`}.md`;
+		const candidate = directory + portableFile(stem || "Keep note", ".md", `--keep-${suffix}${counter === 1 ? "" : `-${counter}`}`);
 		if (await claim(candidate)) return candidate;
 	}
 	throw new Error("Unable to allocate a separate filename for a distinct Google Keep identity.");

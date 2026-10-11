@@ -8,14 +8,15 @@ import {
 	getSuggestedTagUpdate,
 } from "./domain/note";
 import { handleDuplicateNotes } from "./domain/compare";
-import { captureLocalMedia, localStateBaseline, stampLocalBaseline, storedLocalBaseline, type MediaBaseline } from "./domain/local-state";
+import { captureLocalMedia, isLocalStateUnchanged, stampLocalBaseline, storedLocalBaseline, type MediaBaseline } from "./domain/local-state";
 import { hasPendingUpload, remoteBaseline, resolveDownloadMerge, withSyncState, withRemoteRevision } from "./domain/sync-state";
 import { getArchivedNoteUpdate, getDownloadFrontmatter, isArchivedDownload } from "./domain/archive";
 import type { KeepArchivedStatus } from "../../types/subscription";
 // Import via legacy google path so tests can spy on this module
 import { processAttachments, type AttachmentFailure } from "../keep/io/attachments";
 import type { NoteImportOptions } from "@ui/modals/NoteImportOptionsModal";
-import { CONFLICT_FILE_SUFFIX } from "./constants";
+import { reserveConflictPath } from "./io/conflict-path";
+import { assertRelativePath, equivalentPath, withPathLock } from "@services/portable-path";
 import { buildFrontmatterWithSyncDate, wrapMarkdown } from "./frontmatter";
 import { ensurePascalCaseFrontmatter } from "./migrations/fixFrontmatterCasing";
 import {
@@ -1129,13 +1130,7 @@ export async function processAndSaveNote(
 	};
 	const startedAt = getNowMs();
 	const normalizedNote = preNormalizedNote ?? normalizeNote(note);
-	const noteTitle = normalizedNote.title;
-	if (!noteTitle) {
-		await logSync(plugin, "Skipped note without a title", NOTE_LOG_BATCH_OPTIONS);
-		metrics.action = "skipped";
-		metrics.totalDurationMs = getNowMs() - startedAt;
-		return metrics;
-	}
+	const noteTitle = normalizedNote.title || "Untitled KeepSidian Note";
 	await assertDownloadIdentityPresentOrUntracked(plugin, note);
 	const resolvedNotePath = resolveNotePath(plugin.app, plugin.settings, normalizedNote);
 	const resolveExistingPathStartedAt = getNowMs();
@@ -1158,15 +1153,22 @@ export async function processAndSaveNote(
 	let expectedMarkdown: string | undefined;
 	let acknowledgedMedia: MediaBaseline | undefined;
 	let preserveLocalMedia = false;
+	let conflictReservation: Awaited<ReturnType<typeof reserveConflictPath>> | undefined;
 	const writeKnownContent = async (path: string, content: string, expected?: string): Promise<void> => {
+		assertRelativePath(path);
 		if (expected !== undefined) assertKeepNoteIdentity(normalizedNote, expected);
-		const [frontmatter, body] = extractFrontmatter(content);
+		let [frontmatter, body, properties] = extractFrontmatter(content);
+		if (typeof properties.KeepSidianSourceFileName === "string" && properties.KeepSidianSourceFileName.normalize("NFC") === path.split("/").pop()?.normalize("NFC") && typeof properties.KeepSidianSourceTitle === "string") {
+			frontmatter = frontmatter.replace(/^KeepSidianSourceTitle:[^\r\n]*/m, () => `KeepSidianSourceTitle: ${JSON.stringify(note.title)}`);
+		}
 		const input = wrapMarkdown(withRemoteRevision(frontmatter, note.remote_revision), body);
 		const finalize = (value: string) => stampLocalBaseline(plugin.app.vault.adapter, path, value, acknowledgedMedia);
 		const stamped = note.local_enrichment ? await getEnrichmentLedger(plugin).stage(note, path, expected, input, finalize) : await finalize(input);
-		if (expected !== undefined && (await plugin.app.vault.adapter.read(path) ?? "") !== expected) throw new Error("A local note changed during download. Local edits were preserved.");
-		if (expected === undefined && await plugin.app.vault.adapter.exists(path)) throw new Error("A local file appeared at the download destination. It was preserved.");
-		await plugin.app.vault.adapter.write(path, stamped);
+		await withPathLock(plugin.app.vault.adapter, path, async () => {
+			if (expected !== undefined && (await plugin.app.vault.adapter.read(path) ?? "") !== expected) throw new Error("A local note changed during download. Local edits were preserved.");
+			if (expected === undefined && await equivalentPath(plugin.app.vault.adapter, path)) throw new Error("A local file appeared at the download destination. It was preserved.");
+			if (expected === undefined || stamped !== expected) await plugin.app.vault.adapter.write(path, stamped);
+		});
 		if (note.local_enrichment) await getEnrichmentLedger(plugin).finish(note);
 		expectedMarkdown = stamped;
 	};
@@ -1175,7 +1177,7 @@ export async function processAndSaveNote(
 		const known = storedLocalBaseline(expected);
 		let media: MediaBaseline | undefined;
 		try { media = await captureLocalMedia(plugin.app.vault.adapter, path, expected); } catch { /* Cannot acknowledge unknown media. */ }
-		const unchanged = known !== undefined && media !== undefined && await localStateBaseline(plugin.app.vault.adapter, path, expected, media) === known;
+		const unchanged = known !== undefined && media !== undefined && await isLocalStateUnchanged(plugin.app.vault.adapter, path, expected, media);
 		const finalize = async (value: string) => unchanged ? await stampLocalBaseline(plugin.app.vault.adapter, path, value, media) : value;
 		const updated = note.local_enrichment ? await getEnrichmentLedger(plugin).stage(note, path, expected, content, finalize) : await finalize(content);
 		if ((await plugin.app.vault.adapter.read(path) ?? "") !== expected) throw new Error("A local note changed during metadata update. Local edits were preserved.");
@@ -1239,9 +1241,9 @@ export async function processAndSaveNote(
 			if (decisionSource !== undefined && original !== decisionSource) throw new Error("A local note changed after download comparison. Local edits were preserved.");
 			const baseline = storedLocalBaseline(original);
 			try { acknowledgedMedia = await captureLocalMedia(plugin.app.vault.adapter, noteFilePath, original); } catch { /* Unknown media cannot be acknowledged. */ }
-			const currentState = acknowledgedMedia ? await localStateBaseline(plugin.app.vault.adapter, noteFilePath, original, acknowledgedMedia) : undefined;
-			preserveLocalMedia = Boolean(baseline && currentState !== baseline);
-			if (baseline && currentState === baseline) expectedMarkdown = original;
+			const unchanged = acknowledgedMedia ? await isLocalStateUnchanged(plugin.app.vault.adapter, noteFilePath, original, acknowledgedMedia) : false;
+			preserveLocalMedia = Boolean(baseline && !unchanged);
+			if (baseline && unchanged) expectedMarkdown = original;
 		}
 
 		// A known unsent local Keep-state edit remains local work. Only the
@@ -1284,7 +1286,11 @@ export async function processAndSaveNote(
 				false,
 				baseline
 			);
-			const newMdContent = wrapMarkdown(mdFrontmatter, newTextWithoutFrontmatter);
+			// The fallback is a local filename, not a request to rename the Keep note.
+			const filename = noteFilePath.split("/").pop()!;
+			let localFrontmatter = normalizedNote.title ? mdFrontmatter : `${mdFrontmatter}\nKeepSidianUntitledFileName: ${JSON.stringify(filename)}`;
+			if (normalizedNote.title && filename !== `${note.title}.md`) localFrontmatter += `\nKeepSidianSourceTitle: ${JSON.stringify(note.title)}\nKeepSidianSourceFileName: ${JSON.stringify(filename)}`;
+			const newMdContent = wrapMarkdown(localFrontmatter, newTextWithoutFrontmatter);
 			await ensureParentFolder(noteFilePath);
 			const writeStartedAt = getNowMs();
 			await writeKnownContent(noteFilePath, newMdContent);
@@ -1329,7 +1335,8 @@ export async function processAndSaveNote(
 				if (decision.action === "conflict-copy") {
 					metrics.action = "conflict";
 					onMergeConflict?.(normalizePathSafe(noteFilePath));
-					noteFilePath = `${noteFilePath.replace(/\.md$/, "")}${CONFLICT_FILE_SUFFIX}${lastSyncedDate}.md`;
+					conflictReservation = await reserveConflictPath(plugin.app.vault.adapter, noteFilePath, lastSyncedDate);
+					noteFilePath = conflictReservation.path;
 					metrics.notePath = normalizePathSafe(noteFilePath);
 					mdFrontmatter = withSyncState(mdFrontmatter, false, baseline);
 				} else {
@@ -1470,6 +1477,7 @@ export async function processAndSaveNote(
 		);
 		throw err;
 	} finally {
+		conflictReservation?.release();
 		metrics.totalDurationMs = getNowMs() - startedAt;
 	}
 

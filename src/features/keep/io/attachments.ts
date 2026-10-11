@@ -3,9 +3,11 @@ import { KEEPSIDIAN_SERVER_URL } from "../../../config";
 import { NetworkError } from "../../../services/errors";
 import { httpGetArrayBuffer } from "../../../services/http";
 import { buildMediaPath } from "../../../services/paths";
+import { assertRelativePath, equivalentPath, portableFile, withPathLock } from "@services/portable-path";
 
 // Minimal app interface to reduce coupling in tests and code
 interface AdapterLike {
+	list?: (path: string) => Promise<{ files: string[]; folders: string[] }>;
 	writeBinary: (path: string, data: ArrayBuffer) => Promise<void> | void;
 	exists?: (path: string) => Promise<boolean> | boolean;
 	readBinary?: (path: string) => Promise<ArrayBuffer> | ArrayBuffer;
@@ -91,8 +93,8 @@ function resolveBlobUrl(blobUrl: string): URL | null {
 }
 
 function sanitizeFileName(fileName: string): string {
-	const unsafeCharacters = new Set(["\\", "/", "#", "[", "]", "|", "^"]);
-	return Array.from(fileName, (character) => (unsafeCharacters.has(character) ? "_" : character)).join("");
+	const extension = /\.[a-z0-9]{1,10}$/i.exec(fileName)?.[0] ?? "";
+	return portableFile(extension ? fileName.slice(0, -extension.length) : fileName, extension);
 }
 
 function hasImageFileExtension(fileName: string): boolean {
@@ -132,7 +134,7 @@ function ensureImageExtension(fileName: string, data: ArrayBuffer): string {
 	if (!inferredExtension || hasImageFileExtension(fileName)) {
 		return fileName;
 	}
-	return `${fileName}${inferredExtension}`;
+	return portableFile(fileName, inferredExtension);
 }
 
 function deriveFileName(url: URL, index: number, blobNames?: string[]): string | null {
@@ -219,6 +221,7 @@ export async function processAttachments(
 	requestHeaders?: AttachmentRequestHeaders,
 	preserveExisting = false
 ): Promise<ProcessAttachmentsResult> {
+	assertRelativePath(saveLocation, true);
 	const result: ProcessAttachmentsResult = {
 		downloaded: 0,
 		skippedIdentical: 0,
@@ -256,8 +259,8 @@ export async function processAttachments(
 			}
 
 			const initialPath = buildMediaPath(saveLocation, fileName);
-			const existedInitially = await adapter.exists?.(initialPath);
-			const initialBytes = existedInitially && adapter.readBinary ? await adapter.readBinary(initialPath) : undefined;
+			const initialExisting = await equivalentPath(adapter, initialPath);
+			const initialBytes = initialExisting && adapter.readBinary ? await adapter.readBinary(initialExisting) : undefined;
 			const fetchStartedAt = getNowMs();
 			const requestUrlHeaders =
 				requestHeaders && resolvedUrl.href.startsWith(KEEPSIDIAN_SERVER_URL)
@@ -268,24 +271,47 @@ export async function processAttachments(
 					: undefined;
 			const blobData = await fetchAttachmentBlob(resolvedUrl.href, requestUrlHeaders);
 			result.fetchDurationMs += getNowMs() - fetchStartedAt;
-			const resolvedFileName = ensureImageExtension(fileName, blobData);
-			const blobFilePath = buildMediaPath(saveLocation, resolvedFileName);
+			let resolvedFileName = ensureImageExtension(fileName, blobData);
+			let blobFilePath = buildMediaPath(saveLocation, resolvedFileName);
 
+			await withPathLock(adapter, `${saveLocation}/media`, async () => {
 			let shouldWrite = true;
 			if (typeof adapter.exists === "function") {
 				try {
 					const compareStartedAt = getNowMs();
-					const alreadyExists = await adapter.exists(blobFilePath);
+					const alreadyExists = await equivalentPath(adapter, blobFilePath);
 					if (alreadyExists && typeof adapter.readBinary === "function") {
-						const existingData = await adapter.readBinary(blobFilePath);
+						const existingData = await adapter.readBinary(alreadyExists);
 						if (blobFilePath !== initialPath && !arrayBuffersAreEqual(existingData, blobData)) throw new Error("Existing media at an inferred filename was preserved. Review it before replacing it.");
 						if (initialBytes && blobFilePath === initialPath && !arrayBuffersAreEqual(existingData, initialBytes)) throw new Error("Local media changed during download. Its bytes were preserved.");
 						if (preserveExisting && !arrayBuffersAreEqual(existingData, blobData)) throw new Error("Local media has unsent changes. Its bytes were preserved.");
-						if (!initialBytes && blobFilePath === initialPath && !existedInitially) throw new Error("Local media was created during download. Its bytes were preserved.");
 						if (existingData && arrayBuffersAreEqual(existingData, blobData)) {
+							blobFilePath = alreadyExists;
+							resolvedFileName = alreadyExists.split("/").pop()!;
 							shouldWrite = false;
 							result.skippedIdentical += 1;
+						} else {
+							// Without a persisted blob identity, differing bytes must never
+							// overwrite a basename match. Content-address a separate version.
+							let hash = 2166136261;
+							for (const byte of new Uint8Array(blobData)) hash = Math.imul(hash ^ byte, 16777619) >>> 0;
+							const extension = /\.[a-z0-9]{1,10}$/i.exec(resolvedFileName)?.[0] ?? "";
+							const stem = extension ? resolvedFileName.slice(0, -extension.length) : resolvedFileName;
+							let allocated = false;
+							for (let counter = 1; counter <= 1000; counter++) {
+								resolvedFileName = portableFile(stem, extension, `--media-${hash.toString(16)}${counter === 1 ? "" : `-${counter}`}`);
+								blobFilePath = buildMediaPath(saveLocation, resolvedFileName);
+								const occupied = await equivalentPath(adapter, blobFilePath);
+								if (!occupied) { allocated = true; break; }
+								if (arrayBuffersAreEqual(await adapter.readBinary(occupied), blobData)) {
+									blobFilePath = occupied; resolvedFileName = occupied.split("/").pop()!;
+									shouldWrite = false; result.skippedIdentical++; allocated = true; break;
+								}
+							}
+							if (!allocated) throw new Error("Unable to allocate a distinct media filename.");
 						}
+					} else if (alreadyExists) {
+						throw new Error("Existing media cannot be compared. Its bytes were preserved.");
 					}
 					result.compareDurationMs += getNowMs() - compareStartedAt;
 				} catch (existsError) {
@@ -296,10 +322,13 @@ export async function processAttachments(
 
 			if (shouldWrite) {
 				const writeStartedAt = getNowMs();
+				assertRelativePath(blobFilePath);
+				if (await equivalentPath(adapter, blobFilePath)) throw new Error("Media appeared at the download destination. It was preserved.");
 				await adapter.writeBinary(blobFilePath, blobData);
 				result.writeDurationMs += getNowMs() - writeStartedAt;
 				result.downloaded += 1;
 			}
+			});
 			result.fileNames.push(resolvedFileName);
 			try { result.mediaBaselines?.push([blobFilePath, await digest(new Uint8Array(blobData))]); } catch { /* Crypto unavailable: leave acknowledgement unknown. */ }
 		} catch (error) {

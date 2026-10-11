@@ -7,7 +7,7 @@ import type KeepSidianPlugin from "@app/main";
 import { collectNotesToPush } from "../push/collectNotes";
 import { pushGoogleKeepNotes } from "../push";
 import { pushNotes } from "@integrations/server/keepApi";
-import { digest, localStateBaseline, stampLocalBaseline, storedLocalBaseline } from "../domain/local-state";
+import { digest, isLocalStateUnchanged, localStateBaseline, stampLocalBaseline, storedLocalBaseline } from "../domain/local-state";
 import { stripSyncState } from "../domain/sync-state";
 import { getExistingFileInfo, checkForDuplicateData } from "../domain/compare";
 
@@ -26,6 +26,58 @@ afterAll(() => {
 	else Reflect.deleteProperty(globalThis, "TextEncoder");
 });
 beforeEach(() => jest.clearAllMocks());
+
+it("ignores added or changed local timestamps without hiding body, checklist, tag or title edits", async () => {
+	for (const change of ["", "\nBody edit", "\n- [x] Checklist edit", "tags", "title"]) {
+		const f = await fixture();
+		f.edit(f.content.replace("tags: [manual]", "tags: [manual]\ncreated: 2026-10-10T11:36:46-04:00\nupdated: 2026-10-10T11:36:47-04:00"));
+		expect(await isLocalStateUnchanged(f.adapter, f.path, f.content)).toBe(true);
+		f.edit(f.content.replace("11:36:47", "12:00:00"));
+		expect((await collectNotesToPush(f.plugin)).notesToPush).toHaveLength(0);
+		if (change) {
+			f.edit(change === "tags" ? f.content.replace("tags: [manual]", "tags: [manual, new]") : change === "title" ? f.content.replace("tags: [manual]", "tags: [manual]\nTitle: Renamed") : f.content + change);
+			expect((await collectNotesToPush(f.plugin)).notesToPush).toHaveLength(1);
+			expect((await getExistingFileInfo(f.path, f.plugin.app)).localChanged).toBe(true);
+		}
+	}
+});
+
+it("retains meaningful non-date and nested properties with timestamp-like names", async () => {
+	for (const property of ["updated: publish me", "created: 123", "custom:\n  updated: 2026-10-10T11:36:47-04:00"]) {
+		const f = await fixture();
+		f.edit(f.content.replace("tags: [manual]", `tags: [manual]\n${property}`));
+		expect((await collectNotesToPush(f.plugin)).notesToPush).toHaveLength(1);
+	}
+});
+
+it("recognizes exact legacy timestamp-bearing hashes without acknowledging unrelated edits", async () => {
+	const f = await fixture();
+	f.edit(f.content.replace("tags: [manual]", "tags: [manual]\nupdated: 2026-10-10T11:36:47-04:00"));
+	const legacy = await localStateBaseline(f.adapter, f.path, f.content, undefined, "legacy-timestamps");
+	f.edit(f.content.replace(/^KeepSidianLocalBaseline:.*$/m, `KeepSidianLocalBaseline: ${legacy}`));
+	expect((await collectNotesToPush(f.plugin)).notesToPush).toHaveLength(0);
+	f.edit(f.content + "\nAn actual edit");
+	expect((await collectNotesToPush(f.plugin)).notesToPush).toHaveLength(1);
+});
+
+it("ignores YAML formatting and key order while preserving changed values", async () => {
+	const f = await fixture();
+	f.edit(await stampLocalBaseline(f.adapter, f.path, f.content.replace("tags: [manual]", 'tags: [manual]\nKeepSidianUntitledFileName: "note.md"')));
+	f.edit(f.content.replace('tags: [manual]\nKeepSidianUntitledFileName: "note.md"', 'KeepSidianUntitledFileName: note.md\ntags:\n  - manual'));
+	expect((await collectNotesToPush(f.plugin)).notesToPush).toHaveLength(0);
+	f.edit(f.content.replace("  - manual", "  - another-tag"));
+	expect((await collectNotesToPush(f.plugin)).notesToPush).toHaveLength(1);
+});
+
+it("keeps the local untitled filename out of the uploaded title and private properties", async () => {
+	const f = await fixture();
+	f.edit(f.content.replace("tags: [manual]", 'tags: [manual]\nKeepSidianUntitledFileName: "note.md"') + "\nBody edit");
+	const notes = (await collectNotesToPush(f.plugin)).notesToPush;
+	expect(notes[0].title).toBe("");
+	expect(stripSyncState(notes[0].frontmatter)).not.toContain("KeepSidianUntitledFileName");
+	f.edit(f.content.replace('"note.md"', '"old-name.md"'));
+	expect((await collectNotesToPush(f.plugin)).notesToPush[0].title).toBe("note");
+});
 
 it("hashes only the requested byte view with the installed crypto implementation", async () => {
 	const bytes = new Uint8Array([0, 1, 2, 3, 4]);

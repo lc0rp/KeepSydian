@@ -7,7 +7,9 @@ import type { PreNormalizedNote } from "../domain/note";
 import { stripManagedImageEmbeds, withManagedImageEmbeds } from "../domain/attachmentEmbeds";
 import { resolveMergeAction } from "../domain/merge-action";
 import { isRemoteBodyUnchanged, keepKey } from "../domain/sync-state";
-import { CONFLICT_FILE_SUFFIX, FRONTMATTER_GOOGLE_KEEP_URL_KEY } from "../constants";
+import { FRONTMATTER_GOOGLE_KEEP_URL_KEY } from "../constants";
+import { reserveConflictPath } from "../io/conflict-path";
+import { equivalentPath, withPathLock } from "@services/portable-path";
 import { wrapMarkdown } from "../frontmatter";
 import { ensureParentFolderForFile, normalizePathSafe } from "@services/paths";
 import { retryDownload } from "../download-retry";
@@ -117,15 +119,16 @@ function restoreLocalImageEmbeds(text: string, original: string): string {
 }
 
 async function writeConflictCopy(plugin: KeepSidianPlugin, note: ReviewedPushNote, text: string): Promise<void> {
-	const stem = note.fullPath.replace(/\.md$/i, ""), timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-	let path = `${stem}${CONFLICT_FILE_SUFFIX}${timestamp}.md`, suffix = 1;
-	while (await plugin.app.vault.adapter.exists(path)) {
-		path = `${stem}${CONFLICT_FILE_SUFFIX}${timestamp}-${suffix++}.md`;
-		if (suffix > 1000) throw new Error("Unable to allocate a conflict copy path.");
-	}
-	checkCancelled(plugin);
-	await ensureParentFolderForFile(plugin.app, path);
-	await plugin.app.vault.adapter.write(path, wrapMarkdown(note.frontmatter, restoreLocalImageEmbeds(text, note.body)));
+	const adapter = plugin.app.vault.adapter;
+	const claim = await reserveConflictPath(adapter, note.fullPath, new Date().toISOString());
+	try {
+		checkCancelled(plugin);
+		await ensureParentFolderForFile(plugin.app, claim.path);
+		await withPathLock(adapter, claim.path, async () => {
+			if (await equivalentPath(adapter, claim.path)) throw new Error("A file appeared at the conflict destination. It was preserved.");
+			await adapter.write(claim.path, wrapMarkdown(note.frontmatter, restoreLocalImageEmbeds(text, note.body)));
+		});
+	} finally { claim.release(); }
 }
 
 /** Revalidate every selected source and remote snapshot before the first write. */

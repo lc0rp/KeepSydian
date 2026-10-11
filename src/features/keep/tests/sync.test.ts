@@ -736,28 +736,23 @@ describe("Google Keep Import Functions", () => {
 			textWithoutFrontmatter: "Content 1",
 		};
 
-		it("should skip notes without a title", async () => {
+		it("should save notes without a title instead of silently skipping them", async () => {
 			const normalizedWithoutTitle: noteModule.NormalizedNote = {
 				...normalizedNote,
 				title: "",
 				text: "",
 			};
 			jest.spyOn(noteModule, "normalizeNote").mockReturnValue(normalizedWithoutTitle);
-			const logSpy = jest.spyOn(loggingModule, "logSync").mockResolvedValue(undefined);
+			jest.spyOn(compareModule, "handleDuplicateNotes").mockResolvedValue("create");
+			jest.spyOn(pathsModule, "ensureParentFolderForFile").mockResolvedValue(undefined);
 
 			await syncModule.processAndSaveNote(mockPlugin, note, mockPlugin.settings.saveLocation);
 
-			expect(compareModule.handleDuplicateNotes).not.toHaveBeenCalled();
-			expect(mockPlugin.app.vault.adapter.write).not.toHaveBeenCalled();
-			expect(logSpy).toHaveBeenCalledWith(
-				mockPlugin,
-				"Skipped note without a title",
-				expect.objectContaining({
-					batchKey: "sync:notes",
-					batchSize: 50,
-				})
+			expect(compareModule.handleDuplicateNotes).toHaveBeenCalled();
+			expect(mockPlugin.app.vault.adapter.write).toHaveBeenCalledWith(
+				"Test Folder/Untitled KeepSidian Note.md",
+				expect.stringContaining('KeepSidianUntitledFileName: "Untitled KeepSidian Note.md"')
 			);
-			logSpy.mockRestore();
 		});
 
 		it("should process and save note without duplicates or attachments", async () => {
@@ -902,7 +897,8 @@ describe("Google Keep Import Functions", () => {
 
 			await syncModule.processAndSaveNote(mockPlugin, incomingNote, mockPlugin.settings.saveLocation);
 
-			const expectedFilePath = `${mockPlugin.settings.saveLocation}/${incomingNote.title}-conflict-2023-01-01T00:00:00.000Z.md`;
+			// The queued exists(true) represents an occupied first candidate; keep it and allocate -2.
+			const expectedFilePath = `${mockPlugin.settings.saveLocation}/${incomingNote.title}-conflict-2023-01-01T00-00-00.000Z-2.md`;
 			expect(mockPlugin.app.vault.adapter.write).toHaveBeenCalledWith(expectedFilePath, expect.any(String));
 		});
 

@@ -211,11 +211,24 @@ optional email address are handled by the form, not stored in your vault or retu
 
 If both copies changed since the last sync, KeepSydian tries to merge their bodies while preserving the existing
 frontmatter. If the merge cannot be completed safely, the incoming note is saved as a separate
-`-conflict-<timestamp>.md` file.
+`-conflict-<timestamp>.md` file. Conflict timestamps use hyphens instead of colons
+so the filenames work on Windows. If a copy already exists, a numbered suffix
+preserves both copies. Unresolved originals and conflict copies are excluded from
+that attempt's upload; resolve the competing content before expecting a no-op sync.
+
+New note and media filenames use a shared portable component policy. Source titles
+are retained when a generated filename differs; a later user rename remains a local
+title edit. Existing linked notes stay at their current paths. Unsafe configured
+folders are rejected for review instead of being silently redirected or renamed.
+Filename allocation accounts for case and Unicode-normalization equivalents and
+leaves room for extensions and collision suffixes.
 
 ### Attachments
 
 - Downloaded attachments are stored in the sync folder's `media/` directory.
+- When a media basename already contains different bytes, a separate version is
+  allocated and generated embeds use that filename. Existing bytes are preserved;
+  this can retain older media versions until the user chooses to clean them up.
 - The **Display imported images in notes** option in plugin settings adds Obsidian image embeds while keeping the files
   in `media/`.
 - Upload scans notes under the configured save location for attachments referenced from `media/`.
