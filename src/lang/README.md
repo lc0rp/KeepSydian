@@ -7,23 +7,29 @@ no production module imports this folder. See [readiness and rollout plan](READI
 
 | File | Purpose | Status on 2026-10-12 |
 | --- | --- | --- |
-| [en.ts](en.ts) | Canonical English source; comments identify source surfaces | 138 entries, initial subset |
-| [zh.ts](zh.ts) | Simplified Chinese (`zh`, matching Obsidian) | 36 AI-authored draft entries |
-| [ru.ts](ru.ts) | Russian | 36 AI-authored draft entries |
-| [de.ts](de.ts) | German | 36 AI-authored draft entries |
+| [en-plain-lang.ts](en-plain-lang.ts) | Canonical English source after plain-language review | All 138 entries reviewed; 57 revised, 81 retained |
+| [en.ts](en.ts) | Preserved original English extraction, including its original header | 138 entries; unchanged archive, not the active source |
+| [zh.ts](zh.ts) | Simplified Chinese (`zh`, matching Obsidian) | 138 AI-authored draft entries |
+| [ru.ts](ru.ts) | Russian | 138 AI-authored draft entries |
+| [de.ts](de.ts) | German | 138 AI-authored draft entries |
 | [types.ts](types.ts) | Keys, message shapes, language status | TypeScript checked |
 | [index.ts](index.ts) | Locale resolution, fallback, interpolation, plurals, display formatting | Tested, not wired to UI |
 | [tests/i18n.test.ts](tests/i18n.test.ts) | Catalog and compatibility checks | Included in Jest |
 
-The 36 entries are translations drafted by the assistant, **not native-speaker-approved translations**.
-There are 102 untranslated entries per draft. Missing keys are deliberately omitted; they fall back to
-English. There are no English copies marked as translated. The catalog is not a complete inventory of
-the plugin: safety dialogs, dynamic sync-plan explanations, helper progress and several settings remain
-to be extracted. None of the app's UI is localized by this change.
+Each draft covers all 138 current keys: 137 translated entries and the unchanged literal email example.
+These are **not native-speaker-approved translations**. No English placeholder prose remains. Future
+untranslated keys should be omitted so they fall back to English. Full catalog coverage is not full
+plugin coverage: safety dialogs, dynamic sync-plan explanations, helper progress and several settings
+still need extraction. None of the app's UI is localized by this change.
+
+The English pass used the installed local `plain-lang` skill, which requires a separate copy and an
+unchanged original. Both the registry and message types now use `en-plain-lang.ts`. Do not update the
+archived `en.ts`; its original header is preserved as part of the copy contract. See the
+[plain-language and translation review](PLAIN_LANGUAGE_REVIEW.md) for provenance, fidelity and limits.
 
 ## Translator rules
 
-1. Add/change English in `en.ts` first. Use stable semantic keys, not English sentences as keys.
+1. Add/change English in `en-plain-lang.ts` first. Use stable semantic keys, not English sentences as keys.
 2. Add only actual translations to a locale's `messages`. Leave untranslated keys absent.
 3. Preserve `{{name}}` placeholders exactly, but reorder them as the language requires. A numeric value
    is formatted for the language of the selected message. Pass IDs, paths, versions and codes as strings.
@@ -39,6 +45,10 @@ to be extracted. None of the app's UI is localized by this change.
    and must not be used with `innerHTML`. Add rich text via DOM nodes, not translator-supplied markup.
 9. Keep the whole locale marked `draft` until native review, complete agreed-surface coverage, and
    rendered desktop/mobile acceptance. Do not mark a partial locale reviewed just to enable it.
+
+The current key-completeness assertion deliberately fails when English grows. Translate new keys or
+explicitly adjust the test to document an incomplete draft; never insert English placeholder prose
+to pass it. The translator still supports absent keys and tests that fallback with a partial fixture.
 
 ## Previewing a draft in a test
 

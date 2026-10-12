@@ -72,10 +72,14 @@ API source: [Obsidian public declarations](https://raw.githubusercontent.com/obs
 
 ## What this checkpoint adds
 
-- `en.ts`: 138 source entries from commands, core settings, supporter settings, sync UI, notices, errors,
-  token onboarding and feedback. Comments trace groups to original files. It is an initial subset.
-- `zh.ts`, `ru.ts`, `de.ts`: 36 actual draft translations each; 102 missing entries each fall back to
-  English. All drafts need native review; this is zero approved non-English coverage.
+- `en-plain-lang.ts`: 138 source entries from commands, core settings, supporter settings, sync UI,
+  notices, errors, token onboarding and feedback. All entries received a plain-language review:
+  57 revised and 81 retained. Comments trace groups to original files. It is still an initial subset.
+- `en.ts`: the original extraction preserved byte for byte under the local plain-lang skill's copy
+  contract. It is no longer the canonical source; see [review details](PLAIN_LANGUAGE_REVIEW.md).
+- `zh.ts`, `ru.ts`, `de.ts`: 138 draft entries each, derived from revised English. Each has 137
+  translated entries and one preserved email example. All need native review; approved non-English
+  coverage remains zero. Missing future translations still fall back to English.
 - Typed keys/shapes; locale normalization and aliases; an injectable language reader; per-key English
   fallback; named interpolation; cardinal plurals; explicit display number/date formatting.
 - Draft activation gate and Jest checks for catalog integrity, fallbacks, plural rules, old-app API
@@ -83,8 +87,8 @@ API source: [Obsidian public declarations](https://raw.githubusercontent.com/obs
 
 The helper has no storage, network, vault or UI side effects. No production import references it;
 translations are not bundled into `main.js`. No package/manifest/version, runtime UI, sync algorithm,
-server, note data or CSS was changed. The source copy preserves current English brand spellings and
-some awkward existing wording to avoid mixing copy editing into extraction.
+server, note data or CSS was changed. The revised source preserves brand names, technical meaning,
+warnings, placeholders and filename examples while simplifying the English wording.
 
 ## Persistence boundaries
 
@@ -130,7 +134,9 @@ Approval to merge/release, and coordination with the desktop acceptance owner, r
 
 - `npm run build`: passed TypeScript, ESLint and bundle checks. Two existing warnings remain:
   `features/keep/deletions.ts:142` uses `Vault.trash`; `features/keep/sync.ts:275` has an unused helper.
-- Targeted Jest: 42 tests passed. Full Jest with coverage: 57 suites / 830 tests passed.
+- Targeted Jest: 56 tests passed, including source preservation, complete draft keys, placeholder/token
+  multiplicity, literal examples and new translated warning plurals. Full-suite results for this
+  revision are recorded in [the plain-language review](PLAIN_LANGUAGE_REVIEW.md).
 - New Markdown files pass lint. Repository-wide Markdown lint still reports 40 pre-existing line-length
   errors in older planning and screenshot reports; none are in this change.
 - Dependencies were copied into this isolated checkout from the existing local installation;
@@ -145,5 +151,6 @@ Approval to merge/release, and coordination with the desktop acceptance owner, r
 - Work is isolated on `codex/multilingual-foundation` in a separate local clone. No push, merge, PR,
   release, plugin install, vault/UI access, raw session reads or private-code upload was performed.
 
-Next concrete step: approve the language priorities and arrange native review while a follow-up change
-wires one complete English UI slice after the current release is finished.
+Next concrete step: arrange native review while a follow-up change wires one complete English UI
+slice after the current release is finished. Language priorities remain evidence-based candidates,
+not measured usage rankings.

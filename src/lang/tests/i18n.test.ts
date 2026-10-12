@@ -1,5 +1,9 @@
 import { createTranslator, languages, readAppLocale, resolveLocale } from "../index";
-import { en } from "../en";
+import { en } from "../en-plain-lang";
+import { en as originalEnglish } from "../en";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Message, MessageKey } from "../types";
 import { resolveNotePath } from "../../services/note-path-resolver";
 import { DEFAULT_SETTINGS } from "../../types/keepsidian-plugin-settings";
@@ -48,14 +52,24 @@ describe("language catalog foundation", () => {
 		}
 	});
 
-	it("previews draft translations with per-key English fallback", () => {
+	it("previews draft translations", () => {
 		const { t } = createTranslator("de-AT", { includeDrafts: true });
 		expect(t("commands.syncNow")).toBe("Jetzt synchronisieren");
-		expect(t("settings.backup.description")).toBe(en["settings.backup.description"]);
-		// 21 is singular in Russian but plural in an untranslated English sentence.
-		expect(createTranslator("ru", { includeDrafts: true }).t("sync.attachmentWarnings", { count: 21 })).toBe(
-			"21 attachment warnings"
-		);
+		expect(t("settings.backup.description")).toBe(languages.de.messages["settings.backup.description"]);
+	});
+
+	it("falls back to revised English text, grammar and formatting for a missing translation", () => {
+		// Model a future untranslated key without leaving today's drafts incomplete.
+		const replacement = jest.replaceProperty(languages, "ru", { ...languages.ru, messages: {} });
+		try {
+			const { t } = createTranslator("ru", { includeDrafts: true });
+			expect(t("settings.backup.description")).toBe(en["settings.backup.description"]);
+			// 21 is singular in Russian but plural in an untranslated English sentence.
+			expect(t("sync.attachmentWarnings", { count: 21 })).toBe("21 attachment warnings");
+			expect(t("sync.attachmentWarnings", { count: 1000 })).toBe("1,000 attachment warnings");
+		} finally {
+			replacement.restore();
+		}
 	});
 
 	it.each([
@@ -83,6 +97,21 @@ describe("language catalog foundation", () => {
 		for (const count of [0, 1, 2]) expect(zh.t("sync.notes", { count })).toBe(`${count} 条笔记`);
 		expect(de.t("sync.notes", { count: 1 })).toBe("1 Notiz");
 		expect(de.t("sync.notes", { count: 1000 })).toBe("1.000 Notizen");
+	});
+
+	it.each([
+		["zh", 0, "0 条附件警告"],
+		["zh", 1, "1 条附件警告"],
+		["de", 1, "1 Warnung zu Anhängen"],
+		["de", 2, "2 Warnungen zu Anhängen"],
+		["ru", 0, "0 предупреждений о вложениях"],
+		["ru", 1, "1 предупреждение о вложениях"],
+		["ru", 2, "2 предупреждения о вложениях"],
+		["ru", 5, "5 предупреждений о вложениях"],
+		["ru", 21, "21 предупреждение о вложениях"],
+		["ru", 1.5, "1,5 предупреждения о вложениях"],
+	])("pluralizes new attachment warnings in %s for %s", (locale, count, expected) => {
+		expect(createTranslator(locale, { includeDrafts: true }).t("sync.attachmentWarnings", { count })).toBe(expected);
 	});
 
 	it("requires a numeric count and preserves visibly missing interpolation values", () => {
@@ -130,13 +159,38 @@ describe("language catalog foundation", () => {
 
 describe("catalog integrity", () => {
 	const forms = (message: Message): string[] => (typeof message === "string" ? [message] : Object.values(message));
-	const placeholders = (text: string): string[] =>
-		[...new Set(text.match(/\{\{[a-zA-Z][a-zA-Z0-9_]*\}\}/g) ?? [])].sort();
+	const placeholders = (text: string): string[] => (text.match(/\{\{[a-zA-Z][a-zA-Z0-9_]*\}\}/g) ?? []).sort();
 	const protectedTokens = (text: string): string[] =>
-		[...new Set(text.match(/(?<!\{)\{(?:title|(?:now|note)\.[a-z*]+)\}(?!\})/g) ?? [])].sort();
+		(text.match(/(?<!\{)\{(?:title|(?:now|note)\.[a-z*]+)\}(?!\})/g) ?? []).sort();
+	const protectedLiterals = (text: string): string[] =>
+		(text.match(/Google Keep|KeepSidian|Obsidian|GitHub|KIM|OAuth|2–3|Example@gmail\.com/g) ?? []).sort();
+
+	it("preserves the original English file byte for byte", () => {
+		const bytes = readFileSync(join(__dirname, "../en.ts"));
+		expect(createHash("sha256").update(bytes).digest("hex")).toBe(
+			"bd5639436acbd71f511958f56387176772ac96c588860a59bb54974e47889c58"
+		);
+	});
+
+	it("preserves English keys, message shapes, placeholders, filename syntax and factual literals", () => {
+		expect(Object.keys(en).sort()).toEqual(Object.keys(originalEnglish).sort());
+		for (const key of Object.keys(en) as MessageKey[]) {
+			const source = originalEnglish[key];
+			const revised = en[key];
+			expect(typeof revised).toBe(typeof source);
+			if (typeof revised !== "string") expect(Object.keys(revised)).toEqual(Object.keys(source));
+			const originals = forms(source);
+			for (const [i, text] of forms(revised).entries()) {
+				expect(placeholders(text)).toEqual(placeholders(originals[i]));
+				expect(protectedTokens(text)).toEqual(protectedTokens(originals[i]));
+				expect(protectedLiterals(text)).toEqual(protectedLiterals(originals[i]));
+			}
+		}
+	});
 
 	for (const definition of Object.values(languages)) {
 		it(`${definition.locale} contains only known keys, nonempty text, and matching placeholders`, () => {
+			expect(Object.keys(definition.messages).sort()).toEqual(Object.keys(en).sort());
 			for (const [key, message] of Object.entries(definition.messages)) {
 				expect(Object.prototype.hasOwnProperty.call(en, key)).toBe(true);
 				const source = en[key as MessageKey];
@@ -147,16 +201,36 @@ describe("catalog integrity", () => {
 					expect(text.trim()).not.toBe("");
 					expect(placeholders(text)).toEqual(placeholders(sourceText));
 					expect(protectedTokens(text)).toEqual(protectedTokens(sourceText));
+					expect(protectedLiterals(text)).toEqual(protectedLiterals(sourceText));
 				}
 			}
 		});
 	}
 
-	it("keeps missing translations explicit instead of copying English into draft locales", () => {
+	it("preserves the literal filename examples in every catalog", () => {
+		for (const definition of Object.values(languages)) {
+			const folder = definition.messages["settings.saveLocation.description"];
+			const filename = definition.messages["settings.filename.description"];
+			for (const example of [
+				"{now.date}",
+				"{note.year}",
+				"/KeepSidian/{now.year}/{note.month}-{note.day}",
+				"/path/to/daily notes",
+			]) {
+				expect(folder).toContain(example);
+			}
+			for (const example of ["{title}-{now.date}", "{title}-{note.year}"]) expect(filename).toContain(example);
+		}
+	});
+
+	it("keeps all 138 translations draft and avoids English placeholders except the literal email example", () => {
 		for (const definition of Object.values(languages).filter((language) => language.status === "draft")) {
-			expect(Object.keys(definition.messages).length).toBeLessThan(Object.keys(en).length);
-			expect(definition.messages["settings.backup.description"]).toBeUndefined();
+			expect(Object.keys(definition.messages)).toHaveLength(138);
 			for (const [key, message] of Object.entries(definition.messages)) {
+				if (key === "settings.email.placeholder") {
+					expect(message).toBe(en[key]);
+					continue;
+				}
 				expect(message).not.toEqual(en[key as MessageKey]);
 			}
 		}

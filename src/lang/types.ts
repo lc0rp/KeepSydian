@@ -1,4 +1,4 @@
-import type { en } from "./en";
+import type { en } from "./en-plain-lang";
 
 export type MessageKey = keyof typeof en;
 export type PluralCategory = "zero" | "one" | "two" | "few" | "many" | "other";

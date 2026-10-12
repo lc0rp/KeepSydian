@@ -1,5 +1,5 @@
 /// <reference lib="es2018.intl" />
-import { en } from "./en";
+import { en } from "./en-plain-lang";
 import { de } from "./de";
 import { ru } from "./ru";
 import { zh } from "./zh";
