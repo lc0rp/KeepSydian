@@ -24,7 +24,7 @@
 		"verify:bundles": "node scripts/verify-bundles.mjs",
 		"preversion": "npm run lint",
 		"test": "npx jest",
-		"coverage": "npx jest --coverage",
+		"coverage": "npx jest --coverage --runInBand",
 		"bmad:refresh": "bmad-method install -f -i codex",
 		"bmad:list": "bmad-method list:agents",
 		"bmad:validate": "bmad-method validate",

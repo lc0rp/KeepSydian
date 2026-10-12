@@ -7,6 +7,7 @@ import { TextEncoder } from "node:util";
 import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Dirent } from "node:fs";
 import type KeepSidianPlugin from "@app/main";
 import type { PreNormalizedNote } from "../../domain/note";
 import { extractFrontmatter } from "../../domain/note";
@@ -50,16 +51,18 @@ it("uses real file writes and production download receipts for 650 notes and res
 			await fs.mkdir(full(path), { recursive: true });
 		},
 		list: async (path: string) => {
-			let entries: string[];
+			let entries: Dirent[];
 			try {
-				entries = await fs.readdir(full(path));
+				entries = await fs.readdir(full(path), { withFileTypes: true });
 			} catch {
 				return { files: [], folders: [] };
 			}
 			const files: string[] = [],
 				folders: string[] = [];
-			for (const name of entries)
-				((await fs.stat(full(`${path}/${name}`))).isDirectory() ? folders : files).push(`${path}/${name}`);
+			// Match the adapter's directory listing without a separate stat for
+			// every entry on every collision check in the 650-note workload.
+			for (const entry of entries)
+				(entry.isDirectory() ? folders : files).push(`${path}/${entry.name}`);
 			return { files, folders };
 		},
 		stat: async (path: string) => {
