@@ -40,7 +40,7 @@ jobs:
       actions: read
       id-token: write
       attestations: write
-    uses: lc0rp/KeepSydian/.github/workflows/release-client-cloud-core.yml@4f635e4143e7416631f88bd587aac1274544ff31
+    uses: lc0rp/KeepSydian/.github/workflows/release-client-cloud-core.yml@9e85b1784aac203095a09f30c76c90f5cf565397
     with:
       client_tag: ${{ inputs.client_tag }}
       server_tag: ${{ inputs.server_tag }}
