@@ -382,6 +382,36 @@ class NativeReleaseTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, message):
                         n.load_policy(path)
 
+    def test_v1_profile_reads_require_exact_regional_endpoint(self):
+        root = "https://us-central1-run.googleapis.com/apis/serving.knative.dev/v1/namespaces/lc0rp-labs"
+        self.assertEqual(n.V1, root)
+        for suffix in (
+            "/services/keepsidianserver",
+            "/revisions/keepsidianserver-b-" + "a" * 16,
+        ):
+            url = root + suffix
+            with self.subTest(url=url), patch.object(n, "build_opener") as opener:
+                response = opener.return_value.open.return_value.__enter__.return_value
+                response.read.return_value = b"{}"
+                self.assertEqual(n.request(url, "synthetic"), {})
+                request = opener.return_value.open.call_args.args[0]
+                self.assertEqual(request.full_url, url)
+                self.assertEqual(request.get_method(), "GET")
+                self.assertIsInstance(opener.call_args.args[0], n.NoRedirect)
+            for wrong in (
+                url.replace("us-central1-run", "run"),
+                url.replace("us-central1-run", "europe-west1-run"),
+                url.replace("lc0rp-labs", "other-project"),
+                url + "?unexpected=true",
+            ):
+                with (
+                    self.subTest(wrong=wrong),
+                    patch.object(n, "build_opener") as opener,
+                ):
+                    with self.assertRaisesRegex(ValueError, "Unapproved"):
+                        n.request(wrong, "synthetic")
+                    opener.assert_not_called()
+
     def test_invalid_version_and_build_rejected_without_api(self):
         for tag in ("v2.1.0/evil", "v2.1.0?x", "v02.1.0", "main"):
             with self.assertRaises(ValueError):
