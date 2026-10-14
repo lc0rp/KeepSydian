@@ -1441,6 +1441,21 @@ If your plugin does not need CSS, delete this file.
 	line-height: 1.35;
 }
 /* Localized labels can expand; user titles and paths retain their own direction. */
+.is-mobile .keepsidian-modal {
+	padding-inline: 8px;
+	box-sizing: border-box;
+}
+.keepsidian-sync-plan-merge-value {
+	display: none;
+}
+@media (max-width: 720px) {
+	.keepsidian-sync-plan-merge-value {
+		display: block;
+		flex-basis: 100%;
+		white-space: normal;
+		overflow-wrap: anywhere;
+	}
+}
 .keepsidian-draft-translations [role="switch"]:focus-visible {
 	outline: 2px solid var(--interactive-accent);
 	outline-offset: 2px;

@@ -607,7 +607,11 @@ export class SyncProgressModal extends Modal {
 		if (surface === "setup") {
 			this.planActionsEl = null; this.planPanelEl = null; this.planSummaryEl = null; this.planSelectionSummaryEl = null; this.planListEl = null;
 			if (this.footerEl) clearElement(this.footerEl);
-			await this.renderSetupSurface(renderVersion);
+			const rendering = this.renderSetupSurface(renderVersion);
+			// The synchronous redraw may remove the focused control before a network
+			// check resolves. Keep keyboard focus inside the dialog during that wait.
+			restoreFocus();
+			await rendering;
 			if (renderVersion === this.renderVersion) restoreFocus();
 			return;
 		}

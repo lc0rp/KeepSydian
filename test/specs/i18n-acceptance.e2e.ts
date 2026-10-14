@@ -144,7 +144,10 @@ describe("Multilingual responsive and accessibility acceptance (synthetic servic
 				Object.assign(p.progressModal.options, {
 					createSyncAttempt: undefined,
 					getLastAttempt: () => null,
-					isSupporterActive: async () => true,
+					isSupporterActive: () =>
+						new Promise<boolean>((resolve) => {
+							p.__i18nResolveSupporter = resolve;
+						}),
 					renderImportOptions: async () => undefined,
 					buildSyncPlan: async () => plan,
 					runSyncPlan: async () => {
@@ -154,6 +157,26 @@ describe("Multilingual responsive and accessibility acceptance (synthetic servic
 			}, fixture);
 			await browser.$(".keepsidian-modal-action--primary").waitForExist();
 			await settleAnimations();
+			// A slow subscription response must not leave focus on the page behind the dialog.
+			await browser.execute(() =>
+				(document.querySelector(".keepsidian-modal-action--sync-options") as HTMLElement).focus()
+			);
+			await browser.keys("Enter");
+			await browser.waitUntil(
+				async () => (await browser.$(".keepsidian-modal-action--sync-options").getAttribute("aria-expanded")) === "true"
+			);
+			expect(await browser.execute(() => !!document.activeElement?.closest(".modal"))).toBe(true);
+			await browser.keys(["Shift", "Tab"]);
+			expect(await browser.execute(() => !!document.activeElement?.closest(".modal"))).toBe(true);
+			await browser.keys("Tab");
+			expect(await browser.execute(() => !!document.activeElement?.closest(".modal"))).toBe(true);
+			await browser.executeObsidian(({ app }) => {
+				const p = app.plugins.getPlugin("keepsidian") as any;
+				p.__i18nResolveSupporter(true);
+				delete p.__i18nResolveSupporter;
+				p.progressModal.options.isSupporterActive = async () => true;
+			});
+			await browser.$(".keepsidian-sync-center-download-options").waitForExist();
 			// Real WebDriver click tests the emulated pointer; later actions test the keyboard.
 			await browser.$(".keepsidian-modal-action--primary").waitForClickable({ timeout: 10000 });
 			await browser.$(".keepsidian-modal-action--primary").click();
@@ -179,8 +202,27 @@ describe("Multilingual responsive and accessibility acceptance (synthetic servic
 				await browser.keys("Tab");
 				expect(await browser.execute(() => !!document.activeElement?.closest(".modal"))).toBe(true);
 			}
+			// Exercise both exact boundaries, rather than a reverse Tab from an arbitrary control.
+			await browser.execute(() => {
+				const controls = Array.from(
+					document.querySelectorAll<HTMLElement>(
+						".modal button, .modal input, .modal select, .modal textarea, .modal a[href], .modal [tabindex]"
+					)
+				).filter(
+					(element) =>
+						element.tabIndex >= 0 &&
+						!element.matches(":disabled") &&
+						element.getClientRects().length > 0 &&
+						getComputedStyle(element).visibility !== "hidden"
+				);
+				controls[0].setAttribute("data-i18n-boundary", "first");
+				controls[controls.length - 1].setAttribute("data-i18n-boundary", "last");
+				controls[0].focus();
+			});
 			await browser.keys(["Shift", "Tab"]);
-			expect(await browser.execute(() => !!document.activeElement?.closest(".modal"))).toBe(true);
+			expect(await browser.$('[data-i18n-boundary="last"]').isFocused()).toBe(true);
+			await browser.keys("Tab");
+			expect(await browser.$('[data-i18n-boundary="first"]').isFocused()).toBe(true);
 			const review = await audit(".keepsidian-modal");
 			assertLayout(review);
 			expect(review.controls.every((control) => control.label.trim())).toBe(true);
@@ -215,6 +257,14 @@ describe("Multilingual responsive and accessibility acceptance (synthetic servic
 			await expect(browser.$(".keepsidian-sync-plan-list")).toHaveText(
 				expect.stringContaining(tr.t("upload.missingAttachments", { count: 1 }))
 			);
+			if ((await browser.execute(() => innerWidth)) <= 720) {
+				const selectedPolicy = browser.$(".keepsidian-sync-plan-merge-value");
+				await expect(selectedPolicy).toBeDisplayed();
+				await expect(selectedPolicy).toHaveText(tr.t("merge.save"));
+				await browser.$('[data-keepsidian-role="merge-action"]').selectByAttribute("value", "merge-skip-conflicts");
+				await expect(selectedPolicy).toHaveText(tr.t("merge.skipConflicts"));
+				await browser.$('[data-keepsidian-role="merge-action"]').selectByAttribute("value", "merge-save-conflicts");
+			}
 			const uploadReview = await audit(".keepsidian-modal");
 			assertLayout(uploadReview);
 			await browser.saveScreenshot(resolve(evidenceDir, `${locale}-upload.png`));

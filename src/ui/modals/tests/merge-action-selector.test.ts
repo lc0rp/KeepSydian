@@ -36,6 +36,7 @@ it.each<readonly [SyncMode, SyncPlanStage]>([["import", "import"], ["push", "upl
 	const control = selector(modal)!;
 	expect(control).not.toBeNull();
 	expect(control.value).toBe("merge-save-conflicts");
+	expect(modal.contentEl.querySelector(".keepsidian-sync-plan-merge-value")?.textContent).toBe("Merge & save conflicts");
 	expect(Array.from(control.options).map((option) => option.text)).toEqual([
 		"Merge & save conflicts", "Merge & skip conflicts", "Merge & overwrite conflicts", "Overwrite all, no merge",
 	]);
@@ -58,6 +59,7 @@ it("retains selection through filtering and refresh", async () => {
 	const control = selector(modal)!;
 	control.value = "merge-skip-conflicts";
 	control.dispatchEvent(new Event("change"));
+	expect(modal.contentEl.querySelector(".keepsidian-sync-plan-merge-value")?.textContent).toBe("Merge & skip conflicts");
 	button(modal, "Notes").click();
 	await flush();
 	expect(selector(modal)?.value).toBe("merge-skip-conflicts");

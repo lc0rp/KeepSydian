@@ -56,6 +56,9 @@ checkbox selection/focus, forward/reverse focus containment, Escape/return focus
 semantics, translated safety warnings and horizontal overflow. The settings and sync center
 carry the effective language attribute; note titles/paths have unspecified language, not a guessed
 translation language. The settings opt-in description is associated with its switch.
+The checks include both exact Tab boundaries and focus during a delayed subscription check.
+At narrow widths, wrapping text repeats the full selected merge policy so its distinguishing
+save, skip or overwrite wording remains visible even when the native select truncates.
 
 The emulation harness warns about existing desktop-helper Node imports (`fs`, `os`, `path`,
 `crypto`, `child_process`). The spec records those notices and lets them expire before screenshots;

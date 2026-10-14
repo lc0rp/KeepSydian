@@ -94,6 +94,23 @@ describe("SyncProgressModal", () => {
 		return button as HTMLButtonElement;
 	}
 
+	it("keeps focus inside setup while a supporter check is pending without stealing later focus", async () => {
+		let resolveSupporter!: (value: boolean) => void;
+		modalOptions.isSupporterActive.mockReturnValue(new Promise<boolean>((resolve) => { resolveSupporter = resolve; }));
+		const modal = new SyncProgressModal(app, modalOptions);
+		document.body.appendChild(modal.containerEl);
+		try {
+			modal.onOpen(); await flushUI();
+			const customize = getButton(modal, "Customize sync");
+			customize.focus(); customize.click();
+			expect(document.activeElement).toBe(modal.contentEl.querySelector("h2"));
+			const openLog = getButton(modal, "Open sync log");
+			openLog.focus();
+			resolveSupporter(false); await flushUI();
+			expect(document.activeElement).toBe(openLog);
+		} finally { modal.onClose(); modal.containerEl.remove(); }
+	});
+
 	function findButton(modal: SyncProgressModal, label: string): HTMLButtonElement | null {
 		const buttons = Array.from(modal.contentEl.querySelectorAll("button"));
 		return (buttons.find((candidate) => (candidate.textContent?.replace(/\s+/g, " ").trim() ?? "") === label) ??

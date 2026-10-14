@@ -36,10 +36,21 @@ export function renderMergeActionSelector(
 		select.appendChild(element);
 	}
 	select.value = normalizeMergeAction(plan.mergeAction);
+	// Native selects truncate long choices on narrow screens. Repeat the full
+	// selected policy as wrapping text so save/skip/overwrite remain distinguishable.
+	const selectedValue = container.ownerDocument.createElement("span");
+	selectedValue.className = "keepsidian-sync-plan-merge-value";
+	selectedValue.setAttribute("aria-hidden", "true");
+	const updateSelectedValue = () => { selectedValue.textContent = select.selectedOptions[0]?.textContent ?? ""; };
+	updateSelectedValue();
 	select.addEventListener("change", () => {
-		if (!select.disabled) onChange(normalizeMergeAction(select.value));
+		if (!select.disabled) {
+			updateSelectedValue();
+			onChange(normalizeMergeAction(select.value));
+		}
 	});
 	label.appendChild(select);
+	label.appendChild(selectedValue);
 	container.appendChild(label);
 	return select;
 }
