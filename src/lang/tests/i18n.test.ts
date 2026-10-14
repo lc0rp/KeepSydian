@@ -29,6 +29,20 @@ describe("language catalog foundation", () => {
 		["zh-HK", "en"],
 		["zh-MO", "en"],
 		["zh-Hant-CN", "en"],
+		["zh-TW-x-hans", "en"],
+		["zh-TW-u-nu-hans", "en"],
+		["zh-HK-x-hans", "en"],
+		["zh-MO-x-hans", "en"],
+		["zh-Hans-CN-x-hant", "zh"],
+		["zh-Hans-CN-u-nu-hant", "zh"],
+		["zh-Hant-CN-x-hans", "en"],
+		["zh-CN-u-nu-latn", "zh"],
+		["zh-CN-u-co-pinyin", "zh"],
+		["zh-SG-u-co-pinyin", "zh"],
+		["zh-u-co-pinyin", "zh"],
+		["zh-x-hant", "zh"],
+		["zh-Latn-CN-x-hans", "en"],
+		["zh-AU-x-hans", "en"],
 		["ar", "en"],
 	])("resolves %p to %s", (input, expected) => {
 		expect(resolveLocale(input)).toBe(expected);
@@ -65,8 +79,8 @@ describe("language catalog foundation", () => {
 			const { t } = createTranslator("ru", { includeDrafts: true });
 			expect(t("settings.backup.description")).toBe(en["settings.backup.description"]);
 			// 21 is singular in Russian but plural in an untranslated English sentence.
-			expect(t("sync.attachmentWarnings", { count: 21 })).toBe("21 attachment warnings");
-			expect(t("sync.attachmentWarnings", { count: 1000 })).toBe("1,000 attachment warnings");
+			expect(t("sync.attachmentWarnings", { count: 21 })).toBe("21 warnings");
+			expect(t("sync.attachmentWarnings", { count: 1000 })).toBe("1,000 warnings");
 		} finally {
 			replacement.restore();
 		}
@@ -100,18 +114,34 @@ describe("language catalog foundation", () => {
 	});
 
 	it.each([
-		["zh", 0, "0 条附件警告"],
-		["zh", 1, "1 条附件警告"],
-		["de", 1, "1 Warnung zu Anhängen"],
-		["de", 2, "2 Warnungen zu Anhängen"],
-		["ru", 0, "0 предупреждений о вложениях"],
-		["ru", 1, "1 предупреждение о вложениях"],
-		["ru", 2, "2 предупреждения о вложениях"],
-		["ru", 5, "5 предупреждений о вложениях"],
-		["ru", 21, "21 предупреждение о вложениях"],
-		["ru", 1.5, "1,5 предупреждения о вложениях"],
-	])("pluralizes new attachment warnings in %s for %s", (locale, count, expected) => {
+		["en", 1, "1 warning"],
+		["en", 2, "2 warnings"],
+		["zh", 0, "0 条警告"],
+		["zh", 1, "1 条警告"],
+		["de", 1, "1 Warnung"],
+		["de", 2, "2 Warnungen"],
+		["ru", 0, "0 предупреждений"],
+		["ru", 1, "1 предупреждение"],
+		["ru", 2, "2 предупреждения"],
+		["ru", 5, "5 предупреждений"],
+		["ru", 21, "21 предупреждение"],
+		["ru", 1.5, "1,5 предупреждения"],
+	])("pluralizes combined attachment and AI warnings in %s for %s", (locale, count, expected) => {
 		expect(createTranslator(locale, { includeDrafts: true }).t("sync.attachmentWarnings", { count })).toBe(expected);
+	});
+
+	it.each(["toString", "constructor", "__proto__", "nope.key"])("rejects unknown key %s clearly", (key) => {
+		expect(() => createTranslator().t(key as MessageKey)).toThrow(`Unknown message key: ${key}`);
+	});
+
+	it("falls back to English rather than an inherited catalog entry", () => {
+		const messages = Object.create({ "commands.syncNow": "inherited text" }) as typeof languages.ru.messages;
+		const replacement = jest.replaceProperty(languages, "ru", { ...languages.ru, messages });
+		try {
+			expect(createTranslator("ru", { includeDrafts: true }).t("commands.syncNow")).toBe("Sync now");
+		} finally {
+			replacement.restore();
+		}
 	});
 
 	it("requires a numeric count and preserves visibly missing interpolation values", () => {
@@ -164,6 +194,27 @@ describe("catalog integrity", () => {
 		(text.match(/(?<!\{)\{(?:title|(?:now|note)\.[a-z*]+)\}(?!\})/g) ?? []).sort();
 	const protectedLiterals = (text: string): string[] =>
 		(text.match(/Google Keep|KeepSidian|Obsidian|GitHub|KIM|OAuth|2–3|Example@gmail\.com/g) ?? []).sort();
+
+	it("covers every cardinal plural category in each current catalog", () => {
+		for (const definition of Object.values(languages)) {
+			const categories = new Intl.PluralRules(definition.locale).resolvedOptions().pluralCategories;
+			for (const message of Object.values(definition.messages)) {
+				if (typeof message === "string") continue;
+				for (const category of categories) expect(message[category]?.trim()).toBeTruthy();
+			}
+		}
+	});
+
+	it("keeps two-way sync discoverable and consent explicit", () => {
+		expect(en["commands.twoWaySync"]).toMatch(/two-way sync/i);
+		expect(en["settings.optIn.name"]).toMatch(/opt in to two-way sync/i);
+	});
+
+	it("explains the ASCII comma required by the existing filter parser in Chinese", () => {
+		for (const key of ["supporter.include.description", "supporter.exclude.description"] as const) {
+			expect(languages.zh.messages[key]).toContain("英文逗号（,）");
+		}
+	});
 
 	it("preserves the original English file byte for byte", () => {
 		const bytes = readFileSync(join(__dirname, "../en.ts"));

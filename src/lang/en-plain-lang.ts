@@ -3,7 +3,7 @@ export const en = {
 	// src/app/commands.ts — labels only; command IDs must remain stable.
 	"commands.syncNow": "Sync now",
 	"commands.openSyncCenter": "Open sync center",
-	"commands.twoWaySync": "Sync in both directions",
+	"commands.twoWaySync": "Run two-way sync",
 	"commands.download": "Download notes from Google Keep",
 	"commands.upload": "Upload notes to Google Keep",
 	"commands.openSyncLog": "Open sync log file",
@@ -73,7 +73,7 @@ export const en = {
 	"settings.backup.name": "Back up your vault ⚠️",
 	"settings.backup.description":
 		"Two-way sync is experimental. Media uploads are not supported. To protect your data, KeepSidian tries to archive conflicting Google Keep notes. It downloads notes only to the save location set above. Remember to back up your vault.",
-	"settings.optIn.name": "Confirm you want to proceed",
+	"settings.optIn.name": "Opt in to two-way sync",
 	"settings.optIn.description": "I have read the information above and the backup guide. I want to proceed.",
 	// src/ui/settings/SubscriptionSettingsTab.ts — initial subset.
 	"supporter.heading": "Exclusive features for project supporters",
@@ -122,7 +122,8 @@ export const en = {
 	"sync.error.generic": "Could not complete the operation. Open the sync log for details.",
 	// src/app/sync-status.ts — plural messages replace English suffix assembly.
 	"sync.notes": { one: "{{count}} note", other: "{{count}} notes" },
-	"sync.attachmentWarnings": { one: "{{count}} attachment warning", other: "{{count}} attachment warnings" },
+	// Historical key: the persisted counter includes attachment and AI warnings.
+	"sync.attachmentWarnings": { one: "{{count}} warning", other: "{{count}} warnings" },
 	"sync.last.never": "Last sync: never",
 	"sync.last.canceled": "Last sync canceled",
 	"sync.last.failed": "Last sync failed",

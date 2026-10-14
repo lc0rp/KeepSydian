@@ -8,7 +8,7 @@ export const de = {
 	messages: {
 		"commands.syncNow": "Jetzt synchronisieren",
 		"commands.openSyncCenter": "Synchronisationszentrale öffnen",
-		"commands.twoWaySync": "In beide Richtungen synchronisieren",
+		"commands.twoWaySync": "Synchronisation in beide Richtungen starten",
 		"commands.download": "Notizen aus Google Keep herunterladen",
 		"commands.upload": "Notizen zu Google Keep hochladen",
 		"commands.openSyncLog": "Datei mit dem Synchronisationsprotokoll öffnen",
@@ -75,7 +75,7 @@ export const de = {
 		"settings.backup.name": "Sichere deinen Vault ⚠️",
 		"settings.backup.description":
 			"Die Synchronisation in beide Richtungen ist experimentell. Das Hochladen von Medien wird nicht unterstützt. Um deine Daten zu schützen, versucht KeepSidian, Notizen mit Konflikten in Google Keep zu archivieren. Notizen werden nur an den oben eingestellten Speicherort heruntergeladen. Denke daran, deinen Vault zu sichern.",
-		"settings.optIn.name": "Bestätige, dass du fortfahren möchtest",
+		"settings.optIn.name": "Der Synchronisation in beide Richtungen zustimmen",
 		"settings.optIn.description":
 			"Ich habe die Informationen oben und die Sicherungsanleitung gelesen. Ich möchte fortfahren.",
 		"supporter.heading": "Exklusive Funktionen für Projektunterstützer",
@@ -128,8 +128,8 @@ export const de = {
 			other: "{{count}} Notizen",
 		},
 		"sync.attachmentWarnings": {
-			one: "{{count}} Warnung zu Anhängen",
-			other: "{{count}} Warnungen zu Anhängen",
+			one: "{{count}} Warnung",
+			other: "{{count}} Warnungen",
 		},
 		"sync.last.never": "Letzte Synchronisation: noch nie",
 		"sync.last.canceled": "Letzte Synchronisation abgebrochen",

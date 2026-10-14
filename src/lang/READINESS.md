@@ -2,6 +2,9 @@
 
 Assessed 2026-10-12 against plugin revision `2ddb2f363bb3affa7389e3760ea77db91327a4a3`
 (2.1.0-beta.7). This is a planning/catalog foundation, not a localized release.
+Reconciled on 2026-10-14 onto upstream `3822c99c0678f100eb8cae3b302074842bad0646`
+(2.1.0-beta.8b). Research and mechanical scan counts below retain their original observation date;
+the later source reconciliation and fixes are recorded in [the review](PLAIN_LANGUAGE_REVIEW.md).
 
 ## Recommendation
 
@@ -63,7 +66,7 @@ counts or a completeness measure. Dynamic builders, accessibility labels and thr
 | Onboarding/auth/help | Token settings, `TokenHelperInstallModal.ts`, `integrations/google/tokenHelper.ts`, `FeedbackSurveyModal.ts` | Translate disclosure, validation, progress and accessibility text. Helper executable, Google sign-in, external docs and Google feedback form are separate surfaces. |
 | Locale detection | No existing detector. Minimum app version is 1.6.5; installed/public API documents `getLanguage()` since 1.8.7 | Feature-detect at plugin startup, then inject translator. Reopen/reload after app-language change initially; decide an older-app override separately. |
 | Plural/interpolation | English `count === 1`/`"s"` construction and string concatenation | Replace with whole messages and CLDR categories. New helper tests Russian one/few/many/other, Chinese other, English/German one/other. |
-| Formatting | Three `toLocaleString()` calls without an explicit app locale; ASCII numeric settings; custom date parser requires `YYYY-MM-DD HH:MM` | Pass effective UI locale for display. Keep parser format explicit until a separate input redesign. Do not parse localized display strings as machine dates/numbers. |
+| Formatting | Three `toLocaleString()` calls without an explicit app locale; ASCII numeric settings; custom date parser requires `YYYY-MM-DD HH:MM` | Decide regional formatting separately from catalog language (`en-GB` currently resolves to `en`). Preserve user date preferences. Keep parser format explicit; never parse display strings as machine dates/numbers. |
 | Layout/RTL | Physical left/right spacing in `styles.css`; no plugin-level bidi review | Use logical CSS, text expansion tests, mixed-direction path/title isolation, long-label wrapping and keyboard/screen-reader checks. No RTL support claim yet. |
 | Persistence/sync | Filename patterns, fallback title, conflict suffixes, frontmatter and journal structures participate in identity | Keep these locale-invariant. Translation is UI-only; no note-content translation or data migration. |
 
@@ -74,7 +77,7 @@ API source: [Obsidian public declarations](https://raw.githubusercontent.com/obs
 
 - `en-plain-lang.ts`: 138 source entries from commands, core settings, supporter settings, sync UI,
   notices, errors, token onboarding and feedback. All entries received a plain-language review:
-  57 revised and 81 retained. Comments trace groups to original files. It is still an initial subset.
+  58 revised and 80 retained. Comments trace groups to original files. It is still an initial subset.
 - `en.ts`: the original extraction preserved byte for byte under the local plain-lang skill's copy
   contract. It is no longer the canonical source; see [review details](PLAIN_LANGUAGE_REVIEW.md).
 - `zh.ts`, `ru.ts`, `de.ts`: 138 draft entries each, derived from revised English. Each has 137
@@ -128,9 +131,10 @@ warnings, placeholders and filename examples while simplifying the English wordi
    locales only after bidi/layout review. Revisit survey evidence and contributor demand for the next wave.
 
 English fallback is a safety net, not the acceptance criterion for a supposedly complete translation.
-Approval to merge/release, and coordination with the desktop acceptance owner, remain future steps.
+The authorized groundwork PR must pass independent review and CI before merge. Runtime activation,
+release and desktop acceptance remain separate steps; no localized UI is claimed by this PR.
 
-## Validation and working boundaries
+## Original validation and working boundaries — 2026-10-12
 
 - `npm run build`: passed TypeScript, ESLint and bundle checks. Two existing warnings remain:
   `features/keep/deletions.ts:142` uses `Vault.trash`; `features/keep/sync.ts:275` has an unused helper.
@@ -150,6 +154,12 @@ Approval to merge/release, and coordination with the desktop acceptance owner, r
   vault/UI automation skills were not applicable to this isolated catalog task.
 - Work is isolated on `codex/multilingual-foundation` in a separate local clone. No push, merge, PR,
   release, plugin install, vault/UI access, raw session reads or private-code upload was performed.
+
+The bullets above describe the original local checkpoint. On 2026-10-14 the user authorized a bounded
+Claude Code review and a normal PR/merge after both independent reviews and CI pass. See the review
+document and PR for the later validation record. Plugin installation, vault access, runtime activation
+and release are outside this groundwork change. Before activation, verify `Intl.PluralRules` support
+on the oldest supported mobile WebView and add a fallback or an explicit minimum runtime if needed.
 
 Next concrete step: arrange native review while a follow-up change wires one complete English UI
 slice after the current release is finished. Language priorities remain evidence-based candidates,

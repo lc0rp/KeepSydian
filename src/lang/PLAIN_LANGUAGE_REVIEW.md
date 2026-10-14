@@ -1,7 +1,8 @@
 # Plain-language and translation review
 
-Reviewed 2026-10-12. Scope: all 138 entries in the English catalog, followed by Simplified Chinese,
-Russian and German drafts of the revised source. This remains a dormant foundation.
+Reviewed 2026-10-12; reconciled with current production source and adversarial review on 2026-10-14.
+Scope: all 138 entries in the English catalog, followed by Simplified Chinese, Russian and German
+drafts of the revised source. This remains a dormant foundation.
 
 ## Method and preserved source
 
@@ -23,14 +24,16 @@ bd5639436acbd71f511958f56387176772ac96c588860a59bb54974e47889c58
 ```
 
 The original remains an archive. The catalog registry and message types import the revised copy.
-All 138 keys were reviewed: **57 entries changed; 81 retained**. No key, placeholder name, English
+All 138 keys were reviewed: **58 entries changed; 80 retained**. No key, placeholder name, English
 plural category or single-brace filename token changed.
 
 ## Main wording changes
 
 | Before | Revised wording | Purpose |
 | --- | --- | --- |
-| Perform two-way sync | Sync in both directions | State the action directly. |
+| Perform two-way sync | Run two-way sync | State the action and retain the command-palette search term. |
+| Confirm opt in | Opt in to two-way sync | Identify the action that requires consent. |
+| Attachment warning(s) | Warning(s) | Match the counter, which includes attachment and AI warnings. |
 | Location preview:- your notes will be saved here: | Your notes will be saved here: | Remove the redundant label and punctuation. |
 | OAuth flow | Google sign-in (OAuth) | Explain the setting while retaining the technical term. |
 | Change the default sync interval. | Change the default time between syncs. | Use familiar wording; the setting label still specifies hours. |
@@ -82,14 +85,16 @@ marked translated. Chinese uses `other`, German `one`/`other`, and Russian
 
 Every non-English catalog remains `draft` and requires explicit test-preview opt-in. There are
 **zero native-approved entries**. Full coverage of this subset does not mean the plugin is fully
-localized. No translator service, API spend or private-code upload was used. No note content,
-filenames, persistence fields or live UI were changed.
+localized. The initial draft pass used no translation service or paid API. A subsequent, explicitly
+authorized Claude Code review shared this bounded feature and necessary source context through the
+existing Claude app. AI review is not native approval. No note content, filenames, persistence fields
+or live UI were changed.
 
 Before activation, native reviewers should check naturalness, terminology and every warning against
 the English source in rendered desktop/mobile context. Also verify wrapping, accessibility, mixed
 scripts and the remaining uncatalogued surfaces. Automated checks cannot establish those outcomes.
 
-## Verification
+## Original verification — 2026-10-12
 
 - Focused catalog tests: 56 passed. Checks include original-file SHA-256, stable keys and shapes,
   placeholder/token multiplicity, protected names/numbers/examples, complete draft coverage,
@@ -102,3 +107,22 @@ scripts and the remaining uncatalogued surfaces. Automated checks cannot establi
 - Built `main.js` is byte-identical to the earlier dormant-foundation checkpoint (SHA-256
   `ded0c5a6373d597fc745f324e56d958f11f648ce7d83ff5501d9147e41d65f6a`). No production imports were added.
 - Native-speaker review and rendered UI acceptance: outstanding; drafts remain disabled.
+
+## Review reconciliation — 2026-10-14
+
+Reconciled onto upstream `3822c99c0678f100eb8cae3b302074842bad0646` (2.1.0-beta.8b).
+The earlier suite counts and bundle hash above describe the historical checkpoint, not this base.
+Independent Codex and actual Claude Code review of candidate `25f2e55` led to these corrections:
+
+- Parse actual Chinese script/region subtags; extension/private-use text cannot select a script.
+- Keep the historical warning key but use generic warning text in all four catalogs, because the
+  persisted counter also includes AI warnings. Keep the original `en.ts` archive unchanged.
+- Restore the two-way command term and explicit opt-in label, then reconcile all three drafts.
+- Specify an English comma in Chinese filter instructions to match the ASCII-only parser.
+- Reject unknown message keys clearly and ignore inherited catalog properties.
+- Test all required cardinal plural categories, warning forms, locale extensions and key failures.
+
+Focused regression tests pass: 80 tests. The initial reconciled candidate passed 65 suites / 1,237
+tests, build/type/lint checks and 129 Python contract tests (7 skipped). Final candidate validation
+and independent review results are recorded with the pull request. Remaining regional-formatting,
+old WebView `Intl.PluralRules`, rendered UI and native-review limits remain pre-activation work.

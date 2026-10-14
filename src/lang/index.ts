@@ -24,11 +24,14 @@ export function resolveLocale(appLanguage: unknown): Locale {
 	const [base] = tag.split("-");
 	if (base === "zh") {
 		// Obsidian uses zh for Simplified Chinese. Never map Traditional to Simplified.
+		// Script and region occur before variants/extensions/private-use subtags.
+		// A later "hans" or "hant" is data, not a script (for example zh-TW-x-hans).
 		const parts = tag.split("-");
-		if (parts.includes("hant")) return "en";
-		if (parts.includes("hans")) return "zh";
-		if (tag === "zh" || tag === "zh-cn" || tag === "zh-sg") return "zh";
-		return "en";
+		const script = /^[a-z]{4}$/.test(parts[1] ?? "") ? parts[1] : undefined;
+		const regionCandidate = parts[script ? 2 : 1];
+		const region = /^(?:[a-z]{2}|\d{3})$/.test(regionCandidate ?? "") ? regionCandidate : undefined;
+		if (script) return script === "hans" ? "zh" : "en";
+		return !region || region === "cn" || region === "sg" ? "zh" : "en";
 	}
 	return base === "de" || base === "ru" ? base : "en";
 }
@@ -57,7 +60,10 @@ export function createTranslator(appLanguage?: unknown, options: { includeDrafts
 	const catalog = languages[locale].messages;
 
 	const t = (key: MessageKey, parameters: MessageParameters = {}): string => {
-		const translated = catalog[key];
+		if (!Object.prototype.hasOwnProperty.call(en, key)) {
+			throw new TypeError(`Unknown message key: ${key}`);
+		}
+		const translated = Object.prototype.hasOwnProperty.call(catalog, key) ? catalog[key] : undefined;
 		const useTranslation = hasText(translated);
 		const message: Message = useTranslation ? translated : en[key];
 		// A fallback sentence must also use English grammar and number formatting.

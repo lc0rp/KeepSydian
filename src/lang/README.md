@@ -5,9 +5,9 @@ no production module imports this folder. See [readiness and rollout plan](READI
 
 ## Files and status
 
-| File | Purpose | Status on 2026-10-12 |
+| File | Purpose | Status on 2026-10-14 |
 | --- | --- | --- |
-| [en-plain-lang.ts](en-plain-lang.ts) | Canonical English source after plain-language review | All 138 entries reviewed; 57 revised, 81 retained |
+| [en-plain-lang.ts](en-plain-lang.ts) | Canonical English source after plain-language review | All 138 entries reviewed; 58 revised, 80 retained |
 | [en.ts](en.ts) | Preserved original English extraction, including its original header | 138 entries; unchanged archive, not the active source |
 | [zh.ts](zh.ts) | Simplified Chinese (`zh`, matching Obsidian) | 138 AI-authored draft entries |
 | [ru.ts](ru.ts) | Russian | 138 AI-authored draft entries |
@@ -64,11 +64,14 @@ t("errors.filePath", { path: "Keep/中文.md" });
 Omitting `includeDrafts` returns English for every current draft locale. A missing translation falls
 back per key, including English plural rules and numeric formatting. Missing interpolation arguments
 remain visibly `{{name}}`; plural messages require a finite numeric `count` and throw on programmer
-misuse. Keys and string/plural shapes are typed; argument names are not yet inferred by TypeScript.
+misuse. Unknown keys throw a clear `Unknown message key` error; inherited catalog properties are
+ignored. Keys and string/plural shapes are typed; argument names are not yet inferred by TypeScript.
 
 `resolveLocale` accepts the Obsidian app language. It normalizes case/underscores and regional German
 and Russian tags. `zh`, `zh-CN`, `zh-SG`, and explicit `zh-Hans` use Simplified Chinese. Traditional
 Chinese (`zh-TW`, `zh-HK`, `zh-MO`, `zh-Hant`) falls back to English until its own catalog exists.
+Only the actual script/region subtags select a Chinese catalog: Unicode extensions and private-use
+text do not. For example, `zh-TW-x-hans` stays English and `zh-CN-u-nu-latn` selects Simplified Chinese.
 Unknown, absent or invalid locales fall back to English. These rules do not inspect note contents.
 
 `readAppLocale` accepts an optional reader so integration can feature-detect Obsidian's `getLanguage`
@@ -79,6 +82,8 @@ Decide separately whether older Obsidian needs a plugin-specific language overri
 `formatNumber` and `formatDateTime` format display values only. Pass valid values and an explicit time
 zone where required; date formatting throws on an invalid date. Existing machine dates, ISO receipts,
 local-time filename tokens and date input parsing are outside this helper.
+Regional formatting is not preserved by the catalog resolver (`en-GB` becomes `en`). Decide how to
+retain regional display preferences before replacing existing system-locale date formatting.
 
 ## Verification
 
