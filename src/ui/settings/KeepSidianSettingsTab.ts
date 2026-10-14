@@ -58,6 +58,7 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 		const focusedRole = this.containerEl.contains(document.activeElement)
 			? document.activeElement?.closest("[data-keepsidian-role]")?.getAttribute("data-keepsidian-role") : null;
 		this.containerEl.empty();
+		this.containerEl.classList.add("keepsidian-settings-tab");
 		// Each async render owns a child. A superseded render can only finish in its detached child.
 		const containerEl = this.containerEl.createDiv();
 		containerEl.classList.add("keepsidian-localized-settings");

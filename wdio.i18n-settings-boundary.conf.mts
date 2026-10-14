@@ -1,6 +1,6 @@
 import { config as desktop } from "./wdio.i18n.conf.mts";
 
-const widths = process.env.KEEPSIDIAN_I18N_WIDTH ? [Number(process.env.KEEPSIDIAN_I18N_WIDTH)] : [320, 430];
+const widths = process.env.KEEPSIDIAN_I18N_WIDTH ? [Number(process.env.KEEPSIDIAN_I18N_WIDTH)] : [320, 430, 768];
 if (process.env.KEEPSIDIAN_I18N_MOBILE === "1")
 	throw new Error("The settings host boundary comparison requires desktop mode.");
 

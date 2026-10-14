@@ -3,8 +3,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { focusVaultWindow, routeAppCommandsToVault } from "../helpers/vault-window";
 
-describe("Narrow desktop settings host boundary (synthetic vault)", () => {
-	it("compares host settings without the plugin against localized settings", async () => {
+describe("Narrow desktop settings reflow (synthetic vault)", () => {
+	it("fits localized settings while preserving host tabs and navigation", async () => {
 		routeAppCommandsToVault();
 		await focusVaultWindow();
 		const width = await browser.execute(() => innerWidth);
@@ -100,8 +100,8 @@ describe("Narrow desktop settings host boundary (synthetic vault)", () => {
 			const box = result.elements[".vertical-tab-content"][0];
 			return box.clientWidth - Number.parseFloat(box.paddingLeft) - Number.parseFloat(box.paddingRight);
 		};
-		// Record the host allocation separately from plugin-internal overflow. This
-		// comparison never changes the host navigation, content padding or styles.
+		// Record the host baseline separately from the plugin's scoped padding fix.
+		// The test does not inject layout styles or change host navigation.
 		expect(contentBoxWidth(editor)).toBeCloseTo(contentBoxWidth(general), 0);
 		if (width === 320) {
 			expect(contentBoxWidth(general)).toBeLessThan(44); // narrower than the host's own switch
@@ -125,7 +125,11 @@ describe("Narrow desktop settings host boundary (synthetic vault)", () => {
 			);
 			const plugin = await measure(`plugin-${locale}-host-layout`);
 			expect(plugin.pluginStylesPresent).toBe(true);
-			expect(contentBoxWidth(plugin)).toBeCloseTo(contentBoxWidth(general), 0);
+			const pluginContent = plugin.elements[".vertical-tab-content"][0];
+			const baselineContent = general.elements[".vertical-tab-content"][0];
+			expect(pluginContent.width).toBeCloseTo(baselineContent.width, 0);
+			expect(pluginContent.paddingLeft).toBe(width <= 520 ? "8px" : baselineContent.paddingLeft);
+			expect(pluginContent.paddingRight).toBe(width <= 520 ? "8px" : baselineContent.paddingRight);
 			expect(plugin.elements[".vertical-tab-header"][0].width).toBeCloseTo(
 				general.elements[".vertical-tab-header"][0].width,
 				0
@@ -133,30 +137,18 @@ describe("Narrow desktop settings host boundary (synthetic vault)", () => {
 			const root = plugin.elements[".keepsidian-localized-settings"][0];
 			expect(root.lang).toBe(locale);
 			expect(await browser.$('[data-keepsidian-role="language"]').getValue()).toBe(locale);
-			expect(root.width).toBeCloseTo(contentBoxWidth(general), 0);
-			if (width === 320) expect(root.scrollWidth - root.clientWidth).toBeGreaterThan(2);
+			expect(root.width).toBeCloseTo(contentBoxWidth(plugin), 0);
+			expect(root.scrollWidth - root.clientWidth).toBeLessThanOrEqual(2);
+			expect(pluginContent.scrollWidth - pluginContent.clientWidth).toBeLessThanOrEqual(2);
+			if (width === 320) expect(root.width).toBeGreaterThanOrEqual(90);
 
-			// Diagnostic intervention only: allocate this same plugin subtree 280px,
-			// bypassing its host allocation without changing its contents or stylesheet.
-			// A pass here is component reflow evidence, not a fix of the host settings UI.
-			await browser.execute(() => {
-				const root = document.querySelector<HTMLElement>(".keepsidian-localized-settings")!;
-				Object.assign(root.style, {
-					position: "fixed",
-					left: "20px",
-					top: "80px",
-					width: "280px",
-					height: "740px",
-					overflow: "auto",
-					backgroundColor: "var(--background-primary)",
-					zIndex: "1",
-				});
-			});
-			const allotted = await measure(`plugin-${locale}-controlled-280px-allocation`);
-			const allottedRoot = allotted.elements[".keepsidian-localized-settings"][0];
-			expect(allottedRoot.width).toBe(280);
-			expect(allottedRoot.scrollWidth - allottedRoot.clientWidth).toBeLessThanOrEqual(2);
-			await browser.execute(() => document.querySelector(".keepsidian-localized-settings")!.removeAttribute("style"));
+			// Switching away must not carry the plugin's padding rule into a core tab.
+			await browser.$(".vertical-tab-nav-item=General").click();
+			const after = await measure(`host-general-after-${locale}`);
+			expect(after.activeTab).toBe("General");
+			expect(after.elements[".vertical-tab-content"][0].className).not.toContain("keepsidian-settings-tab");
+			expect(after.elements[".vertical-tab-content"][0]).toEqual(baselineContent);
+			expect(after.elements[".vertical-tab-header"][0]).toEqual(general.elements[".vertical-tab-header"][0]);
 		}
 		expect(await browser.execute(() => document.body.classList.contains("is-mobile"))).toBe(false);
 	});

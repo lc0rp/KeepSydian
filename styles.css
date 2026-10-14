@@ -1207,6 +1207,7 @@ If your plugin does not need CSS, delete this file.
 
 	.keepsidian-sync-stepper {
 		gap: 8px;
+		grid-template-columns: auto minmax(24px, 1fr) auto minmax(24px, 1fr) auto;
 	}
 
 	.keepsidian-modal-header-meta {
@@ -1503,6 +1504,9 @@ If your plugin does not need CSS, delete this file.
 	overflow-wrap: anywhere;
 }
 @media (max-width: 520px) {
+	body:not(.is-mobile) .keepsidian-settings-tab {
+		padding-inline: 8px;
+	}
 	.keepsidian-localized-settings .setting-item {
 		flex-wrap: wrap;
 	}

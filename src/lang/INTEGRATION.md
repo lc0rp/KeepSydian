@@ -46,7 +46,7 @@ Screenshots are saved under ignored `output/i18n`.
 
 Additional responsive and keyboard acceptance uses `wdio.i18n-acceptance.conf.mts`. Run it with
 the same cache and Node 24 environment. The default desktop matrix uses CSS viewport widths
-430, 768 and 1100. Set `KEEPSIDIAN_I18N_MOBILE=1` for Obsidian's Electron mobile emulation at
+320, 430, 768 and 1100. Set `KEEPSIDIAN_I18N_MOBILE=1` for Obsidian's Electron mobile emulation at
 320, 390 and 768 pixels, including emulated touch metrics. These are not Capacitor/native devices.
 `KEEPSIDIAN_I18N_WIDTH` selects one diagnostic width. Each width uses a fresh synthetic vault.
 
@@ -76,12 +76,10 @@ it does not suppress them or claim that Electron proves native platform compatib
   no 1.6.5 runtime or matching driver was installed or downloaded.
 - Detailed folder-verification diagnostics, unknown server/helper messages, generated sync logs, and external sign-in,
   billing, documentation and Google pages can remain English. The separate helper app is not translated.
-- At a 320px desktop viewport, Obsidian's settings navigation leaves only a 10px plugin content
-  column. The diagnostic still fails reflow (51px overflow in all four locales). A comparison with
-  KeepSydian disabled reproduces the allocation and overflow in Obsidian's General and Editor tabs;
-  all four plugin locales fit a controlled 280px allocation without a product change.
-  See [the host boundary and regression procedure](SETTINGS_REFLOW.md). This remains open;
-  the passing desktop matrix starts at 430px, where text fits but the settings column is cramped.
+- At a 320px desktop viewport, KeepSydian reduces padding on its own settings container to recover
+  a 90px content column from the host's original 10px allocation. Text fits, but the column remains
+  cramped. The host navigation and other settings tabs keep their original layout. A separate
+  regression checks this isolation at 320, 430 and 768px. See [the repair and regression procedure](SETTINGS_REFLOW.md).
 - Full RTL chrome, native screen-reader testing, theme/contrast certification and a complete audit
   of older settings controls and other dialogs remain future work. Automated accessibility acceptance
   covers the language controls and synthetic sync review paths above, not WCAG compliance.
