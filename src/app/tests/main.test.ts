@@ -173,7 +173,7 @@ describe("KeepSidianPlugin", () => {
 			const tooltipCalls = (statusEl.setAttribute as jest.Mock).mock.calls
 				.filter(([attr]) => attr === "title")
 				.map(([, value]) => value);
-			expect(tooltipCalls).toContain("KeepSidian download...");
+			expect(tooltipCalls).toContain("Syncing");
 			expect(tooltipCalls.some((value: string) => value.includes("Sync complete."))).toBe(true);
 			expect(plugin.statusTextEl?.textContent).toContain("Last synced");
 			isSubscriptionActiveSpy.mockRestore();

@@ -1041,7 +1041,7 @@ describe("SyncProgressModal", () => {
 		await flushUI();
 
 		expect(modal.contentEl.textContent).toContain("Sync center");
-		expect(modal.contentEl.textContent).toContain("Download: 3/10");
+		expect(modal.contentEl.textContent).toContain("Download step 3 / 10");
 
 		(modal as unknown as { isSyncing: boolean }).isSyncing = false;
 		const summary: LastSyncSummary = {

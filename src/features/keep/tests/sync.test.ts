@@ -333,7 +333,7 @@ describe("Google Keep Import Functions", () => {
 			(handleDuplicateNotes as jest.Mock).mockResolvedValue("create");
 			await syncModule.importSelectedGoogleKeepNotes(mockPlugin, [note], { onEnrichmentWarning });
 			expect(onEnrichmentWarning).toHaveBeenCalledTimes(1);
-			expect(Notice).toHaveBeenCalledWith(expect.stringContaining("AI suggestions unavailable for 1 notes"), 10_000);
+			expect(Notice).toHaveBeenCalledWith(expect.stringContaining("AI suggestions unavailable for 1 note."), 10_000);
 			expect(Notice).not.toHaveBeenCalledWith("Imported notes from Google Keep.");
 			expect(loggingModule.logSync).toHaveBeenCalledWith(mockPlugin, expect.stringContaining("AI suggestions unavailable"));
 		});
@@ -380,7 +380,7 @@ describe("Google Keep Import Functions", () => {
 			jest.spyOn(loggingModule, "logSync").mockResolvedValue(undefined);
 			const built = await buildImportSyncPlan(mockPlugin);
 			expect(built.plan.entries[0].meta?.detail).toContain("AI suggestions failed");
-			expect(Notice).toHaveBeenCalledWith(expect.stringContaining("AI suggestions failed for 1 notes"), 10_000);
+			expect(Notice).toHaveBeenCalledWith(expect.stringContaining("AI suggestions failed for 1 note."), 10_000);
 		});
 
 		it("serializes vault-wide restrictions including an empty permitted set", () => {
