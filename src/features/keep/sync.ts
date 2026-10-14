@@ -8,14 +8,15 @@ import {
 	getSuggestedTagUpdate,
 } from "./domain/note";
 import { handleDuplicateNotes } from "./domain/compare";
-import { captureLocalMedia, localStateBaseline, stampLocalBaseline, storedLocalBaseline, type MediaBaseline } from "./domain/local-state";
+import { captureLocalMedia, isLocalStateUnchanged, stampLocalBaseline, storedLocalBaseline, type MediaBaseline } from "./domain/local-state";
 import { hasPendingUpload, remoteBaseline, resolveDownloadMerge, withSyncState, withRemoteRevision } from "./domain/sync-state";
 import { getArchivedNoteUpdate, getDownloadFrontmatter, isArchivedDownload } from "./domain/archive";
 import type { KeepArchivedStatus } from "../../types/subscription";
 // Import via legacy google path so tests can spy on this module
 import { processAttachments, type AttachmentFailure } from "../keep/io/attachments";
 import type { NoteImportOptions } from "@ui/modals/NoteImportOptionsModal";
-import { CONFLICT_FILE_SUFFIX } from "./constants";
+import { reserveConflictPath } from "./io/conflict-path";
+import { assertRelativePath, equivalentPath, withPathLock } from "@services/portable-path";
 import { buildFrontmatterWithSyncDate, wrapMarkdown } from "./frontmatter";
 import { ensurePascalCaseFrontmatter } from "./migrations/fixFrontmatterCasing";
 import {
@@ -40,6 +41,7 @@ import { findExistingKeepNotePath } from "./domain/noteLookup";
 import {
 	buildExistingKeepNoteIndex,
 	updateExistingKeepNoteIndex,
+	assertKeepNoteIdentity,
 	type ExistingKeepNoteIndex,
 } from "./domain/noteLookup";
 import { appendPerfTrace } from "@app/perf-trace";
@@ -50,6 +52,9 @@ import { resolveDownloadDateWindow } from "./download-date-window";
 import { KEEPSIDIAN_SERVER_URL } from "../../config";
 import { getDeletionLedger } from "./local-deletions/ledger";
 import { assertDownloadIdentityPresentOrUntracked } from "./local-deletions/download";
+import { enrichImportNotes, fetchFirstFlags } from "./enrichment/reuse";
+import { getEnrichmentLedger } from "./enrichment/ledger";
+import type { LegacyTagConsent } from "./enrichment/consent";
 
 const LAST_SUCCESSFUL_SYNC_DATE_KEY = "KeepSidianLastSuccessfulSyncDate";
 const NOTE_LOG_BATCH_KEY = "sync:notes";
@@ -61,6 +66,7 @@ interface Preparation {
 	lastActive: number;
 	operationId?: string;
 	featureFlags?: PremiumFeatureFlags;
+	legacyTagConsent?: LegacyTagConsent;
 	originalAttemptId?: string;
 	notes: PreNormalizedNote[];
 	offset: number;
@@ -106,6 +112,7 @@ const SAVE_PLAN_ACTIONS: Record<NoteSaveAction, SyncPlanAction> = {
 
 interface NoteSaveMetrics {
 	action: NoteSaveAction;
+	notePath?: string;
 	totalDurationMs: number;
 	resolveExistingPathDurationMs: number;
 	existsCheckDurationMs: number;
@@ -250,8 +257,10 @@ export interface SyncCallbacks {
 	setTotalNotes?: (total: number) => void;
 	reportProgress?: () => void;
 	reportPlanProgress?: (processed: number, total?: number) => void;
+	onEntrySaved?: (entryId: string, path: string) => void;
 	onEntrySettled?: (entryId: string, success: boolean, outcome?: SyncPlanAction) => void;
 	onAttachmentWarning?: (warning: SyncAttachmentWarning) => void;
+	onEnrichmentWarning?: () => void;
 }
 
 export interface SyncAttachmentWarning extends AttachmentFailure {
@@ -538,6 +547,12 @@ function buildImportPlanEntry(
 		if (note.processing_warnings?.length) {
 			detail = `${detail ? `${detail} ` : ""}AI suggestions failed; original content retained.`;
 		}
+		if (note.enrichment_pending && duplicateAction === "skip") {
+			action = "overwrite"; label = "Update suggestions"; selectable = true;
+			detail = "Applies available suggestions while preserving your manual edits.";
+		}
+		if (note.enrichment_pending) detail = `${detail ? `${detail} ` : ""}New AI suggestions are requested only for selected notes.`;
+		if (note.enrichment_legacy_held) detail = `${detail ? `${detail} ` : ""}Previously imported titles and tags are kept. New AI tags require the choice in Customize sync.`;
 
 		return {
 			id: `import:${index}:${normalizePathSafe(noteFilePath)}`,
@@ -608,7 +623,8 @@ async function buildImportSyncPlanBase(
 		preparation &&
 		(preparation.identity !== identity ||
 			Date.now() - preparation.lastActive >= 14 * 60_000 ||
-			Date.now() - preparation.created >= 2 * 60 * 60_000)
+			Date.now() - preparation.created >= 2 * 60 * 60_000 ||
+			preparation.legacyTagConsent !== options?.legacyTagConsent)
 	) {
 		preparations.delete(plugin);
 		preparation = undefined;
@@ -625,6 +641,7 @@ async function buildImportSyncPlanBase(
 		preparation = {
 			identity,
 			featureFlags: requestedFeatureFlags,
+			legacyTagConsent: options?.legacyTagConsent,
 			created: Date.now(),
 			lastActive: Date.now(),
 			operationId: epoch ? `${epoch}:${Date.now()}:${Math.random().toString(36).slice(2)}` : undefined,
@@ -654,7 +671,7 @@ async function buildImportSyncPlanBase(
 					apiFetchNotesWithPremium(
 						email,
 						token,
-						featureFlags,
+						fetchFirstFlags(featureFlags),
 						offset,
 						limit,
 						filters,
@@ -697,6 +714,9 @@ async function buildImportSyncPlanBase(
 			preparations.delete(plugin);
 	}
 	await callbacks?.attempt?.transition("plan");
+	if (featureFlags) fetched.notes = await enrichImportNotes(plugin,
+		fetched.notes.map((note) => ({ ...note, enrichment_legacy_consent: preparation.legacyTagConsent })),
+		featureFlags, undefined, undefined, false);
 	const existingKeepNoteIndex = await buildExistingKeepNoteIndex(plugin.app, plugin.settings.saveLocation);
 	const entries = await Promise.all(
 		fetched.notes.map((note, index) =>
@@ -743,13 +763,21 @@ export async function importSelectedGoogleKeepNotes(
 	completionDate?: string,
 	noteEntryIds?: string[]
 ): Promise<number> {
+	const requested = notes.find((note) => note.enrichment_requested)?.enrichment_requested;
+	if (requested) notes = await enrichImportNotes(plugin, notes, requested);
+	const enrichmentWarnings = notes.filter((note) => note.processing_warnings?.length).length;
+	for (let index = 0; index < enrichmentWarnings; index++) callbacks?.onEnrichmentWarning?.();
+	if (enrichmentWarnings)
+		await logSync(plugin, `AI suggestions unavailable for ${enrichmentWarnings} notes; available content retained. Review these notes before requesting AI again.`);
 	await processAndSaveNotes(plugin, notes, callbacks, noteEntryIds);
 	throwIfSyncCancelled(plugin);
 	if (completionDate) {
 		if (callbacks?.deferCheckpoint) callbacks.deferCheckpoint(completionDate);
 		else persistLastSuccessfulSyncDate(plugin, completionDate);
 	}
-	new Notice("Imported Google Keep notes.");
+	if (enrichmentWarnings)
+		new Notice(`Imported Google Keep notes. AI suggestions unavailable for ${enrichmentWarnings} notes. Review these notes before requesting AI again.`, 10_000);
+	else new Notice("Imported Google Keep notes.");
 	return notes.length;
 }
 
@@ -811,8 +839,11 @@ export async function importGoogleKeepNotesWithOptions(
 	const supporterKey = plugin.settings.supporterKeyConfigured ? (plugin.settings.supporterKey ?? "") : undefined;
 	return await importGoogleKeepNotesBase(
 		plugin,
-		(offset, limit, filters, cursor) =>
-			apiFetchNotesWithPremium(email, token, featureFlags, offset, limit, filters, cursor, supporterKey),
+		async (offset, limit, filters, cursor) => {
+			const response = await apiFetchNotesWithPremium(email, token, fetchFirstFlags(featureFlags), offset, limit, filters, cursor, supporterKey);
+			return { ...response, notes: response.notes.map((note) => ({ ...note, enrichment_requested: featureFlags,
+				enrichment_legacy_consent: options.legacyTagConsent })) };
+		},
 		{ ...callbacks, archivedStatus: options.archivedStatus ?? "active-only" },
 		downloadScope,
 		false
@@ -880,11 +911,7 @@ export async function processAndSaveNotes(
 ) {
 	throwIfSyncCancelled(plugin);
 	const batchStartedAt = getNowMs();
-	const frontmatterFixStartedAt = getNowMs();
-	await ensurePascalCaseFrontmatter(plugin);
-	await appendPerfTrace(plugin, "save-batch-frontmatter-fix-complete", {
-		durationMs: getNowMs() - frontmatterFixStartedAt,
-	});
+	// Admission must hold uncertain identities before the migration can write any note.
 	const existingIndexStartedAt = getNowMs();
 	const existingKeepNoteIndex = await buildExistingKeepNoteIndex(plugin.app, plugin.settings.saveLocation);
 	throwIfSyncCancelled(plugin);
@@ -892,6 +919,11 @@ export async function processAndSaveNotes(
 		durationMs: getNowMs() - existingIndexStartedAt,
 		existingPaths: existingKeepNoteIndex.existingPaths.size,
 		indexedKeepUrls: existingKeepNoteIndex.pathByKeepUrl.size,
+	});
+	const frontmatterFixStartedAt = getNowMs();
+	await ensurePascalCaseFrontmatter(plugin);
+	await appendPerfTrace(plugin, "save-batch-frontmatter-fix-complete", {
+		durationMs: getNowMs() - frontmatterFixStartedAt,
 	});
 	const ensuredFolders = new Map<string, Promise<void>>();
 	const noteLocks = new Map<string, Promise<void>>();
@@ -1025,6 +1057,7 @@ export async function processAndSaveNotes(
 
 					callbacks?.reportProgress?.();
 					if (entryId) {
+						if (metrics.notePath) callbacks?.onEntrySaved?.(entryId, metrics.notePath);
 						if (callbacks?.mergeAction) callbacks.onEntrySettled?.(entryId, true, SAVE_PLAN_ACTIONS[metrics.action]);
 						else callbacks?.onEntrySettled?.(entryId, true);
 					}
@@ -1097,13 +1130,7 @@ export async function processAndSaveNote(
 	};
 	const startedAt = getNowMs();
 	const normalizedNote = preNormalizedNote ?? normalizeNote(note);
-	const noteTitle = normalizedNote.title;
-	if (!noteTitle) {
-		await logSync(plugin, "Skipped note without a title", NOTE_LOG_BATCH_OPTIONS);
-		metrics.action = "skipped";
-		metrics.totalDurationMs = getNowMs() - startedAt;
-		return metrics;
-	}
+	const noteTitle = normalizedNote.title || "Untitled KeepSidian Note";
 	await assertDownloadIdentityPresentOrUntracked(plugin, note);
 	const resolvedNotePath = resolveNotePath(plugin.app, plugin.settings, normalizedNote);
 	const resolveExistingPathStartedAt = getNowMs();
@@ -1116,6 +1143,7 @@ export async function processAndSaveNote(
 			saveLocation
 		)) ?? resolvedNotePath;
 	metrics.resolveExistingPathDurationMs = getNowMs() - resolveExistingPathStartedAt;
+	metrics.notePath = normalizePathSafe(noteFilePath);
 	const noteLink = `[${noteTitle}](${normalizePathSafe(noteFilePath)})`;
 	const noteFolder = dirnameSafe(noteFilePath);
 	let retainedImageNames: string[] = [];
@@ -1125,22 +1153,36 @@ export async function processAndSaveNote(
 	let expectedMarkdown: string | undefined;
 	let acknowledgedMedia: MediaBaseline | undefined;
 	let preserveLocalMedia = false;
+	let conflictReservation: Awaited<ReturnType<typeof reserveConflictPath>> | undefined;
 	const writeKnownContent = async (path: string, content: string, expected?: string): Promise<void> => {
-		const [frontmatter, body] = extractFrontmatter(content);
-		const stamped = await stampLocalBaseline(plugin.app.vault.adapter, path, wrapMarkdown(withRemoteRevision(frontmatter, note.remote_revision), body), acknowledgedMedia);
-		if (expected !== undefined && (await plugin.app.vault.adapter.read(path) ?? "") !== expected) throw new Error("A local note changed during download. Local edits were preserved.");
-		if (expected === undefined && await plugin.app.vault.adapter.exists(path)) throw new Error("A local file appeared at the download destination. It was preserved.");
-		await plugin.app.vault.adapter.write(path, stamped);
+		assertRelativePath(path);
+		if (expected !== undefined) assertKeepNoteIdentity(normalizedNote, expected);
+		let [frontmatter, body, properties] = extractFrontmatter(content);
+		if (typeof properties.KeepSidianSourceFileName === "string" && properties.KeepSidianSourceFileName.normalize("NFC") === path.split("/").pop()?.normalize("NFC") && typeof properties.KeepSidianSourceTitle === "string") {
+			frontmatter = frontmatter.replace(/^KeepSidianSourceTitle:[^\r\n]*/m, () => `KeepSidianSourceTitle: ${JSON.stringify(note.title)}`);
+		}
+		const input = wrapMarkdown(withRemoteRevision(frontmatter, note.remote_revision), body);
+		const finalize = (value: string) => stampLocalBaseline(plugin.app.vault.adapter, path, value, acknowledgedMedia);
+		const stamped = note.local_enrichment ? await getEnrichmentLedger(plugin).stage(note, path, expected, input, finalize) : await finalize(input);
+		await withPathLock(plugin.app.vault.adapter, path, async () => {
+			if (expected !== undefined && (await plugin.app.vault.adapter.read(path) ?? "") !== expected) throw new Error("A local note changed during download. Local edits were preserved.");
+			if (expected === undefined && await equivalentPath(plugin.app.vault.adapter, path)) throw new Error("A local file appeared at the download destination. It was preserved.");
+			if (expected === undefined || stamped !== expected) await plugin.app.vault.adapter.write(path, stamped);
+		});
+		if (note.local_enrichment) await getEnrichmentLedger(plugin).finish(note);
 		expectedMarkdown = stamped;
 	};
 	const writeMetadata = async (path: string, content: string, expected: string, options: { ctime: number; mtime: number }): Promise<void> => {
+		assertKeepNoteIdentity(normalizedNote, expected);
 		const known = storedLocalBaseline(expected);
 		let media: MediaBaseline | undefined;
 		try { media = await captureLocalMedia(plugin.app.vault.adapter, path, expected); } catch { /* Cannot acknowledge unknown media. */ }
-		const unchanged = known !== undefined && media !== undefined && await localStateBaseline(plugin.app.vault.adapter, path, expected, media) === known;
-		const updated = unchanged ? await stampLocalBaseline(plugin.app.vault.adapter, path, content, media) : content;
+		const unchanged = known !== undefined && media !== undefined && await isLocalStateUnchanged(plugin.app.vault.adapter, path, expected, media);
+		const finalize = async (value: string) => unchanged ? await stampLocalBaseline(plugin.app.vault.adapter, path, value, media) : value;
+		const updated = note.local_enrichment ? await getEnrichmentLedger(plugin).stage(note, path, expected, content, finalize) : await finalize(content);
 		if ((await plugin.app.vault.adapter.read(path) ?? "") !== expected) throw new Error("A local note changed during metadata update. Local edits were preserved.");
-		await plugin.app.vault.adapter.write(path, updated, options);
+		if (updated !== expected) await plugin.app.vault.adapter.write(path, updated, options);
+		if (note.local_enrichment) await getEnrichmentLedger(plugin).finish(note);
 		if (unchanged) expectedMarkdown = updated;
 	};
 
@@ -1199,9 +1241,9 @@ export async function processAndSaveNote(
 			if (decisionSource !== undefined && original !== decisionSource) throw new Error("A local note changed after download comparison. Local edits were preserved.");
 			const baseline = storedLocalBaseline(original);
 			try { acknowledgedMedia = await captureLocalMedia(plugin.app.vault.adapter, noteFilePath, original); } catch { /* Unknown media cannot be acknowledged. */ }
-			const currentState = acknowledgedMedia ? await localStateBaseline(plugin.app.vault.adapter, noteFilePath, original, acknowledgedMedia) : undefined;
-			preserveLocalMedia = Boolean(baseline && currentState !== baseline);
-			if (baseline && currentState === baseline) expectedMarkdown = original;
+			const unchanged = acknowledgedMedia ? await isLocalStateUnchanged(plugin.app.vault.adapter, noteFilePath, original, acknowledgedMedia) : false;
+			preserveLocalMedia = Boolean(baseline && !unchanged);
+			if (baseline && unchanged) expectedMarkdown = original;
 		}
 
 		// A known unsent local Keep-state edit remains local work. Only the
@@ -1226,6 +1268,12 @@ export async function processAndSaveNote(
 					tagged = true;
 				}
 			}
+			if (note.local_enrichment && !tagged) {
+				const content = await plugin.app.vault.adapter.read(noteFilePath);
+				const stat = await plugin.app.vault.adapter.stat(noteFilePath);
+				if (!stat) throw new Error("Cannot preserve note modification time.");
+				await writeMetadata(noteFilePath, content, content, { ctime: stat.ctime, mtime: stat.mtime });
+			}
 			// Enrichment metadata is an own write, not a downloaded body merge
 			// that must be uploaded again in the two-way stage.
 			metrics.action = archived ? "archived" : "skipped";
@@ -1238,7 +1286,11 @@ export async function processAndSaveNote(
 				false,
 				baseline
 			);
-			const newMdContent = wrapMarkdown(mdFrontmatter, newTextWithoutFrontmatter);
+			// The fallback is a local filename, not a request to rename the Keep note.
+			const filename = noteFilePath.split("/").pop()!;
+			let localFrontmatter = normalizedNote.title ? mdFrontmatter : `${mdFrontmatter}\nKeepSidianUntitledFileName: ${JSON.stringify(filename)}`;
+			if (normalizedNote.title && filename !== `${note.title}.md`) localFrontmatter += `\nKeepSidianSourceTitle: ${JSON.stringify(note.title)}\nKeepSidianSourceFileName: ${JSON.stringify(filename)}`;
+			const newMdContent = wrapMarkdown(localFrontmatter, newTextWithoutFrontmatter);
 			await ensureParentFolder(noteFilePath);
 			const writeStartedAt = getNowMs();
 			await writeKnownContent(noteFilePath, newMdContent);
@@ -1283,7 +1335,9 @@ export async function processAndSaveNote(
 				if (decision.action === "conflict-copy") {
 					metrics.action = "conflict";
 					onMergeConflict?.(normalizePathSafe(noteFilePath));
-					noteFilePath = `${noteFilePath.replace(/\.md$/, "")}${CONFLICT_FILE_SUFFIX}${lastSyncedDate}.md`;
+					conflictReservation = await reserveConflictPath(plugin.app.vault.adapter, noteFilePath, lastSyncedDate);
+					noteFilePath = conflictReservation.path;
+					metrics.notePath = normalizePathSafe(noteFilePath);
 					mdFrontmatter = withSyncState(mdFrontmatter, false, baseline);
 				} else {
 					metrics.action = decision.action === "overwrite" ? "overwritten" : "merged";
@@ -1423,6 +1477,7 @@ export async function processAndSaveNote(
 		);
 		throw err;
 	} finally {
+		conflictReservation?.release();
 		metrics.totalDurationMs = getNowMs() - startedAt;
 	}
 

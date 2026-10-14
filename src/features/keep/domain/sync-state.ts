@@ -42,12 +42,13 @@ export function hasPendingUpload(frontmatter: string): boolean {
 }
 
 /** These properties belong to the vault only and must never be sent to Keep. */
-export function stripSyncState(frontmatter: string): string {
-	return frontmatter.replace(/^KeepSidian(?:PendingUpload|RemoteBaseline|LocalBaseline|RemoteRevision):[^\r\n]*(?:\r?\n|$)/gm, "").trim();
+export function stripSyncState(frontmatter: string, preserveFilename = false): string {
+	const cleaned = frontmatter.replace(/^KeepSidian(?:PendingUpload|RemoteBaseline|LocalBaseline|RemoteRevision):[^\r\n]*(?:\r?\n|$)/gm, "").trim();
+	return preserveFilename ? cleaned : cleaned.replace(/^KeepSidianUntitledFileName:[^\r\n]*(?:\r?\n|$)/gm, "").trim();
 }
 
 export function withSyncState(frontmatter: string, pending: boolean, baseline?: string): string {
-	const lines = [stripSyncState(frontmatter)];
+	const lines = [stripSyncState(frontmatter, true)];
 	if (pending) lines.push(`${PENDING_UPLOAD_KEY}: true`);
 	if (baseline && /^sha256:[a-f0-9]{64}$/.test(baseline)) lines.push(`${REMOTE_BASELINE_KEY}: ${baseline}`);
 	return lines.filter(Boolean).join("\n");

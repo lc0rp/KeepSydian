@@ -202,7 +202,7 @@ export function finishSyncUI(plugin: KeepSidianPlugin, status: SyncRunStatus | b
 			noticeControls.setMessage(
 				success
 					? normalizedStatus === "warning"
-						? `Synced Google Keep Notes with ${attachmentWarnings} attachment warning${attachmentWarnings === 1 ? "" : "s"}.`
+						? `Synced Google Keep Notes with ${attachmentWarnings} warning${attachmentWarnings === 1 ? "" : "s"}.`
 						: "Synced Google Keep Notes."
 					: normalizedStatus === "canceled"
 						? "Canceled Google Keep sync."

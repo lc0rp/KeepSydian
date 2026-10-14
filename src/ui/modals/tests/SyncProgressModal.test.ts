@@ -509,6 +509,21 @@ describe("SyncProgressModal", () => {
 		expect(modalOptions.buildSyncPlan).toHaveBeenLastCalledWith("import", expect.any(Object), { kind: "last-sync" });
 	});
 
+	test("legacy AI choice defaults off and grants only the next download review", async () => {
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Customize sync").click();
+		await flushUI();
+		const input = modal.contentEl.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+		expect(input.checked).toBe(false);
+		input.checked = true;
+		input.dispatchEvent(new Event("change"));
+		await modal.beginReview();
+		expect(modalOptions.buildSyncPlan.mock.calls.at(-1)?.[1].legacyTagConsent).toBeDefined();
+		await modal.beginReview();
+		expect(modalOptions.buildSyncPlan.mock.calls.at(-1)?.[1].legacyTagConsent).toBeUndefined();
+	});
+
 	test("customize sync two-way mode surfaces gate guidance and deep-links to settings", async () => {
 		const modal = new SyncProgressModal(app, modalOptions);
 		modal.onOpen();
@@ -1030,6 +1045,24 @@ describe("SyncProgressModal", () => {
 		await flushUI();
 
 		expect(modal.contentEl.textContent).toContain("Download complete with warnings");
-		expect(modal.contentEl.textContent).toContain("Sync complete with 2 attachment warnings. Processed 3 notes.");
+		expect(modal.contentEl.textContent).toContain("Sync complete with 2 warnings. Processed 3 notes.");
+	});
+
+	test("shows the saved filename after enrichment without changing the reviewed plan", async () => {
+		modalOptions.runSyncPlan.mockImplementation(async (_plan, callbacks) => {
+			callbacks.onEntrySaved?.("create-note", "Keep/Suggested title.md");
+			callbacks.onEntrySettled?.("create-note", true, "create");
+			return {};
+		});
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Start sync").click();
+		await flushUI();
+		getButton(modal, "Execute").click();
+		await flushUI();
+		expect(getRowTitles(modal)).toContain("Suggested title");
+		expect(modal.contentEl.textContent).toContain("Keep/Suggested title.md");
+		expect(modal.contentEl.textContent).not.toContain("Keep/Create note.md");
+		expect(modalOptions.preparedPlan.plan.entries[0].path).toBe("Keep/Create note.md");
 	});
 });

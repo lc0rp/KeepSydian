@@ -24,6 +24,81 @@ before the plugin writes to your vault. Or, you can set it and forget it, and le
 
 ## Move quick captures into Obsidian
 
+### AI reuse in the local implementation branch
+
+AI title and tag suggestions are kept in a vault-local ledger. Repeated syncs,
+date-range changes, credential refreshes and releases reuse accepted results.
+Relevant content or prompt changes can request a new result. Prefix changes and
+lower tag limits use the same raw tags. Review preparation does no AI work; a
+missing suggestion is requested only when its note is selected for execution.
+
+Official versioned release routes share one stable service identity, so upgrading
+the plugin keeps cache entries, ownership and uncertain-attempt guards. Accounts
+and unrelated/custom backend endpoints remain isolated. Existing nonempty ledgers
+from unreleased URL-keyed builds are preserved and block new AI work until their
+history can be reviewed safely; the client never clears them to retry. Public
+beta.7 predates this ledger format.
+
+Existing titles and tags start as manual. Saved AI settings do not start tag
+generation for previously imported notes. A default-off choice in each download
+can admit selected notes to tag generation; those notes then reuse accepted
+results until relevant content changes. Existing titles stay manual.
+The plugin protects edited titles, keeps deliberately removed AI tags removed,
+and preserves manual tags. Competing
+Keep and Obsidian field edits hold uploads until those fields are resolved.
+Resolving a title conflict keeps unresolved tag conflicts. Title updates accept
+quoted keys and scalar blocks; unsafe title or tag YAML alias changes stop before
+a note write. Failed folder scans stop AI admission. A later manual import also
+clears admission granted only by an abandoned preview.
+Folder patterns search the fixed ancestor before the first variable, including
+older date/title folders. A variable in the first segment requires a vault-root
+scan. Admission and destination lookup read the same identity scope; a cold
+metadata cache cannot create another copy of a linked note.
+Duplicate identities, unreadable candidates and invalid frontmatter stop imports
+before generation or note writes, even with AI off. Repair the affected files and
+retry. A present `GoogleKeepUrl` must contain one supported Google Keep note URL;
+lists, objects, empty values, other types, invalid URLs and conflicting aliases
+stop the scan. A note with no identity property remains a legitimate unlinked
+note. Discovery, AI admission and destination lookup use the same validated URL.
+Identity validation also precedes the one-time frontmatter casing migration.
+That migration preserves equivalent aliases when the canonical key already
+exists. It only considers documents made of independently parseable single-line
+root properties, then verifies that parsed data changes only by the intended key
+renames. Original delimiter, newline and body bytes are retained. Multiline,
+ambiguous or unsupported structures remain byte-for-byte unchanged, keeping the
+supported legacy aliases without repeat migration scans.
+A cached suggestion still requires admission before it can be applied to
+an existing manual note; a fresh tag choice can reuse that result without a new
+provider call. Files beginning with a byte-order marker are held; save them as
+UTF-8 without BOM before retrying, because title/tag writers do not consistently
+support that format yet.
+The ledger also guards uncertain requests so losing a reply cannot cause an
+automatic repeat charge. A failed larger-tag request keeps its earlier result.
+Native transports can resend a POST internally. Each paid batch therefore first
+gets a server process capability, then saves its local guard and sends one bound
+operation. The matching server replays completed duplicates or holds uncertain
+ones. Failed capability preflight can be retried without a paid-attempt guard.
+After a paid POST, the client never refreshes the capability automatically.
+Server restarts or requests reaching a different worker fail closed; production
+routing availability must be validated before release. The bounded server replay
+memory is separate from durable reuse in the vault.
+
+This local branch needs the matching server contract. It has no automatic cache
+expiry or regeneration on model-default changes. It has no explicit retry/reset
+UI yet. Missing or damaged initialized metadata stops AI work.
+After an unconfirmed upload, AI work pauses until a reviewed upload produces a
+confirmed source receipt. This conservative recovery can require manual conflict
+resolution; it does not infer ownership from an ambiguous remote snapshot.
+The main ledger is limited to 8 MiB. A separate application journal is limited to
+256 KiB and holds at most 15 note receipts before a checked snapshot checkpoint.
+Both files must stay together when the vault is backed up or restored. Interrupted
+writes either recover a confirmed receipt or stop AI work; this does not promise
+power-loss atomicity from the vault adapter.
+Simultaneous apps or separate devices do not have a shared durable claim. These
+files contain private titles, labels and outputs; keep them under the vault's
+normal protection.
+Installed desktop/mobile UAT and any release remain separate approval steps.
+
 I built KeepSydian because I use Keep for quick capture and Obsidian for everything else.
 
 KeepSydian manages the handoff seamlessly. With a few clicks, you can:
@@ -136,11 +211,24 @@ optional email address are handled by the form, not stored in your vault or retu
 
 If both copies changed since the last sync, KeepSydian tries to merge their bodies while preserving the existing
 frontmatter. If the merge cannot be completed safely, the incoming note is saved as a separate
-`-conflict-<timestamp>.md` file.
+`-conflict-<timestamp>.md` file. Conflict timestamps use hyphens instead of colons
+so the filenames work on Windows. If a copy already exists, a numbered suffix
+preserves both copies. Unresolved originals and conflict copies are excluded from
+that attempt's upload; resolve the competing content before expecting a no-op sync.
+
+New note and media filenames use a shared portable component policy. Source titles
+are retained when a generated filename differs; a later user rename remains a local
+title edit. Existing linked notes stay at their current paths. Unsafe configured
+folders are rejected for review instead of being silently redirected or renamed.
+Filename allocation accounts for case and Unicode-normalization equivalents and
+leaves room for extensions and collision suffixes.
 
 ### Attachments
 
 - Downloaded attachments are stored in the sync folder's `media/` directory.
+- When a media basename already contains different bytes, a separate version is
+  allocated and generated embeds use that filename. Existing bytes are preserved;
+  this can retain older media versions until the user chooses to clean them up.
 - The **Display imported images in notes** option in plugin settings adds Obsidian image embeds while keeping the files
   in `media/`.
 - Upload scans notes under the configured save location for attachments referenced from `media/`.

@@ -1,5 +1,8 @@
 import { parseYaml } from "obsidian";
 import { FRONTMATTER_GOOGLE_KEEP_URL_KEY } from "../constants";
+import type { EnrichmentSource } from "@schemas/keep";
+import type { PremiumFeatureFlags } from "@integrations/server/keepApi";
+import type { LegacyTagConsent } from "../enrichment/consent";
 
 type FrontmatterDict = { [key: string]: unknown };
 
@@ -24,6 +27,12 @@ interface NormalizedNote {
 }
 
 interface PreNormalizedNote {
+	enrichment_source?: EnrichmentSource;
+	enrichment_requested?: PremiumFeatureFlags;
+	enrichment_legacy_consent?: LegacyTagConsent;
+	enrichment_legacy_held?: boolean;
+	enrichment_pending?: boolean;
+	local_enrichment?: { tags?: Record<string, string>; sourceTags: string[]; removeValues: string[]; title?: string; titleSource?: boolean; receipt: string };
 	id?: string;
 	tags?: string[];
 	processing_warnings?: string[];
@@ -146,29 +155,36 @@ export function getSuggestedTagUpdate(note: PreNormalizedNote, markdown: string)
 	return markdown.slice(0, openingLength) + frontmatter + markdown.slice(openingLength + match[1].length);
 }
 
-function extractFrontmatter(text: string): [string, string, FrontmatterDict] {
+function extractFrontmatter(text: string, strict = false): [string, string, FrontmatterDict] {
+	// Title/tag writers do not share BOM support; never infer a new note from it.
+	if (strict && text.startsWith("\uFEFF"))
+		throw new Error("Cannot determine Keep identity with a byte-order marker. Save the file as UTF-8 without BOM and retry.");
 	// Frontmatter is between --- and --- at the start of the text if it exists
 	let frontmatter = "";
 	let frontmatterDict: FrontmatterDict = {};
 	let textWithoutFrontmatter = text;
-	const frontmatterMatch = text.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?/);
+	const frontmatterMatch = text.match(/^---[\t ]*\r?\n(?:([\s\S]*?)\r?\n)?---[\t ]*(?:\r?\n|$)/);
 	if (frontmatterMatch) {
-		frontmatter = frontmatterMatch[1].trim();
+		frontmatter = (frontmatterMatch[1] ?? "").trim();
 		textWithoutFrontmatter = text.slice(frontmatterMatch[0].length).trim();
 	}
+	if (strict && !frontmatterMatch && /^---[\t ]*\r?\n/.test(text))
+		throw new Error("Cannot determine Keep identity from unclosed frontmatter.");
 
 	if (frontmatter) {
-		frontmatterDict = parseFrontmatter(frontmatter);
+		frontmatterDict = parseFrontmatter(frontmatter, strict);
 	}
 
 	return [frontmatter, textWithoutFrontmatter, frontmatterDict];
 }
 
-function parseFrontmatter(frontmatter: string): FrontmatterDict {
+function parseFrontmatter(frontmatter: string, strict = false): FrontmatterDict {
 	try {
 		const parseYamlUnknown = parseYaml as (yaml: string) => unknown;
 		const parsed = parseYamlUnknown(frontmatter);
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			if (strict && parsed !== null && parsed !== undefined)
+				throw new Error("Frontmatter must be a mapping.");
 			return {};
 		}
 
@@ -187,6 +203,7 @@ function parseFrontmatter(frontmatter: string): FrontmatterDict {
 
 		return frontmatterDict;
 	} catch {
+		if (strict) throw new Error("Cannot determine Keep identity from malformed frontmatter.");
 		return {};
 	}
 }

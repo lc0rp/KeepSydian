@@ -1,5 +1,8 @@
 import type KeepSidianPlugin from "@app/main";
+import { parseYaml } from "obsidian";
 import { normalizePathSafe } from "@services/paths";
+import { extractFrontmatter } from "../domain/note";
+import { readKeepNoteIdentity } from "../domain/noteLookup";
 import {
 	FRONTMATTER_GOOGLE_KEEP_CREATED_DATE_KEY,
 	FRONTMATTER_GOOGLE_KEEP_UPDATED_DATE_KEY,
@@ -77,17 +80,20 @@ async function runFrontmatterFix(plugin: KeepSidianPlugin): Promise<void> {
 				continue;
 			}
 
-			const { updated, changed } = replaceHyphenatedKeys(frontmatterBlock);
+			const [, , properties] = extractFrontmatter(content, true);
+			readKeepNoteIdentity(properties, filePath);
+			// The shared reader adds compatibility aliases; collision checks need only stored keys.
+			const storedProperties = (parseYaml(frontmatterBlock) ?? {}) as Record<string, unknown>;
+			const { updated, changed } = replaceHyphenatedKeys(frontmatterBlock, storedProperties);
 			if (!changed) {
 				continue;
 			}
 
-			const newline = match[0].includes("\r\n") ? "\r\n" : "\n";
-			const updatedFrontmatter = `---${newline}${updated}${newline}---`;
-			const remainder = content.slice(match[0].length);
-			const updatedContent = `${updatedFrontmatter}${remainder}`;
+			const openingLength = content.indexOf("\n") + 1;
+			const updatedContent = content.slice(0, openingLength) + updated + content.slice(openingLength + frontmatterBlock.length);
 
 			if (updatedContent !== content) {
+				readKeepNoteIdentity(extractFrontmatter(updatedContent, true)[2], filePath);
 				await Promise.resolve(adapter.write(filePath, updatedContent));
 			}
 		} catch (error) {
@@ -113,22 +119,78 @@ async function markFixComplete(plugin: KeepSidianPlugin): Promise<void> {
 	}
 }
 
-function replaceHyphenatedKeys(frontmatter: string): { updated: string; changed: boolean } {
+function replaceHyphenatedKeys(frontmatter: string, properties: Record<string, unknown>): { updated: string; changed: boolean } {
+	// Parsed equality loses shadowed merge entries. Only consider documents whose
+	// physical lines independently prove their root-key ownership; defer richer YAML.
+	if (!hasStandaloneRootProperties(frontmatter, properties)) return { updated: frontmatter, changed: false };
 	let updated = frontmatter;
 	let changed = false;
+	const expected = { ...properties };
 
 	for (const { hyphenated, pascal } of FRONTMATTER_KEY_MAPPINGS) {
-		const pattern = new RegExp(`(^|\\r?\\n)(\\s*)${escapeRegExp(hyphenated)}(\\s*:)`, "g");
-		const next = updated.replace(pattern, (match, prefix, spacing, separator) => {
+		// Existing aliases remain readable; never turn them into duplicate YAML keys.
+		if (!Object.prototype.hasOwnProperty.call(properties, hyphenated) || Object.prototype.hasOwnProperty.call(properties, pascal)) continue;
+		const pattern = new RegExp(`(^|\\r?\\n)${escapeRegExp(hyphenated)}([\\t ]*:)`, "g");
+		const next = updated.replace(pattern, (match, prefix, separator) => {
 			changed = true;
-			return `${prefix}${spacing}${pascal}${separator}`;
+			return `${prefix}${pascal}${separator}`;
 		});
 		if (next !== updated) {
 			updated = next;
+			expected[pascal] = properties[hyphenated];
+			delete expected[hyphenated];
 		}
 	}
 
+	// A column-zero match can still be inside a flow mapping or quoted value.
+	// Legacy aliases are supported: skip the whole rewrite unless only root keys changed.
+	if (changed && !sameYamlData(expected, parseYaml(updated))) return { updated: frontmatter, changed: false };
 	return { updated, changed };
+}
+
+function hasStandaloneRootProperties(frontmatter: string, properties: Record<string, unknown>): boolean {
+	const seen = new Set<string>();
+	for (const line of frontmatter.split(/\r?\n/)) {
+		if (/^\s*(?:#.*)?$/.test(line)) continue;
+		const match = /^(?:"([^"\\]+)"|'([^']+)'|([A-Za-z_][A-Za-z0-9_-]*))[\t ]*:/.exec(line);
+		if (!match) return false;
+		const key = match[1] ?? match[2] ?? match[3];
+		try {
+			const parsed: unknown = parseYaml(line);
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) ||
+				Object.keys(parsed).length !== 1 || !Object.prototype.hasOwnProperty.call(parsed, key) ||
+				!Object.prototype.hasOwnProperty.call(properties, key) || seen.has(key) ||
+				!sameYamlData((parsed as Record<string, unknown>)[key], properties[key])) return false;
+			seen.add(key);
+		} catch {
+			return false;
+		}
+	}
+	return seen.size === Object.keys(properties).length;
+}
+
+function sameYamlData(left: unknown, right: unknown, ancestors = new Set<object>()): boolean {
+	if (Object.is(left, right)) return true;
+	if (left === null || right === null || typeof left !== "object" || typeof right !== "object") return false;
+	if (left instanceof Date || right instanceof Date)
+		return left instanceof Date && right instanceof Date && Object.is(left.getTime(), right.getTime());
+	const prototype = Object.getPrototypeOf(left) as unknown;
+	if (prototype !== Object.getPrototypeOf(right)) return false;
+	if (Array.isArray(left)) {
+		if (!Array.isArray(right) || left.length !== right.length) return false;
+	} else if (prototype !== Object.prototype && prototype !== null) return false;
+	// Unusual recursive/deep YAML is left byte-for-byte intact rather than guessed at.
+	if (ancestors.has(left) || ancestors.size >= 64) return false;
+	ancestors.add(left);
+	try {
+		const keys = Object.keys(left);
+		return keys.length === Object.keys(right).length && keys.every((key) =>
+			Object.prototype.hasOwnProperty.call(right, key) &&
+			sameYamlData((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key], ancestors)
+		);
+	} finally {
+		ancestors.delete(left);
+	}
 }
 
 async function listMarkdownFilesRecursively(

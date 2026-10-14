@@ -13,6 +13,8 @@ import { normalizeMergeAction } from "@features/keep/domain/merge-action";
 import { renderMergeActionSelector } from "./merge-action-selector";
 import { parseCustomScopeRange, renderCustomScopeInputs } from "./sync-date-range";
 import { deletionReviewSummary, markDeletionConflict, retainUncheckedDeletions } from "./deletion-review";
+import { chooseLegacyTags } from "@features/keep/enrichment/consent";
+import { renderLegacyTagChoice } from "./legacy-tag-choice";
 
 interface CreateElOptions { text?: string; cls?: string | string[]; }
 type MaybeObsidianElement = HTMLElement & { empty?: () => void; setText?: (text: string) => void; };
@@ -162,6 +164,7 @@ export class SyncProgressModal extends Modal {
 	private options: SyncProgressModalOptions;
 	private selectedMode: SyncMode = "import";
 	private downloadScopeKind: DownloadScopeKind = "last-sync";
+	private legacyTags = false;
 	private customSinceInput = "";
 	private customUntilInput = "";
 	private showSyncOptions = false;
@@ -298,6 +301,7 @@ export class SyncProgressModal extends Modal {
 		this.reviewGeneration += 1; this.isGeneratingReview = false;
 		void this.activeAttempt?.finish("abandoned");
 		this.selectedMode = mode; this.preparationPaused = false; this.preparedPlan = null;
+		this.legacyTags = false;
 		this.executionSnapshot = null; this.showExecutionResult = false; this.reviewFilterKey = "notes";
 		this.modalAlert = null; this.dismissPrompt = null;
 		void this.refreshUI();
@@ -347,7 +351,10 @@ export class SyncProgressModal extends Modal {
 			await this.refreshUI();
 			if (generation !== this.reviewGeneration) return;
 			const downloadScope = modeUsesDownload(mode) ? this.getDownloadScope() : undefined;
+			const legacyTagConsent = modeUsesDownload(mode) && this.legacyTags ? chooseLegacyTags() : undefined;
+			this.legacyTags = false;
 			const preparedPlan = await this.options.buildSyncPlan(mode, {
+				legacyTagConsent,
 				attempt: attempt ?? undefined,
 				onAttempt: (context) => {
 					attempt = context;
@@ -402,6 +409,7 @@ export class SyncProgressModal extends Modal {
 		await this.refreshUI();
 		try {
 			const result = await this.options.runSyncPlan(this.preparedPlan, {
+				onEntrySaved: (entryId, path) => this.handleEntrySaved(entryId, path),
 				onEntrySettled: (entryId, success, outcome) => this.handleEntrySettled(entryId, success, outcome),
 			});
 			if (result.nextPlan) {
@@ -449,6 +457,14 @@ export class SyncProgressModal extends Modal {
 			else entryStates.set(entry.id, "pending");
 		}
 		this.executionSnapshot = { plan: snapshotPlan, entryStates }; this.reviewFilterKey = "notes";
+	}
+	private handleEntrySaved(entryId: string, path: string) {
+		const entry = this.executionSnapshot?.plan.entries.find((candidate) => candidate.id === entryId);
+		if (!entry || !entry.selected || !entry.selectable) return;
+		entry.path = path;
+		entry.title = path.split("/").pop()?.replace(/\.md$/i, "") ?? entry.title;
+		if (entry.meta?.detail === "New AI suggestions are requested only for selected notes.") delete entry.meta.detail;
+		this.updateExecutionRowInPlace(entryId);
 	}
 	private handleEntrySettled(entryId: string, success: boolean, outcome?: SyncPlanAction) {
 		if (!this.executionSnapshot) return;
@@ -584,7 +600,7 @@ export class SyncProgressModal extends Modal {
 			if (this.lastResult?.status === "canceled") return `Sync canceled after ${this.lastResult.processed} notes.`;
 			if (this.lastResult?.status === "warning") {
 				const warningCount = this.lastResult.attachmentWarnings;
-				return `Sync complete with ${warningCount} attachment warning${warningCount === 1 ? "" : "s"}. Processed ${this.lastResult.processed} notes.`;
+				return `Sync complete with ${warningCount} warning${warningCount === 1 ? "" : "s"}. Processed ${this.lastResult.processed} notes.`;
 			}
 			return this.lastResult?.status === "success" ? `Sync complete. Processed ${this.lastResult.processed} notes.` : "Sync failed.";
 		}
@@ -655,6 +671,7 @@ export class SyncProgressModal extends Modal {
 					createChild(importOptionsContainerEl, "p", { text: "Thanks for supporting KeepSidian! Customize your download below." }).classList.add("keepsidian-sync-center-download-options-copy");
 					const optionsBody = createChild(importOptionsContainerEl, "div"); optionsBody.classList.add("keepsidian-sync-center-download-options-body");
 					await this.options.renderImportOptions(optionsBody, true);
+					renderLegacyTagChoice(optionsBody, this.legacyTags, (value) => { this.legacyTags = value; });
 					if (renderVersion !== this.renderVersion) return;
 				}
 			}
@@ -923,6 +940,11 @@ export class SyncProgressModal extends Modal {
 		refs.row.classList.remove("is-pending", "is-done", "is-failed", "is-unchecked", "is-instant"); refs.row.classList.add(`is-${state}`);
 		refs.statusSymbolEl.textContent = state === "done" || state === "instant" ? "✓" : state === "failed" ? "!" : state === "unchecked" ? "–" : "…";
 		refs.badgeEl.textContent = getRuntimeStatusLabel(entry, state);
+		const titleEl = refs.row.querySelector(".keepsidian-sync-plan-row-title");
+		const pathEl = refs.row.querySelector(".keepsidian-sync-plan-row-path");
+		if (titleEl) titleEl.textContent = entry.title;
+		if (pathEl) pathEl.textContent = entry.path;
+		if (!entry.meta?.detail) refs.row.querySelector(".keepsidian-sync-plan-row-detail")?.remove();
 	}
 	private renderEntryBody(body: HTMLElement, entry: SyncPlanEntry, badgeText: string): HTMLSpanElement {
 		const titleLine = createChild(body, "div"); titleLine.classList.add("keepsidian-sync-plan-row-title-line");

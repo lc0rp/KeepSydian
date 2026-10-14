@@ -34,6 +34,7 @@ import { ensureFolder, normalizePathSafe } from "@services/paths";
 import { resolveLogBaseFolder } from "@services/note-path-resolver";
 import { SyncAttempt } from "@app/sync-attempt";
 import { prepareSyncLog } from "@app/logging";
+import type { LegacyTagConsent } from "@features/keep/enrichment/consent";
 
 type ErrorMessageResolver = (error: unknown) => string;
 const SUPPORTER_LOCK_REASON = "Available to project supporters";
@@ -66,6 +67,7 @@ export interface RunPreparedSyncPlanResult {
 }
 
 export interface SyncPlanBuildCallbacks {
+	legacyTagConsent?: LegacyTagConsent;
 	attempt?: SyncAttempt;
 	onAttempt?: (attempt: SyncAttempt) => void;
 	validateCredentials?: () => boolean;
@@ -76,6 +78,7 @@ export interface SyncPlanBuildCallbacks {
 }
 
 export interface SyncPlanRunCallbacks {
+	onEntrySaved?: (entryId: string, path: string) => void;
 	onEntrySettled?: (entryId: string, success: boolean, outcome?: SyncPlanAction) => void;
 }
 
@@ -166,6 +169,7 @@ export async function buildManualSyncPlan(
 		includeNotesTerms: [...plugin.settings.premiumFeatures.includeNotesTerms],
 		excludeNotesTerms: [...plugin.settings.premiumFeatures.excludeNotesTerms],
 		includeColors: [...plugin.settings.premiumFeatures.includeColors],
+		legacyTagConsent: callbacks?.legacyTagConsent,
 	};
 	const attempt = callbacks?.attempt ?? new SyncAttempt(plugin, mode, downloadScope);
 	await attempt.start();
@@ -362,6 +366,7 @@ export async function runPreparedSyncPlan(
 		},
 		setTotalNotes: (n: number) => uiSetTotalNotes(plugin, n),
 		reportProgress: () => reportSyncProgress(plugin),
+		onEntrySaved: (entryId: string, path: string) => runCallbacks?.onEntrySaved?.(entryId, path),
 		onEntrySettled: (entryId: string, success: boolean, outcome?: SyncPlanAction) => {
 			if (success && outcome === "merge" && preparedPlan.stage === "import") {
 				const path = preparedPlan.plan.entries.find((entry) => entry.id === entryId)?.path;
@@ -371,6 +376,7 @@ export async function runPreparedSyncPlan(
 			else runCallbacks?.onEntrySettled?.(entryId, success, outcome);
 		},
 		onAttachmentWarning: () => { attachmentWarnings += 1; },
+		onEnrichmentWarning: () => { attachmentWarnings += 1; },
 	};
 	return executeAttempt(plugin, attempt, async () => {
 		await assertPreparedDeletionContext(plugin, preparedPlan);
@@ -471,6 +477,7 @@ export async function runImportNotesFlow(
 			setTotalNotes: (n: number) => uiSetTotalNotes(plugin, n),
 			reportProgress: () => reportSyncProgress(plugin),
 			onAttachmentWarning: () => { attachmentWarnings += 1; },
+			onEnrichmentWarning: () => { attachmentWarnings += 1; },
 			deferCheckpoint: (date: string) => { completionDate = date; },
 		};
 		if (effectiveOptions !== undefined) await importGoogleKeepNotesWithOptions(plugin, effectiveOptions, callbacks);
@@ -505,6 +512,7 @@ export async function runTwoWaySyncFlow(plugin: KeepSidianPlugin, _getErrorMessa
 			setTotalNotes: (n: number) => uiSetTotalNotes(plugin, n),
 			reportProgress: () => reportSyncProgress(plugin),
 			onAttachmentWarning: () => { attachmentWarnings += 1; },
+			onEnrichmentWarning: () => { attachmentWarnings += 1; },
 			deferCheckpoint: (date: string) => { completionDate = date; },
 		};
 		await importGoogleKeepNotes(plugin, callbacks);

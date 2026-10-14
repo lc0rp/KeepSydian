@@ -176,14 +176,15 @@ describe("handleDuplicateNotes", () => {
 
 		expect(resolvedPath).toBe("/save/location/old-name.md");
 		expect(adapter.list).toHaveBeenCalledTimes(1);
-		expect(adapter.read).toHaveBeenCalledTimes(readCallsAfterIndexBuild);
+		// Reuse the directory inventory, but revalidate the current linked owner.
+		expect(adapter.read).toHaveBeenCalledTimes(readCallsAfterIndexBuild + 1);
 	});
 
 	it("scans only the scoped saveLocation instead of the whole vault", async () => {
-		const getMarkdownFiles = jest.fn(() => [{ path: "Archive/old-name.md" }, { path: "/save/location/unrelated.md" }]);
+		const getMarkdownFiles = jest.fn(() => [{ path: "Archive/old-name.md" }, { path: "save/location/unrelated.md" }]);
 		(mockApp.vault as unknown as { getMarkdownFiles: typeof getMarkdownFiles }).getMarkdownFiles = getMarkdownFiles;
 		adapter.list.mockResolvedValue({
-			files: ["/save/location/unrelated.md"],
+			files: ["save/location/unrelated.md"],
 			folders: [],
 		});
 		adapter.read.mockResolvedValue("---\n---\nOther");
@@ -211,19 +212,19 @@ describe("handleDuplicateNotes", () => {
 			textWithoutFrontmatter: "New content",
 		};
 
-		const index = await buildExistingKeepNoteIndex(mockApp, "/save/location");
+		const index = await buildExistingKeepNoteIndex(mockApp, "save/location");
 		const resolvedPath = await findExistingKeepNotePath(
 			mockApp,
 			incomingNote,
-			"/save/location/Renamed title.md",
+			"save/location/Renamed title.md",
 			index,
-			"/save/location"
+			"save/location"
 		);
 
-		expect(resolvedPath).toBe("/save/location/Renamed title.md");
+		expect(resolvedPath).toBe("save/location/Renamed title.md");
 		expect(getMarkdownFiles).not.toHaveBeenCalled();
 		expect(adapter.list).toHaveBeenCalledWith("save/location");
-		expect(adapter.read).toHaveBeenCalledWith("/save/location/unrelated.md");
+		expect(adapter.read).toHaveBeenCalledWith("save/location/unrelated.md");
 	});
 });
 

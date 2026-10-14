@@ -171,6 +171,17 @@ jest.mock("obsidian", () => {
 			cb(btn);
 			return this;
 		}
+		addToggle(cb: (toggle: { setValue(value: boolean): unknown; onChange(handler: (value: boolean) => void): unknown }) => void) {
+			const input = document.createElement("input");
+			input.type = "checkbox";
+			this.settingEl.appendChild(input);
+			const toggle = {
+				setValue: (value: boolean) => { input.checked = value; return toggle; },
+				onChange: (handler: (value: boolean) => void) => { input.addEventListener("change", () => handler(input.checked)); return toggle; },
+			};
+			cb(toggle);
+			return this;
+		}
 		addExtraButton(cb: (extra: MockExtraButtonComponent) => void) {
 			const btnEl = document.createElement("button");
 			this.settingEl.appendChild(btnEl);
@@ -272,6 +283,22 @@ describe("NoteImportOptionsModal", () => {
 		expect(cancelBtn).toBeTruthy();
 		cancelBtn.click();
 		expect(closeSpy).toHaveBeenCalled();
+	});
+
+	test("legacy generation requires a fresh toggle and is never saved as a premium setting", async () => {
+		const onSubmit = jest.fn();
+		const modal = new NoteImportOptionsModal(app, plugin, onSubmit);
+		await modal.onOpen();
+		const input = modal.contentEl.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+		expect(input.checked).toBe(false);
+		input.checked = true;
+		input.dispatchEvent(new Event("change"));
+		Array.from(modal.contentEl.querySelectorAll("button")).find((button) => button.textContent === "Import")!.click();
+		expect(onSubmit.mock.calls[0][0].legacyTagConsent).toBeDefined();
+		expect(plugin.settings.premiumFeatures).not.toHaveProperty("legacyTagConsent");
+		const next = new NoteImportOptionsModal(app, plugin, onSubmit);
+		await next.onOpen();
+		expect(next.contentEl.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(false);
 	});
 
 	test("onClose empties content", () => {

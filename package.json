@@ -1,6 +1,6 @@
 {
 	"name": "keepsidian",
-	"version": "2.1.0-beta.7",
+	"version": "2.1.0-beta.8b",
 	"description": "Sync Google Keep notes to Obsidian",
 	"main": "main.js",
 	"scripts": {
@@ -24,7 +24,7 @@
 		"verify:bundles": "node scripts/verify-bundles.mjs",
 		"preversion": "npm run lint",
 		"test": "npx jest",
-		"coverage": "npx jest --coverage",
+		"coverage": "npx jest --coverage --runInBand",
 		"bmad:refresh": "bmad-method install -f -i codex",
 		"bmad:list": "bmad-method list:agents",
 		"bmad:validate": "bmad-method validate",

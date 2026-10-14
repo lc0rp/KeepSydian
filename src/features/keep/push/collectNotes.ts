@@ -5,7 +5,7 @@ import { dirnameSafe, normalizePathSafe } from "@services/paths";
 import { isKeepSidianFrontmatter, listMarkdownFilesRecursively } from "../domain/noteLookup";
 import { CONFLICT_FILE_SUFFIX, FRONTMATTER_KEEP_SIDIAN_LAST_SYNCED_DATE_KEY } from "../constants";
 import { ensurePascalCaseFrontmatter } from "../migrations/fixFrontmatterCasing";
-import { captureLocalMedia, localStateBaseline, storedLocalBaseline, type MediaBaseline } from "../domain/local-state";
+import { captureLocalMedia, isLocalStateUnchanged, localStateBaseline, storedLocalBaseline, type MediaBaseline } from "../domain/local-state";
 import { extractAttachmentReferences } from "../domain/attachmentReferences";
 import { hasPendingUpload } from "../domain/sync-state";
 import type { PushAttachmentPayload } from "@integrations/server/keepApi";
@@ -151,14 +151,18 @@ export async function collectNotesToPush(plugin: KeepSidianPlugin, forcePaths: r
 			try { localMedia = await captureLocalMedia(adapter, filePath, content); } catch { /* Unknown state stays eligible through timestamp fallback. */ }
 			const localState = await localStateBaseline(adapter, filePath, content, localMedia);
 			const storedState = storedLocalBaseline(content);
-			const contentChanged = storedState ? localState === undefined || storedState !== localState : undefined;
+			const contentChanged = storedState ? !(await isLocalStateUnchanged(adapter, filePath, content, localMedia)) : undefined;
 			const modifiedSinceLastSync = pendingUpload || contentChanged === true || (contentChanged === undefined && (!roundedLastSyncedDate || modifiedDate === null || modifiedDate.getTime() > roundedLastSyncedDate.getTime()));
 			// A download timestamp has never acknowledged local media. Retain all
 			// referenced bytes while this note has a durable pending upload.
 			const { payloads, updatedAttachments, missingAttachments } = await collectAttachments(adapter, content, filePath, dirnameSafe(filePath), pendingUpload || contentChanged === true ? null : lastSyncedDate);
 			const shouldPush = modifiedSinceLastSync || (contentChanged === undefined && payloads.length > 0) || !lastSyncedDate || forced.has(normalizePathSafe(filePath));
 			const relativePath = normalizeRelativePath(filePath, saveLocation);
-			const title = getFrontmatterStringValue(frontmatterDict, "Title") || deriveNoteTitle(relativePath);
+			const untitledFileName = getFrontmatterStringValue(frontmatterDict, "KeepSidianUntitledFileName");
+			const sourceFileName = getFrontmatterStringValue(frontmatterDict, "KeepSidianSourceFileName");
+			const sourceTitle = getFrontmatterStringValue(frontmatterDict, "KeepSidianSourceTitle");
+			const filename = filePath.split("/").pop()!;
+			const title = getFrontmatterStringValue(frontmatterDict, "Title") || (sourceFileName?.normalize("NFC") === filename.normalize("NFC") && sourceTitle !== undefined ? sourceTitle : untitledFileName?.normalize("NFC") === filename.normalize("NFC") ? "" : deriveNoteTitle(relativePath));
 			if (!shouldPush) {
 				skippedNotes.push({ path: filePath, reason: "up-to-date" });
 				continue;
