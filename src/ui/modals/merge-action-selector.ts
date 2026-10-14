@@ -1,3 +1,4 @@
+import { t } from "../../lang/ui";
 import type { MergeAction, SyncPlan } from "@types";
 import { MERGE_ACTION_OPTIONS, hasMergeCandidates, normalizeMergeAction } from "@features/keep/domain/merge-action";
 
@@ -19,19 +20,19 @@ export function renderMergeActionSelector(
 	const label = container.ownerDocument.createElement("label");
 	label.className = "keepsidian-sync-plan-merge-action keepsidian-support-links keepsidian-support-label";
 	const caption = container.ownerDocument.createElement("span");
-	caption.textContent = "Merge action:";
+	caption.textContent = t("merge.caption");
 	label.appendChild(caption);
 	const select = container.ownerDocument.createElement("select");
-	select.setAttribute("aria-label", "Merge action");
+	select.setAttribute("aria-label", t("merge.label"));
 	select.setAttribute("data-keepsidian-role", "merge-action");
 	select.disabled = disabled;
 	select.title = plan.stage === "upload"
-		? "Uploads use the vault as source. Conflicting notes are saved locally, skipped, or replaced in Keep according to this choice."
-		: "Downloads use Keep as source. Conflicting notes are saved separately, skipped, or replaced in the vault according to this choice.";
+		? t("merge.uploadHelp")
+		: t("merge.downloadHelp");
 	for (const option of MERGE_ACTION_OPTIONS) {
 		const element = container.ownerDocument.createElement("option");
 		element.value = option.value;
-		element.textContent = option.label;
+		element.textContent = t(({"merge-save-conflicts":"merge.save","merge-skip-conflicts":"merge.skipConflicts","merge-overwrite-conflicts":"merge.overwriteConflicts","overwrite-all":"merge.overwriteAll"} as const)[option.value]);
 		select.appendChild(element);
 	}
 	select.value = normalizeMergeAction(plan.mergeAction);

@@ -11,10 +11,10 @@ it("explains folder removals, selected counts, Keep Trash and preservation of mo
 	const plan = uploadPlan();
 	plan.entries[1].selected = false;
 	const summary = deletionReviewSummary(plan);
-	expect(summary).toContain("1 of 2 folder removals selected");
+	expect(summary).toContain("Folder removals selected: 1 / 2");
 	expect(summary).toContain("No longer in sync folder");
 	expect(summary).toContain("local deletions and moves out");
-	expect(summary).toContain("Google Keep Trash, never permanently deleted");
+	expect(summary).toContain("Google Keep Trash, never permanent deletion");
 	expect(summary).toContain("Moved-out local files stay untouched");
 	expect(summary).toContain("Uncheck a removal");
 	expect(summary).not.toContain("deleted from Obsidian");
@@ -30,7 +30,7 @@ it("uses cancel guidance instead of offering a locked checkbox to non-supporters
 it("preserves the existing reverse-direction review wording and recoverable .trash", () => {
 	const plan = uploadPlan();
 	plan.stage = "import";
-	expect(deletionReviewSummary(plan)).toContain("2 notes will be deleted from Obsidian (moved to .trash)");
+	expect(deletionReviewSummary(plan)).toContain("Selected for deletion from Obsidian: 2. Notes move to .trash");
 	expect(deletionReviewSummary(plan)).toContain("Attachments are retained");
 });
 

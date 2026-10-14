@@ -1440,3 +1440,33 @@ If your plugin does not need CSS, delete this file.
 	font-size: var(--font-ui-small);
 	line-height: 1.35;
 }
+/* Localized labels can expand; user titles and paths retain their own direction. */
+.keepsidian-localized-settings .setting-item-info,
+.keepsidian-sync-plan-row-body {
+	min-inline-size: 0;
+	overflow-wrap: anywhere;
+}
+.keepsidian-localized-settings .setting-item-control {
+	flex-wrap: wrap;
+}
+.keepsidian-localized-settings button,
+.keepsidian-modal-actions button,
+.keepsidian-sync-plan-chip {
+	height: auto;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+.keepsidian-sync-plan-row-title,
+.keepsidian-sync-plan-row-path {
+	unicode-bidi: plaintext;
+	overflow-wrap: anywhere;
+}
+@media (max-width: 520px) {
+	.keepsidian-localized-settings .setting-item {
+		flex-wrap: wrap;
+	}
+	.keepsidian-localized-settings .setting-item-control {
+		max-inline-size: 100%;
+		margin-inline-start: 0;
+	}
+}

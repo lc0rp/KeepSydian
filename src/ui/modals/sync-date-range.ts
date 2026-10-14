@@ -1,3 +1,4 @@
+import { t } from "../../lang/ui";
 import type { DownloadScope } from "@types";
 
 const INPUT_FORMAT = "YYYY-MM-DD HH:MM";
@@ -11,10 +12,10 @@ interface ParsedInput {
 
 function parseInput(value: string, field: "start" | "end", now: number): ParsedInput {
 	const trimmed = value.trim();
-	const name = field === "start" ? "custom date" : "custom end date";
-	if (!trimmed) return { error: `Choose a ${name}.` };
+	const invalid = () => t(field === "start" ? "scope.invalidStart" : "scope.invalidEnd");
+	if (!trimmed) return { error: t("scope.missingStart") };
 	const match = trimmed.match(INPUT_PATTERN);
-	if (!match) return { error: `Choose a valid ${name}.` };
+	if (!match) return { error: invalid() };
 	const [, yearText, monthText, dayText, hourText, minuteText] = match;
 	const year = Number(yearText);
 	const month = Number(monthText);
@@ -30,10 +31,10 @@ function parseInput(value: string, field: "start" | "end", now: number): ParsedI
 		parsed.getHours() !== hour ||
 		parsed.getMinutes() !== minute
 	) {
-		return { error: `Choose a valid ${name}.` };
+		return { error: invalid() };
 	}
 	if (parsed.getTime() > now) {
-		return { error: field === "start" ? "Custom date must be in the past." : "Custom end date must be in the past." };
+		return { error: field === "start" ? t("scope.startPast") : t("scope.endPast") };
 	}
 	return { iso: parsed.toISOString() };
 }
@@ -47,7 +48,7 @@ export function parseCustomScopeRange(
 	const end = until.trim() ? parseInput(until, "end", now) : {};
 	const endError =
 		start.iso && end.iso && Date.parse(start.iso) >= Date.parse(end.iso)
-			? "End date must be after the start date."
+			? t("scope.endAfterStart")
 			: end.error;
 	return {
 		scope: { kind: "custom-since", since: start.iso, ...(end.iso ? { until: end.iso } : {}) },
@@ -72,16 +73,16 @@ export function renderCustomScopeInputs(
 	const createField = (field: "start" | "end", value: string) => {
 		const wrap = containerEl.createEl("label", { cls: "keepsidian-sync-center-scope-input-wrap" });
 		wrap.createEl("span", {
-			text: field === "start" ? "Start:" : "End:",
+			text: field === "start" ? t("scope.start") : t("scope.end"),
 			cls: "keepsidian-sync-center-scope-input-label",
 		});
 		const input = wrap.createEl("input", { cls: "keepsidian-sync-center-scope-input" });
 		input.type = "text";
 		input.value = value;
-		input.placeholder = field === "start" ? INPUT_FORMAT : "Now (at sync start)";
+		input.placeholder = field === "start" ? INPUT_FORMAT : t("scope.now");
 		input.autocomplete = "off";
 		input.disabled = state.disabled;
-		input.setAttribute("aria-label", `Custom ${field} date (${INPUT_FORMAT})`);
+		input.setAttribute("aria-label", `${t(field === "start" ? "scope.start" : "scope.end")} (${INPUT_FORMAT})`);
 		input.setAttribute("data-keepsidian-role", field === "start" ? "custom-since-input" : "custom-until-input");
 		const helper = containerEl.createEl("div", { cls: "keepsidian-sync-center-scope-helper" });
 		helper.id = `${rangeId}-${field}-help`;
@@ -93,10 +94,10 @@ export function renderCustomScopeInputs(
 	const syncHelpers = () => {
 		const parsed = parseCustomScopeRange(start.input.value, end.input.value);
 		start.helper.textContent =
-			parsed.startError ?? `Use ${INPUT_FORMAT}. Notes changed after this date will be included.`;
+			parsed.startError ?? t("scope.startHelp",{format:INPUT_FORMAT});
 		end.helper.textContent =
 			parsed.endError ??
-			`Use ${INPUT_FORMAT}. Notes changed before this date will be included. Leave blank to use the time sync starts.`;
+			t("scope.endHelp",{format:INPUT_FORMAT});
 		start.helper.classList.toggle("is-warning", Boolean(parsed.startError));
 		end.helper.classList.toggle("is-warning", Boolean(parsed.endError));
 		start.input.setAttribute("aria-invalid", String(Boolean(parsed.startError)));

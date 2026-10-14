@@ -65,6 +65,7 @@ interface MockSliderComponent {
 }
 
 interface MockDropdownComponent {
+ selectEl: HTMLSelectElement;
 	addOption: jest.Mock<MockDropdownComponent, [string, string]>;
 	addOptions: jest.Mock<MockDropdownComponent, [Record<string, string>]>;
 	setValue: jest.Mock<MockDropdownComponent, [string]>;
@@ -201,6 +202,7 @@ const createMockSliderComponent = (inputEl: HTMLInputElement, createEl: CreateEl
 
 const createMockDropdownComponent = (selectEl: HTMLSelectElement): MockDropdownComponent => {
 	const component: MockDropdownComponent = {
+		selectEl,
 		addOption: jest.fn(),
 		addOptions: jest.fn(),
 		setValue: jest.fn(),
@@ -563,7 +565,7 @@ describe("KeepSidianSettingsTab UI interactions", () => {
 
 		expect(tokenStatus).not.toBeNull();
 		expect(tokenStatus?.classList.contains("keepsidian-hidden")).toBe(false);
-		expect(tokenStatus?.textContent).toContain("Retrieved successfully");
+		expect(tokenStatus?.textContent).toContain("Token retrieved");
 	});
 
 	test("helper retrieval button launches installed helper", async () => {
@@ -602,7 +604,7 @@ describe("KeepSidianSettingsTab UI interactions", () => {
 		await tabInternals.addSyncTokenSetting(tab.containerEl);
 
 		const status = tab.containerEl.querySelector(".keepsidian-token-helper-availability");
-		expect(status?.textContent).toBe("Wizard download needed.");
+		expect(status?.textContent).toBe("Download the wizard to continue.");
 		expect(status?.classList).toContain("is-missing");
 	});
 
@@ -676,7 +678,7 @@ describe("KeepSidianSettingsTab UI interactions", () => {
 
 			await tabInternals.addSaveLocationSetting(container);
 
-			expect(container.textContent).toContain("Location preview:- your notes will be saved here:");
+			expect(container.textContent).toContain("Your notes will be saved here:");
 			expect(container.textContent).toContain("<vault>/KeepSidian/Note.md");
 
 			const saveLocationSetting = findSettingByLabel(container, "Save location in vault");
@@ -763,7 +765,7 @@ describe("KeepSidianSettingsTab UI interactions", () => {
 		subscriptionServiceMock.isSubscriptionActive.mockResolvedValue(true);
 		await tabInternals.addAutoSyncSettings(container);
 
-		const backupSetting = findSettingByLabel(container, "Confirm opt in");
+		const backupSetting = findSettingByLabel(container, "Opt in to two-way sync");
 		const manualSetting = findSettingByLabel(container, "Enable two-way sync");
 
 		const backupToggle = backupSetting?.querySelector('input[type="checkbox"]') as HTMLInputElement | undefined;
@@ -797,7 +799,7 @@ describe("KeepSidianSettingsTab UI interactions", () => {
 		subscriptionServiceMock.isSubscriptionActive.mockResolvedValue(true);
 		await tabInternals.addAutoSyncSettings(container);
 
-		const backupSetting = findSettingByLabel(container, "Confirm opt in");
+		const backupSetting = findSettingByLabel(container, "Opt in to two-way sync");
 		const manualSetting = findSettingByLabel(container, "Enable two-way sync");
 		const autoSetting = findSettingByLabel(container, "Enable two-way background sync");
 
@@ -884,7 +886,7 @@ describe("KeepSidianSettingsTab UI interactions", () => {
 		subscriptionServiceMock.isSubscriptionActive.mockResolvedValue(true);
 		await tabInternals.addAutoSyncSettings(container);
 
-		const backupSetting = findSettingByLabel(container, "Confirm opt in");
+		const backupSetting = findSettingByLabel(container, "Opt in to two-way sync");
 		const manualSetting = findSettingByLabel(container, "Enable two-way sync");
 		const autoSetting = findSettingByLabel(container, "Enable two-way background sync");
 

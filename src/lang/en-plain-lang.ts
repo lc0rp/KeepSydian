@@ -1,5 +1,7 @@
+import { uiEn } from "./ui-en";
 /** Plain-language English source. Original en.ts is preserved; see PLAIN_LANGUAGE_REVIEW.md. */
 export const en = {
+	...uiEn,
 	// src/app/commands.ts — labels only; command IDs must remain stable.
 	"commands.syncNow": "Sync now",
 	"commands.openSyncCenter": "Open sync center",

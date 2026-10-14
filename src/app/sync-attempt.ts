@@ -1,3 +1,4 @@
+import {t} from "../lang/ui";
 import { Notice } from "obsidian";
 import type KeepSidianPlugin from "@app/main";
 import type { DownloadScope, SyncMode } from "@types";
@@ -64,7 +65,7 @@ function safeCutoff(value: unknown): string | undefined {
 export function formatAttemptSummary(attempt: LastSyncAttempt): string {
 	const outcome =
 		attempt.outcome ?? (attempt.phase === "review" ? "ready for review" : "interrupted before a recorded outcome");
-	return `Last attempt ${attempt.id}: ${outcome} (${attempt.phase}, ${attempt.fetchedCount} fetched).${attempt.logUnavailable ? " Sync log unavailable." : ""}`;
+	return t("attempt.summary",{id:attempt.id,outcome:t(outcome === "success" ? "attempt.success" : outcome === "failed" ? "attempt.failed" : outcome === "canceled" ? "attempt.canceled" : outcome === "abandoned" ? "attempt.abandoned" : "attempt.incomplete"),notes:t("sync.notes",{count:attempt.fetchedCount})}) + (attempt.logUnavailable ? " " + t("attempt.logUnavailable") : "");
 }
 
 /** One owner spans preflight, review and both stages of an execution. */
@@ -177,12 +178,7 @@ export class SyncAttempt {
 		const classified = safeSyncError(error);
 		const httpStatus = classified.httpStatus ?? this.status;
 		const errorKind = classified.errorKind;
-		const reason = httpStatus
-			? `HTTP ${httpStatus}.`
-			: errorKind === "parse"
-				? "Invalid server response."
-				: "The operation could not be completed.";
-		return `${reason} Attempt ${this.id}.${this.unavailable ? " Sync log unavailable; check vault storage permissions." : " Open the sync log for details."}`;
+		return t("attempt.error",{reason:httpStatus ? `HTTP ${httpStatus}.` : errorKind === "parse" ? t("errors.parse") : t("sync.error.generic"),id:this.id,help:this.unavailable ? t("attempt.logUnavailable") : t("sync.openLog")});
 	}
 
 	private fallback(): void {
@@ -259,7 +255,7 @@ export class SyncAttempt {
 				this.fallback();
 				summary.logUnavailable = true;
 			}
-			if (outcome && this.plugin.statusTextEl) this.plugin.statusTextEl.textContent = `Last attempt ${outcome}`;
+			if (outcome && this.plugin.statusTextEl) this.plugin.statusTextEl.textContent = formatAttemptSummary(summary);
 		});
 		return this.writes;
 	}

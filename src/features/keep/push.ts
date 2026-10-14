@@ -1,3 +1,4 @@
+import { t } from "../../lang/ui";
 import { Notice } from "obsidian";
 import type KeepSidianPlugin from "@app/main";
 import { normalizePathSafe } from "@services/paths";
@@ -98,7 +99,7 @@ export async function pushGoogleKeepNotes(plugin: KeepSidianPlugin, callbacks?: 
 			}
 			await flushLogSync(plugin, { batchKey: "push:skipped" });
 		}
-		if (notesToPush.length === 0) { new Notice("No Google Keep notes to push."); return 0; }
+		if (notesToPush.length === 0) { new Notice(t("notices.noUploads")); return 0; }
 		callbacks?.setTotalNotes?.(notesToPush.length);
 		// A later scheduled/legacy upload must not bypass conflict review for a
 		// durable pending merge that originated in the manual Sync Center.
@@ -210,10 +211,10 @@ export async function pushGoogleKeepNotes(plugin: KeepSidianPlugin, callbacks?: 
 		}
 		if ((callbacks?.attempt || mergeAction) && firstFailure !== undefined) throw firstFailure;
 		throwIfSyncCancelled(plugin);
-		new Notice(mergeAction ? "Upload plan completed. See the results for saved or skipped conflicts." : "Pushed Google Keep notes.");
+		new Notice(mergeAction ? t("notices.uploadPlanComplete") : t("notices.uploadComplete"));
 		return successCount;
 	} catch (error: unknown) {
 		if (isSyncCancellationError(error)) throw error;
-		new Notice("Failed to push notes."); throw error;
+		new Notice(t("notices.uploadFailed")); throw error;
 	}
 }

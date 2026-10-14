@@ -1,15 +1,16 @@
+import { t } from "../../lang/ui";
 import type { SyncPlan, SyncPlanEntry } from "@types";
 
 export function deletionReviewSummary(plan: SyncPlan): string {
 	const deletions = plan.entries.filter((entry) => entry.action === "delete");
 	const selected = deletions.filter((entry) => entry.selectable && entry.selected).length;
 	if (plan.stage !== "upload") {
-		return `${selected} note${selected === 1 ? "" : "s"} will be deleted from Obsidian (moved to .trash). Uncheck any deletion to keep the local note. Attachments are retained.`;
+		return t("deletion.download",{selected});
 	}
 	const selection = deletions.some((entry) => entry.selectable && !entry.selectionLocked)
-		? "Uncheck a removal to leave its Google Keep note unchanged."
-		: "Existing supporter selection locks apply; cancel this plan to leave all Google Keep notes unchanged.";
-	return `${selected} of ${deletions.length} folder removal${deletions.length === 1 ? "" : "s"} selected. Rows labeled No longer in sync folder include local deletions and moves out of the configured folder. Selected notes will be moved to Google Keep Trash, never permanently deleted. Moved-out local files stay untouched. ${selection} Unchecked removals are not downloaded again in this run.`;
+		? t("deletion.selection")
+		: t("deletion.locked");
+	return t("deletion.upload",{selected,total:deletions.length,selection});
 }
 
 /** A refresh in the same reviewed run must not silently reselect a removal. */

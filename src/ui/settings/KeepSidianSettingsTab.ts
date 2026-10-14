@@ -1,3 +1,5 @@
+import { t } from "../../lang/ui";
+import { normalizeLanguagePreference, refreshUiLanguage } from "../../lang/ui";
 import KeepSidianPlugin from "main";
 import { PluginSettingTab, App, Notice, Platform, Setting } from "obsidian";
 import { exchangeOauthToken } from "../../integrations/google/keepToken";
@@ -53,15 +55,44 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 	}
 
 	private async renderSettings(): Promise<void> {
-		const { containerEl } = this;
-		containerEl.empty();
+		this.containerEl.empty();
+		// Each async render owns a child. A superseded render can only finish in its detached child.
+		const containerEl = this.containerEl.createDiv();
+		containerEl.classList.add("keepsidian-localized-settings");
+		new Setting(containerEl).setName(t("language.heading")).setHeading();
+		new Setting(containerEl)
+			.setName(t("language.name"))
+			.setDesc(t("language.description"))
+			.addDropdown((dropdown) => {
+				dropdown.selectEl.setAttribute("data-keepsidian-role", "language");
+				dropdown.addOptions({ system: t("language.system"), en: "English", zh: "简体中文 (草稿)", ru: "Русский (черновик)", de: "Deutsch (Entwurf)" })
+					.setValue(this.plugin.settings.language ?? "system")
+					.onChange(async (value) => {
+						this.plugin.settings.language = normalizeLanguagePreference(value);
+						await this.plugin.saveSettings();
+						refreshUiLanguage();
+						this.display();
+					});
+			});
+		new Setting(containerEl)
+			.setName(t("language.drafts"))
+			.setDesc(t("language.draftDescription"))
+			.setClass("keepsidian-draft-translations")
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.useDraftTranslations === true).onChange(async (value) => {
+					this.plugin.settings.useDraftTranslations = value;
+					await this.plugin.saveSettings();
+					refreshUiLanguage();
+					this.display();
+				});
+			});
 
 		this.addSupportSection(containerEl);
-		new Setting(containerEl).setName("Retrieve sync token").setHeading();
+		new Setting(containerEl).setName(t("settings.retrieve")).setHeading();
 		this.addEmailSetting(containerEl);
 		this.addSyncTokenSetting(containerEl);
 		containerEl.createEl("hr", { cls: "keepsidian-settings-hr" });
-		new Setting(containerEl).setName("Notes").setHeading();
+		new Setting(containerEl).setName(t("common.notes")).setHeading();
 		this.addSaveLocationSetting(containerEl);
 		containerEl.createEl("hr", { cls: "keepsidian-settings-hr" });
 		await this.addAutoSyncSettings(containerEl);
@@ -126,11 +157,11 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 
 	private async handleTokenHelperLaunch(): Promise<void> {
 		if (!this.plugin.settings.email || !this.isValidEmail(this.plugin.settings.email)) {
-			new Notice("Please enter a valid email address before retrieving the token.");
+			new Notice(t("notices.invalidEmail"));
 			return;
 		}
 		if (!Platform.isDesktopApp) {
-			new Notice("Token retrieval helper is only available on desktop. Paste a token instead.");
+			new Notice(t("notices.helperDesktopOnly"));
 			return;
 		}
 		const sessionMetadata = {
@@ -140,11 +171,11 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 		};
 		await startRetrievalWizardSession(this.plugin, sessionMetadata);
 		await logRetrievalWizardEvent("info", "Token helper button clicked", sessionMetadata);
-		const notice = new Notice("Checking helper version...", 0);
+		const notice = new Notice(t("helper.checking"), 0);
 		try {
 			const state = await getTokenHelperState(this.plugin);
 			if (state.status === "ready") {
-				notice.setMessage("Launching helper...");
+				notice.setMessage(t("onboarding.helper.launching"));
 				await this.runInstalledTokenHelper(notice);
 				return;
 			}
@@ -172,12 +203,12 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 				}).open();
 				return;
 			}
-			new Notice(`Token helper is unavailable. Use the manual method below. ${state.reason}`);
+			new Notice(t("helper.manualNext"));
 			await logRetrievalWizardEvent("error", "Token helper unavailable", { reason: state.reason });
 			await endRetrievalWizardSession("error", { flow: "token-helper", reason: state.reason });
 		} catch (error) {
 			notice.hide();
-			const message = error instanceof Error ? error.message : "Token helper failed to retrieve a token.";
+			const message = error instanceof Error ? error.message : t("helper.failed");
 			new Notice(message);
 			await logRetrievalWizardEvent("error", "Token helper failed", { errorMessage: message });
 			await endRetrievalWizardSession("error", {

@@ -1,3 +1,5 @@
+import { t } from "../../lang/ui";
+import { localizePluginLabel } from "../../lang/display";
 import { App, Modal, Setting } from "obsidian";
 import {
 	TOKEN_HELPER_SOURCE_URL,
@@ -46,25 +48,25 @@ export class TokenHelperInstallModal extends Modal {
 		contentEl.empty();
 		modalEl.classList.add("keepsidian-token-helper-modal-shell");
 		contentEl.classList.add("keepsidian-token-helper-modal");
-		contentEl.createEl("h2", { text: "Install KeepSidian token helper" });
+		contentEl.createEl("h2", { text: t("onboarding.helper.title") });
 		if (this.mode === "update") {
 			contentEl.createEl("p", {
-				text: "Your installed helper is out of date. KeepSidian needs the latest helper version to keep token retrieval reliable. Update it now, or use the manual method instead.",
+				text: t("helper.outdated"),
 			});
 		}
 		if (this.mode === "replace") {
 			contentEl.createEl("p", {
-				text: "Your installed helper is not compatible with this KeepSidian version. Install the latest compatible helper now, or use the manual method instead.",
+				text: t("helper.incompatible"),
 			});
 		}
 		contentEl.createEl("p", {
-			text: "KeepSidian can retrieve your Google Keep sync token with a separate open-source helper. The helper is a one-time download that opens a real browser window, guides the sign-in flow, captures the local OAuth cookie, and returns it directly to KeepSidian on this computer.",
+			text: t("onboarding.helper.description"),
 		});
 		contentEl.createEl("p", {
-			text: "The helper is not part of the Obsidian community plugin bundle and only runs when you launch it from this screen. You can review the source code and release checksums before continuing.",
+			text: t("onboarding.helper.disclosure"),
 		});
 		const sourceLink = contentEl.createEl("a", {
-			text: `Source code: ${TOKEN_HELPER_SOURCE_URL}`,
+			text: t("onboarding.helper.source",{url:TOKEN_HELPER_SOURCE_URL}),
 			attr: {
 				href: TOKEN_HELPER_SOURCE_URL,
 				target: "_blank",
@@ -76,17 +78,17 @@ export class TokenHelperInstallModal extends Modal {
 		this.progressFillEl = progressEl.createDiv("keepsidian-token-helper-progress__fill");
 		this.progressTextEl = contentEl.createDiv({
 			cls: "keepsidian-token-helper-progress__text",
-			text: "Ready.",
+			text: t("common.ready"),
 		});
 		new Setting(contentEl)
 			.addButton((button) => {
 				button
 					.setButtonText(
 						this.mode === "update"
-							? "Update helper"
+							? t("onboarding.helper.update")
 							: this.mode === "replace"
-								? "Install compatible helper"
-								: "Download helper"
+								? t("onboarding.helper.installCompatible")
+								: t("onboarding.helper.download")
 					)
 					.setCta()
 					.onClick(() => {
@@ -95,13 +97,13 @@ export class TokenHelperInstallModal extends Modal {
 				this.primaryButtonEl = button.buttonEl;
 			})
 			.addButton((button) =>
-				button.setButtonText("Use manual method").onClick(() => {
+				button.setButtonText(t("onboarding.helper.manual")).onClick(() => {
 					this.onManual();
 					this.close();
 				})
 			)
 			.addButton((button) =>
-				button.setButtonText("Cancel").onClick(() => {
+				button.setButtonText(t("common.cancel")).onClick(() => {
 					this.close();
 				})
 			);
@@ -115,7 +117,7 @@ export class TokenHelperInstallModal extends Modal {
 
 	private updateProgress(progress: TokenHelperProgress): void {
 		if (this.progressTextEl) {
-			this.progressTextEl.textContent = progress.message;
+			this.progressTextEl.textContent = localizePluginLabel(progress.message);
 		}
 		if (this.progressFillEl && typeof progress.percent === "number") {
 			this.progressFillEl.style.width = `${Math.max(0, Math.min(100, progress.percent))}%`;
@@ -128,7 +130,7 @@ export class TokenHelperInstallModal extends Modal {
 		}
 		try {
 			await installTokenHelper(this.plugin, this.manifest, (progress) => this.updateProgress(progress));
-			this.updateProgress({ phase: "launch", percent: 100, message: "Launching helper..." });
+			this.updateProgress({ phase: "launch", percent: 100, message: t("onboarding.helper.launching") });
 			await runTokenHelper(this.plugin, async (event) => {
 				if (event.type === "progress") {
 					this.updateProgress(event);

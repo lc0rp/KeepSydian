@@ -48,15 +48,15 @@ it("shows the deletion count and lets non-supporters deselect without unlocking 
 	const { modal } = setup(prepared);
 	await modal.beginReview();
 	expect(button(modal, "Delete 2")).toBeTruthy();
-	expect(modal.contentEl.textContent).toContain("2 notes will be deleted from Obsidian");
-	expect(modal.contentEl.textContent).toContain("moved to .trash");
+	expect(modal.contentEl.textContent).toContain("Selected for deletion from Obsidian: 2");
+	expect(modal.contentEl.textContent).toContain("move to .trash");
 	const toggle = modal.contentEl.querySelector<HTMLInputElement>('input[aria-label="Delete from Obsidian: One"]')!;
 	expect(toggle.disabled).toBe(false);
 	expect(modal.contentEl.querySelector<HTMLInputElement>('input[aria-label="Create: New"]')!.disabled).toBe(true);
 	toggle.click();
 	await flushUI();
 	expect(prepared.plan.entries[0].selected).toBe(false);
-	expect(modal.contentEl.textContent).toContain("1 note will be deleted from Obsidian");
+	expect(modal.contentEl.textContent).toContain("Selected for deletion from Obsidian: 1");
 	button(modal, "Delete 2").click();
 	await flushUI();
 	expect(modal.contentEl.querySelectorAll(".keepsidian-sync-plan-row")).toHaveLength(2);
@@ -67,7 +67,7 @@ it("bulk deselection leaves a deletion-only plan with zero deletions and Execute
 	await modal.beginReview();
 	modal.contentEl.querySelector<HTMLInputElement>(".keepsidian-sync-plan-select-all input")!.click();
 	await flushUI();
-	expect(modal.contentEl.textContent).toContain("0 notes will be deleted from Obsidian");
+	expect(modal.contentEl.textContent).toContain("Selected for deletion from Obsidian: 0");
 	expect(button(modal, "Execute").disabled).toBe(true);
 });
 
@@ -99,8 +99,8 @@ it("continues a protected-removal-only two-way download to the upload deletion r
 	const { modal, runSyncPlan } = setup(prepared);
 	runSyncPlan.mockResolvedValue({ nextPlan: upload });
 	await modal.beginReview("two-way");
-	expect(button(modal, "Continue to upload").disabled).toBe(false);
-	button(modal, "Continue to upload").click();
+	expect(button(modal, "Continue to upload notes").disabled).toBe(false);
+	button(modal, "Continue to upload notes").click();
 	await flushUI();
 	expect(runSyncPlan).toHaveBeenCalledTimes(1);
 	expect(modal.contentEl.textContent).toContain("No longer in sync folder");
@@ -129,7 +129,7 @@ it("counts only successful deletions as Deleted while showing failed rows honest
 	await modal.beginReview();
 	button(modal, "Execute").click();
 	await flushUI();
-	expect(button(modal, "Deleted 1/2")).toBeTruthy();
+	expect(button(modal, "Deleted 1 / 2")).toBeTruthy();
 	expect(modal.contentEl.querySelector(".is-failed .keepsidian-sync-plan-row-badge")?.textContent).toBe("Failed");
 });
 

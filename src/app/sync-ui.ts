@@ -1,3 +1,4 @@
+import { t } from "../lang/ui";
 import { Notice, ProgressBarComponent } from "obsidian";
 import type KeepSidianPlugin from "@app/main";
 import { formatAttemptSummary } from "@app/sync-attempt";
@@ -13,10 +14,10 @@ type StatusBarItemElement = HTMLElement & {
 	) => HTMLElementTagNameMap[K];
 };
 
-const SYNC_NOTICE_PREFIX = "Syncing Google Keep Notes...";
+
 
 function getSyncPhaseLabel(plugin: KeepSidianPlugin): string {
-	return plugin.currentSyncPhaseLabel ?? "Syncing";
+	return plugin.currentSyncMode === "push" ? t("sync.mode.upload") : plugin.currentSyncMode === "import" ? t("sync.mode.download") : t("sync.syncing");
 }
 
 function hasSetText(element: HTMLElement | null): element is StatusBarItemElement & {
@@ -32,7 +33,7 @@ function getNoticeControls(notice: Notice | null): Notice | null {
 function formatSyncNoticeMessage(processedNotes: number, totalNotes: number | null): string {
 	const safeProcessed = Number.isFinite(processedNotes) && processedNotes >= 0 ? Math.floor(processedNotes) : 0;
 	const totalLabel = typeof totalNotes === "number" && totalNotes > 0 ? String(totalNotes) : "?";
-	return `${SYNC_NOTICE_PREFIX} ${safeProcessed}/${totalLabel}`;
+	return t("sync.noticeProgress", {processed:safeProcessed,total:totalLabel === "?" ? "?" : totalNotes!});
 }
 
 function updateProgressNotice(plugin: KeepSidianPlugin) {
@@ -132,7 +133,7 @@ export function updateStatusBarSummary(plugin: KeepSidianPlugin) {
 			attempt.updatedAt > summary.timestamp ||
 			(attempt.updatedAt === summary.timestamp && attempt.outcome !== "success"))
 	) {
-		setStatusBarText(plugin, `Last attempt ${attempt.outcome ?? "incomplete"}`);
+		setStatusBarText(plugin, formatAttemptSummary(attempt));
 		setStatusBarTooltip(plugin, formatAttemptSummary(attempt));
 		return;
 	}
@@ -202,11 +203,11 @@ export function finishSyncUI(plugin: KeepSidianPlugin, status: SyncRunStatus | b
 			noticeControls.setMessage(
 				success
 					? normalizedStatus === "warning"
-						? `Synced Google Keep Notes with ${attachmentWarnings} warning${attachmentWarnings === 1 ? "" : "s"}.`
-						: "Synced Google Keep Notes."
+						? t("sync.warningResult",{notes:t("sync.success"),warnings:t("sync.attachmentWarnings",{count:attachmentWarnings})})
+						: t("sync.success")
 					: normalizedStatus === "canceled"
-						? "Canceled Google Keep sync."
-						: "Failed to sync Google Keep Notes."
+						? t("sync.canceled")
+						: t("sync.failedSentence")
 			);
 			const delay = success ? 4000 : normalizedStatus === "canceled" ? 6000 : 10000;
 			const activeNotice = plugin.progressNotice;
@@ -246,15 +247,15 @@ export function finishSyncUI(plugin: KeepSidianPlugin, status: SyncRunStatus | b
 	plugin.progressModal?.setComplete(normalizedStatus, plugin.processedNotes, attachmentWarnings);
 	plugin.progressModal?.setIdleSummary(summary);
 	void Promise.resolve(plugin.saveSettings()).catch(() => {
-		new Notice("KeepSidian: unable to save sync history. Check vault storage permissions.");
+		new Notice(t("sync.historyFailed"));
 	});
 }
 
 export function setTotalNotes(plugin: KeepSidianPlugin, total: number) {
 	if (typeof total !== "number" || total <= 0) return;
 	plugin.totalNotes = total;
-	setStatusBarText(plugin, `Sync: ${plugin.processedNotes}/${total}`);
-	setStatusBarTooltip(plugin, "KeepSidian syncing...");
+	setStatusBarText(plugin, t("sync.countProgress",{label:getSyncPhaseLabel(plugin),processed:plugin.processedNotes,total}));
+	setStatusBarTooltip(plugin, t("sync.syncing"));
 	if (plugin.progressContainerEl) {
 		plugin.progressContainerEl.classList.remove("indeterminate");
 	}
@@ -264,4 +265,11 @@ export function setTotalNotes(plugin: KeepSidianPlugin, total: number) {
 	}
 	plugin.progressModal?.setProgress(plugin.processedNotes, total);
 	updateProgressNotice(plugin);
+}
+
+export function refreshSyncLanguage(plugin: KeepSidianPlugin) {
+ if (plugin.isSyncInProgress()) {
+  setStatusBarText(plugin,t("sync.countProgress",{label:getSyncPhaseLabel(plugin),processed:plugin.processedNotes,total:plugin.totalNotes ?? "?"}));
+  updateProgressNotice(plugin);
+ } else updateStatusBarSummary(plugin);
 }

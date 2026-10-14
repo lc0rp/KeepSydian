@@ -224,8 +224,8 @@ describe("catalog integrity", () => {
 	});
 
 	it("preserves English keys, message shapes, placeholders, filename syntax and factual literals", () => {
-		expect(Object.keys(en).sort()).toEqual(Object.keys(originalEnglish).sort());
-		for (const key of Object.keys(en) as MessageKey[]) {
+		expect(Object.keys(en)).toEqual(expect.arrayContaining(Object.keys(originalEnglish)));
+		for (const key of Object.keys(originalEnglish) as (keyof typeof originalEnglish)[]) {
 			const source = originalEnglish[key];
 			const revised = en[key];
 			expect(typeof revised).toBe(typeof source);
@@ -274,12 +274,17 @@ describe("catalog integrity", () => {
 		}
 	});
 
-	it("keeps all 138 translations draft and avoids English placeholders except the literal email example", () => {
+	it("keeps all translations draft and avoids English placeholders except the literal email example", () => {
 		for (const definition of Object.values(languages).filter((language) => language.status === "draft")) {
-			expect(Object.keys(definition.messages)).toHaveLength(138);
+			expect(Object.keys(definition.messages)).toHaveLength(Object.keys(en).length);
 			for (const [key, message] of Object.entries(definition.messages)) {
-				if (key === "settings.email.placeholder") {
-					expect(message).toBe(en[key]);
+				if (
+					key === "settings.email.placeholder" ||
+					(["colors.ORANGE", "common.start", "scope.start"].includes(key) && definition.locale === "de") ||
+					(typeof message === "string" &&
+						!/[A-Za-z]/.test((en[key as MessageKey] as string).replace(/\{\{\w+\}\}/g, "")))
+				) {
+					expect(message).toBe(en[key as MessageKey]);
 					continue;
 				}
 				expect(message).not.toEqual(en[key as MessageKey]);

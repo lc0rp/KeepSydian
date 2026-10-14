@@ -82,7 +82,7 @@ describe("pushGoogleKeepNotes", () => {
 
 		expect(result).toBe(0);
 		expect(apiPushNotes).not.toHaveBeenCalled();
-		expect(Notice).toHaveBeenCalledWith("No Google Keep notes to push.");
+		expect(Notice).toHaveBeenCalledWith("No notes to upload to Google Keep.");
 	});
 
 	it("pushes modified notes and updates frontmatter", async () => {
@@ -113,7 +113,7 @@ describe("pushGoogleKeepNotes", () => {
 			"Keep/note.md",
 			expect.stringContaining("KeepSidianLastSyncedDate: 2024-02-01T00:00:00.000Z")
 		);
-		expect(Notice).toHaveBeenCalledWith("Pushed Google Keep notes.");
+		expect(Notice).toHaveBeenCalledWith("Uploaded notes to Google Keep.");
 	});
 
 	it("propagates a configured supporter key to upload requests", async () => {
@@ -191,7 +191,7 @@ describe("pushGoogleKeepNotes", () => {
 		(apiPushNotes as jest.Mock).mockRejectedValue(new Error("network failure"));
 
 		await expect(pushGoogleKeepNotes(plugin)).rejects.toThrow("network failure");
-		expect(Notice).toHaveBeenCalledWith("Failed to push notes.");
+		expect(Notice).toHaveBeenCalledWith("Could not upload notes.");
 	});
 
 	it("only pushes KeepSidian notes under the current saveLocation", async () => {

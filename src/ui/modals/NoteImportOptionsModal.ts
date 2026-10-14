@@ -1,3 +1,4 @@
+import { t } from "../../lang/ui";
 import { App, Modal, Setting } from "obsidian";
 import { SubscriptionSettingsTab } from "../settings/SubscriptionSettingsTab";
 import KeepSidianPlugin from "main";
@@ -31,9 +32,9 @@ export class NoteImportOptionsModal extends Modal {
 
 	async onOpen() {
 		const { contentEl } = this;
-		contentEl.createEl("h2", { text: "Download options" });
+		contentEl.createEl("h2", { text: t("sync.downloadOptions") });
 		contentEl.createEl("p", {
-			text: "Thanks for supporting KeepSidian! Customize your download below.",
+			text: t("sync.supporterThanks"),
 		});
 		SubscriptionSettingsTab.displayPremiumFeatures(contentEl, this.plugin, true);
 		let legacyTags = false;
@@ -45,7 +46,7 @@ export class NoteImportOptionsModal extends Modal {
 		new Setting(contentEl)
 			.addButton((btn) =>
 				btn
-					.setButtonText("Import")
+					.setButtonText(t("common.import"))
 					.setCta()
 					.onClick(() => {
 						this.onSubmit({
@@ -56,7 +57,7 @@ export class NoteImportOptionsModal extends Modal {
 					})
 			)
 			.addButton((btn) =>
-				btn.setButtonText("Cancel").onClick(() => {
+				btn.setButtonText(t("common.cancel")).onClick(() => {
 					this.close();
 				})
 			);

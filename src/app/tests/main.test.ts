@@ -167,14 +167,14 @@ describe("KeepSidianPlugin", () => {
 					reportProgress: expect.any(Function),
 				})
 			);
-			expect(Notice).toHaveBeenCalledWith(expect.stringMatching(/Syncing Google Keep Notes\.\.\. 0\/\?/), 0);
+			expect(Notice).toHaveBeenCalledWith("Syncing Google Keep notes: 0 / ?", 0);
 			expect(plugin.progressNotice).not.toBeNull();
 			const statusEl = (plugin.addStatusBarItem as jest.Mock).mock.results[0].value;
 			const tooltipCalls = (statusEl.setAttribute as jest.Mock).mock.calls
 				.filter(([attr]) => attr === "title")
 				.map(([, value]) => value);
-			expect(tooltipCalls).toContain("KeepSidian syncing...");
-			expect(tooltipCalls.some((value: string) => value.startsWith("KeepSidian last synced"))).toBe(true);
+			expect(tooltipCalls).toContain("KeepSidian download...");
+			expect(tooltipCalls.some((value: string) => value.includes("Sync complete."))).toBe(true);
 			expect(plugin.statusTextEl?.textContent).toContain("Last synced");
 			isSubscriptionActiveSpy.mockRestore();
 		});
@@ -217,8 +217,8 @@ describe("KeepSidianPlugin", () => {
 			await plugin.importNotes();
 			await new Promise((resolve) => setTimeout(resolve, 0));
 
-			expect(setMessage).toHaveBeenCalledWith("Syncing Google Keep Notes... 0/2");
-			expect(setMessage).toHaveBeenCalledWith("Syncing Google Keep Notes... 1/2");
+			expect(setMessage).toHaveBeenCalledWith("Syncing Google Keep notes: 0 / 2");
+			expect(setMessage).toHaveBeenCalledWith("Syncing Google Keep notes: 1 / 2");
 
 			isSubscriptionActiveSpy.mockRestore();
 			importMock.mockRestore();

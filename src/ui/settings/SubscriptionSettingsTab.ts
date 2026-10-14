@@ -1,7 +1,8 @@
+import { t } from "../../lang/ui";
 import { Notice, Setting } from "obsidian";
 import KeepSidianPlugin from "main";
 import { KEEPSIDIAN_SERVER_URL } from "../../config";
-import { formatKeepColorSummary } from "../../types/subscription";
+import { formatKeepColorSummary } from "../../lang/display";
 import { KeepColorPickerModal } from "../modals/KeepColorPickerModal";
 import {
 	clearSupporterKeyFromSecretStorage,
@@ -29,7 +30,7 @@ export class SubscriptionSettingsTab {
 		const { sectionEl: containerEl } = this;
 		containerEl.replaceChildren();
 
-		new Setting(containerEl).setName("Exclusive features for project supporters").setHeading();
+		new Setting(containerEl).setName(t("supporter.heading")).setHeading();
 
 		const isActive = await this.plugin.subscriptionService.isSubscriptionActive(forceRefresh);
 
@@ -43,7 +44,7 @@ export class SubscriptionSettingsTab {
 	}
 
 	static displayPremiumFeatures(containerEl: HTMLElement, plugin: KeepSidianPlugin, isActive: boolean): void {
-		const descSuffix = isActive ? "" : " (Available to project supporters)";
+		const descSuffix = isActive ? "" : " (" + t("supporter.available") + ")";
 		const premiumFeatureValues = plugin.settings.premiumFeatures;
 		const persistPremiumFeatureChange = async (applyChange: () => void): Promise<void> => {
 			applyChange();
@@ -82,11 +83,11 @@ export class SubscriptionSettingsTab {
 		// 3.2 Filter Notes
 		applySupporterLock(
 			new Setting(containerEl)
-				.setName("Only include notes containing")
-				.setDesc("Terms to include (comma-separated)." + descSuffix)
+				.setName(t("supporter.include.name"))
+				.setDesc(t("supporter.include.description") + descSuffix)
 				.addText((text) =>
 					text
-						.setPlaceholder("Term 1, term 2, ...")
+						.setPlaceholder(t("supporter.terms.placeholder"))
 						.setValue(premiumFeatureValues.includeNotesTerms.join(", "))
 						.onChange(async (value) => {
 							await persistPremiumFeatureChange(() => {
@@ -101,11 +102,11 @@ export class SubscriptionSettingsTab {
 
 		applySupporterLock(
 			new Setting(containerEl)
-				.setName("Exclude notes containing")
-				.setDesc("Terms to skip (comma-separated)." + descSuffix)
+				.setName(t("supporter.exclude.name"))
+				.setDesc(t("supporter.exclude.description") + descSuffix)
 				.addText((text) =>
 					text
-						.setPlaceholder("Term 1, term 2, ...")
+						.setPlaceholder(t("supporter.terms.placeholder"))
 						.setValue(premiumFeatureValues.excludeNotesTerms.join(", "))
 						.onChange(async (value) => {
 							await persistPremiumFeatureChange(() => {
@@ -120,20 +121,20 @@ export class SubscriptionSettingsTab {
 
 		const colorFilterSetting = applySupporterLock(
 			new Setting(containerEl)
-				.setName("Note colors filter")
-				.setDesc("Select one or more note colors to download." + descSuffix)
+				.setName(t("supporter.colors.name"))
+				.setDesc(t("supporter.colors.description") + descSuffix)
 		);
 		const colorSummaryEl = colorFilterSetting.controlEl.createEl("span", {
 			text: formatKeepColorSummary(premiumFeatureValues.includeColors),
 			cls: "keepsidian-color-filter-summary",
 		});
 		const openColorModalButton = colorFilterSetting.controlEl.createEl("button", {
-			text: "Choose colors",
+			text: t("colors.choose"),
 			cls: "keepsidian-color-filter-button",
 			attr: { type: "button" },
 		});
 		const resetColorFilterButton = colorFilterSetting.controlEl.createEl("button", {
-			text: "Reset",
+			text: t("common.reset"),
 			cls: "keepsidian-color-filter-button",
 			attr: { type: "button" },
 		});
@@ -163,13 +164,13 @@ export class SubscriptionSettingsTab {
 
 		applySupporterLock(
 			new Setting(containerEl)
-				.setName("Pinned note filter")
-				.setDesc("Download all notes, only pinned notes, or only unpinned notes." + descSuffix)
+				.setName(t("supporter.pinned.name"))
+				.setDesc(t("supporter.pinned.description") + descSuffix)
 				.addDropdown((dropdown) => {
 					dropdown
-						.addOption("all", "All notes")
-						.addOption("pinned", "Pinned only")
-						.addOption("unpinned", "Unpinned only");
+						.addOption("all", t("filter.all"))
+						.addOption("pinned", t("filter.pinned"))
+						.addOption("unpinned", t("filter.unpinned"));
 					dropdown.setValue(premiumFeatureValues.pinnedStatus);
 					dropdown.onChange(async (value) => {
 						await persistPremiumFeatureChange(() => {
@@ -181,13 +182,13 @@ export class SubscriptionSettingsTab {
 
 		applySupporterLock(
 			new Setting(containerEl)
-				.setName("Archived note filter")
-				.setDesc("Default is active notes only. Archived-only and all-notes are supporter filters." + descSuffix)
+				.setName(t("supporter.archived.name"))
+				.setDesc(t("supporter.archived.description") + descSuffix)
 				.addDropdown((dropdown) => {
 					dropdown
-						.addOption("active-only", "Active notes only")
-						.addOption("archived-only", "Archived notes only")
-						.addOption("all", "All notes");
+						.addOption("active-only", t("filter.active"))
+						.addOption("archived-only", t("filter.archived"))
+						.addOption("all", t("filter.all"));
 					dropdown.setValue(premiumFeatureValues.archivedStatus);
 					dropdown.onChange(async (value) => {
 						await persistPremiumFeatureChange(() => {
@@ -200,8 +201,8 @@ export class SubscriptionSettingsTab {
 		// 3.3 Title Updates
 		applySupporterLock(
 			new Setting(containerEl)
-				.setName("Smart titles")
-				.setDesc("Suggest titles based on note content. Original title will be saved in note." + descSuffix)
+				.setName(t("supporter.smartTitles.name"))
+				.setDesc(t("supporter.smartTitles.description") + descSuffix)
 				.addToggle((toggle) =>
 					toggle.setValue(premiumFeatureValues.updateTitle).onChange(async (value) => {
 						await persistPremiumFeatureChange(() => {
@@ -214,8 +215,8 @@ export class SubscriptionSettingsTab {
 		// 3.4 Tag Suggestions
 		applySupporterLock(
 			new Setting(containerEl)
-				.setName("Auto-tags")
-				.setDesc("Generate tags based on note content." + descSuffix)
+				.setName(t("supporter.autoTags.name"))
+				.setDesc(t("supporter.autoTags.description") + descSuffix)
 				.addToggle((toggle) =>
 					toggle.setValue(premiumFeatureValues.suggestTags).onChange(async (value) => {
 						await persistPremiumFeatureChange(() => {
@@ -228,8 +229,8 @@ export class SubscriptionSettingsTab {
 
 		maxTagsSetting = applySupporterLock(
 			new Setting(containerEl)
-				.setName("Maximum tags")
-				.setDesc("Maximum number of tags to generate." + descSuffix)
+				.setName(t("settings.maxTags"))
+				.setDesc(t("settings.maxTagsDescription") + descSuffix)
 				.addSlider((slider) =>
 					slider
 						.setLimits(1, 10, 1)
@@ -245,8 +246,8 @@ export class SubscriptionSettingsTab {
 
 		tagPrefixSetting = applySupporterLock(
 			new Setting(containerEl)
-				.setName("Tag prefix")
-				.setDesc("Prefix to identify generated tags (leave empty for none)." + descSuffix)
+				.setName(t("settings.tagPrefix"))
+				.setDesc(t("settings.tagPrefixDescription") + descSuffix)
 				.addText((text) =>
 					text
 						.setValue(premiumFeatureValues.tagPrefix)
@@ -262,8 +263,8 @@ export class SubscriptionSettingsTab {
 
 		limitSetting = applySupporterLock(
 			new Setting(containerEl)
-				.setName("Limit to existing tags")
-				.setDesc("Only generate tags that already exist in your vault." + descSuffix)
+				.setName(t("settings.existingTags"))
+				.setDesc(t("settings.existingTagsDescription") + descSuffix)
 				.addToggle((toggle) =>
 					toggle.setValue(premiumFeatureValues.limitToExistingTags).onChange(async (value) => {
 						await persistPremiumFeatureChange(() => {
@@ -289,19 +290,19 @@ export class SubscriptionSettingsTab {
 	private async displayInactiveSubscriber(): Promise<void> {
 		const { sectionEl: containerEl } = this;
 
-		containerEl.createEl("em", { text: "Support development and unlock advanced features" });
+		containerEl.createEl("em", { text: t("supporter.pitch") });
 
 		const benefitsList = containerEl.createEl("ul", {
 			attr: { style: "font-size: 0.9em" },
 		});
 		[
-			"Smart titles: Auto-suggestions from note content.",
-			"Auto-tags: Instant tag generation & management.",
-			"Advanced filters: Sync only what you need.",
-			"Priority support: Your questions answered first.",
-			"Two-way background sync: Keep notes updated everywhere, quietly.",
-			"Early access: First to get new features.",
-			"And more!",
+			t("supporter.benefitTitles"),
+			t("supporter.benefitTags"),
+			t("supporter.benefitFilters"),
+			t("supporter.benefitSupport"),
+			t("supporter.benefitSync"),
+			t("supporter.benefitAccess"),
+			t("supporter.more"),
 		].forEach((benefit) => {
 			const li = benefitsList.createEl("li");
 			const [title, description] = benefit.split(":");
@@ -317,14 +318,14 @@ export class SubscriptionSettingsTab {
 		});
 
 		const subscribeSetting = new Setting(containerEl)
-			.setName("Support KeepSidian monthly or annually")
+			.setName(t("supporter.subscribe"))
 			.setDesc(
-				"Support the development of KeepSidian and get access to the features below, priority support and early access to new features."
+				t("supporter.subscribeDescription")
 			);
 
 		const subscribeUrl = `${KEEPSIDIAN_SERVER_URL}/subscribe`;
 		const subscribeLink = subscribeSetting.controlEl.createEl("a", {
-			text: "Support this project",
+			text: t("supporter.support"),
 			attr: {
 				href: subscribeUrl,
 				target: "_blank",
@@ -336,10 +337,10 @@ export class SubscriptionSettingsTab {
 		subscribeLink.setAttribute("role", "button");
 
 		new Setting(containerEl)
-			.setName("Already supporting?")
-			.setDesc("Recheck your status and unlock supporter settings if billing is active.")
+			.setName(t("supporter.already"))
+			.setDesc(t("supporter.recheckDescription"))
 			.addButton((button) =>
-				button.setButtonText("I am a supporter").onClick(async () => {
+				button.setButtonText(t("supporter.iSupport")).onClick(async () => {
 					await this.display(true);
 				})
 			);
@@ -352,20 +353,20 @@ export class SubscriptionSettingsTab {
 		const subscriptionInfo = await this.plugin.subscriptionService.checkSubscription();
 		const planId = subscriptionInfo?.plan_details?.plan_id;
 		const supporterSetting = new Setting(containerEl)
-			.setName(planId ? `✅ Active supporter (Plan: ${planId})` : "✅ Active supporter")
-			.setDesc("Thank you for your support! Access supporter-exclusive settings below.")
+			.setName(planId ? t("supporter.activePlan",{planId}) : t("supporter.active"))
+			.setDesc(t("supporter.thanks"))
 			// .setClass("subscription-active")
 			.addExtraButton((button) =>
 				button
 					.setIcon("refresh-cw")
-					.setTooltip("Check supporter status")
+					.setTooltip(t("supporter.check"))
 					.onClick(async () => {
 						await this.display(true);
 					})
 			);
 
 		const manageLink = supporterSetting.controlEl.createEl("a", {
-			text: "Open billing portal",
+			text: t("supporter.billing"),
 			attr: {
 				href: SubscriptionSettingsTab.buildManageSubscriptionUrl(
 					this.plugin.settings.supporterKeyConfigured ? "" : this.plugin.settings.email
@@ -380,8 +381,8 @@ export class SubscriptionSettingsTab {
 
 		if (subscriptionInfo?.metering_info) {
 			new Setting(containerEl)
-				.setName("Usage")
-				.setDesc(`${subscriptionInfo.metering_info.usage} / ${subscriptionInfo.metering_info.limit} notes synced`);
+				.setName(t("supporter.usageLabel"))
+				.setDesc(t("supporter.usage",{usage:subscriptionInfo.metering_info.usage,limit:subscriptionInfo.metering_info.limit}));
 		}
 
 		if (this.plugin.settings.supporterKeyConfigured) {
@@ -393,18 +394,18 @@ export class SubscriptionSettingsTab {
 		const hasConfiguredKey = this.plugin.settings.supporterKeyConfigured;
 		const keyIsReadable = Boolean(this.plugin.settings.supporterKey);
 		const keySetting = new Setting(containerEl)
-			.setName("Use a supporter key")
+			.setName(t("supporter.useKey"))
 			.setDesc(
 				hasConfiguredKey
 					? keyIsReadable
-						? "A supporter key is saved securely on this device."
-						: "The saved supporter key could not be read. Re-enter it to restore supporter access."
-					: "Use the key from an existing subscription when your billing and Google emails differ."
+						? t("supporter.keySaved")
+						: t("supporter.keyUnreadable")
+					: t("supporter.keyExplanation")
 			);
 
 		const editorSetting = new Setting(containerEl)
-			.setName(hasConfiguredKey ? "Replace supporter key" : "Supporter key")
-			.setDesc("Enter the supporter key you received.");
+			.setName(hasConfiguredKey ? t("supporter.replaceKeyLabel") : t("supporter.key.name"))
+			.setDesc(t("supporter.key.description"));
 		editorSetting.settingEl.hidden = true;
 		editorSetting.settingEl.classList.add("keepsidian-supporter-key-editor");
 		editorSetting.settingEl.dataset.keepsidianSupporterKeyEditor = "true";
@@ -412,7 +413,7 @@ export class SubscriptionSettingsTab {
 		let keyDraft = "";
 		editorSetting.addText((text) => {
 			text
-				.setPlaceholder("Supporter key")
+				.setPlaceholder(t("supporter.key.name"))
 				.setValue("")
 				.onChange((value) => {
 					keyDraft = formatSupporterKeyInput(value);
@@ -429,7 +430,7 @@ export class SubscriptionSettingsTab {
 
 		editorSetting.addButton((button) =>
 			button
-				.setButtonText("Apply key")
+				.setButtonText(t("supporter.applyKey"))
 				.setCta()
 				.onClick(async () => {
 					await this.applySupporterKey(keyDraft);
@@ -437,9 +438,9 @@ export class SubscriptionSettingsTab {
 		);
 
 		keySetting.addButton((button) =>
-			button.setButtonText(hasConfiguredKey ? "Replace key" : "Use key").onClick(() => {
+			button.setButtonText(hasConfiguredKey ? t("supporter.replaceKey") : t("supporter.useKeyButton")).onClick(() => {
 				if (!isSecretStorageAvailable(this.plugin)) {
-					new Notice("Update Obsidian to use a supporter key, then try again.");
+					new Notice(t("supporter.updateObsidian"));
 					return;
 				}
 				editorSetting.settingEl.hidden = false;
@@ -449,7 +450,7 @@ export class SubscriptionSettingsTab {
 
 		if (hasConfiguredKey) {
 			keySetting.addButton((button) =>
-				button.setButtonText("Remove key").onClick(async () => {
+				button.setButtonText(t("supporter.removeKey")).onClick(async () => {
 					await this.removeSupporterKey();
 				})
 			);
@@ -458,13 +459,13 @@ export class SubscriptionSettingsTab {
 
 	private async applySupporterKey(value: string): Promise<void> {
 		if (!isSecretStorageAvailable(this.plugin)) {
-			new Notice("Update Obsidian to use a supporter key, then try again.");
+			new Notice(t("supporter.updateObsidian"));
 			return;
 		}
 
 		const supporterKey = normalizeSupporterKey(value);
 		if (!supporterKey) {
-			new Notice("Enter a 16-character supporter key.");
+			new Notice(t("supporter.keyLength"));
 			return;
 		}
 
@@ -476,13 +477,13 @@ export class SubscriptionSettingsTab {
 			return;
 		}
 		if (subscriptionInfo.subscription_status !== "active") {
-			new Notice("This supporter key is not linked to an active subscription.");
+			new Notice(t("supporter.keyInactive"));
 			return;
 		}
 
 		const storageResult = storeSupporterKeyInSecretStorage(this.plugin, supporterKey);
 		if (!storageResult.success) {
-			new Notice("KeepSidian could not save the supporter key securely. Your existing key was kept.");
+			new Notice(t("supporter.saveFailed"));
 			return;
 		}
 
@@ -492,14 +493,14 @@ export class SubscriptionSettingsTab {
 		this.plugin.invalidateSubscriptionIdentity();
 		await this.plugin.saveSettings();
 		await this.plugin.subscriptionService.primeCurrentCache(subscriptionInfo);
-		new Notice("Supporter key saved. Supporter features are now active.");
+		new Notice(t("supporter.saved"));
 		await this.refreshAfterSupporterIdentityChange();
 	}
 
 	private async removeSupporterKey(): Promise<void> {
 		const storageResult = clearSupporterKeyFromSecretStorage(this.plugin);
 		if (!storageResult.success) {
-			new Notice("KeepSidian could not remove the supporter key from secure storage.");
+			new Notice(t("supporter.removeFailed"));
 			return;
 		}
 
@@ -508,7 +509,7 @@ export class SubscriptionSettingsTab {
 		this.plugin.settings.supporterKeyIdentity = undefined;
 		this.plugin.invalidateSubscriptionIdentity();
 		await this.plugin.saveSettings();
-		new Notice("Supporter key removed. KeepSidian will use your Google email for supporter status.");
+		new Notice(t("supporter.removed"));
 		await this.refreshAfterSupporterIdentityChange(true);
 	}
 
@@ -523,14 +524,14 @@ export class SubscriptionSettingsTab {
 	private getSupporterKeyErrorMessage(error: unknown): string {
 		const status = error instanceof NetworkError ? error.status : undefined;
 		if (status === 403) {
-			return "That supporter key is invalid. Check the key and try again.";
+			return t("supporter.invalidKey");
 		}
 		if (status === 429) {
-			return "Too many supporter key attempts. Wait a moment, then try again.";
+			return t("supporter.keyRateLimit");
 		}
 		if (status === 503) {
-			return "Supporter key checks are temporarily unavailable. Please try again later.";
+			return t("supporter.keyUnavailable");
 		}
-		return "KeepSidian could not check that supporter key. Please try again.";
+		return t("supporter.keyCheckFailed");
 	}
 }

@@ -195,7 +195,7 @@ describe("SyncProgressModal", () => {
 		buildCallbacks?.reportPlanProgress?.(3, 3);
 		await flushUI();
 
-		expect(getButton(modal, "Downloaded, please wait ...")).toBeTruthy();
+		expect(getButton(modal, "Download complete. Please wait…")).toBeTruthy();
 	});
 
 	test("customize sync renders start and end controls for download-capable modes only", async () => {
@@ -314,8 +314,8 @@ describe("SyncProgressModal", () => {
 		expect(modalOptions.buildSyncPlan).toHaveBeenCalledTimes(1);
 		startButtons = getSetupPrimaryButtons(modal);
 		expect(startButtons.map((button) => button.textContent?.trim())).toEqual([
-			"Preparing plan...",
-			"Preparing plan...",
+			"Preparing sync plan…",
+			"Preparing sync plan…",
 		]);
 		expect(startButtons.every((button) => button.disabled)).toBe(true);
 
@@ -324,8 +324,8 @@ describe("SyncProgressModal", () => {
 		await flushUI();
 		startButtons = getSetupPrimaryButtons(modal);
 		expect(startButtons.map((button) => button.textContent?.trim())).toEqual([
-			"Downloaded, please wait ...",
-			"Downloaded, please wait ...",
+			"Download complete. Please wait…",
+			"Download complete. Please wait…",
 		]);
 		expect(startButtons.every((button) => button.disabled)).toBe(true);
 
@@ -549,7 +549,7 @@ describe("SyncProgressModal", () => {
 
 		expect(modal.contentEl.textContent).toContain("Couldn’t prepare the sync review");
 		expect(modal.contentEl.textContent).toContain(
-			"The KeepSidian server could not be reached. Check your connection or make sure the sync server is running, then try again."
+			"Could not connect to the KeepSidian server. Check your connection or check that the sync server is running, then try again."
 		);
 		expect(modal.contentEl.textContent).toContain("Start or customize sync.");
 	});
@@ -566,7 +566,7 @@ describe("SyncProgressModal", () => {
 
 		expect(modal.contentEl.textContent).toContain("Couldn’t finish the sync");
 		expect(modal.contentEl.textContent).toContain(
-			"The KeepSidian server could not be reached. Check your connection or make sure the sync server is running, then try again."
+			"Could not connect to the KeepSidian server. Check your connection or check that the sync server is running, then try again."
 		);
 		expect(modal.contentEl.textContent).toContain("Review download plan");
 	});
@@ -697,13 +697,13 @@ describe("SyncProgressModal", () => {
 		await flushUI();
 
 		expect(modal.contentEl.textContent).toContain("Running download plan");
-		expect(modal.contentEl.textContent).toContain("2 selected. 2 pending.");
-		expect(modal.contentEl.textContent).toContain("0 of 2 selected notes dealt with.");
-		expect(modal.contentEl.textContent).toContain("Notes 0/2");
-		expect(modal.contentEl.textContent).toContain("Created 0/1");
-		expect(modal.contentEl.textContent).toContain("Conflict copy 0/1");
-		expect(modal.contentEl.textContent).toContain("Already up to date 1/1");
-		expect(modal.contentEl.textContent).toContain("Unchecked 1/1");
+		expect(modal.contentEl.textContent).toContain("Selected: 2. Pending: 2.");
+		expect(modal.contentEl.textContent).toContain("Selected notes handled: 0 / 2");
+		expect(modal.contentEl.textContent).toContain("Notes 0 / 2");
+		expect(modal.contentEl.textContent).toContain("Created 0 / 1");
+		expect(modal.contentEl.textContent).toContain("Conflict copy 0 / 1");
+		expect(modal.contentEl.textContent).toContain("Already up to date 1 / 1");
+		expect(modal.contentEl.textContent).toContain("Not selected 1 / 1");
 
 		const runCallback = modalOptions.runSyncPlan.mock.calls[0]?.[1];
 		expect(runCallback).toEqual(
@@ -713,19 +713,19 @@ describe("SyncProgressModal", () => {
 		);
 		runCallback.onEntrySettled("create-1", true);
 		await flushUI();
-		expect(modal.contentEl.textContent).toContain("2 selected. 1 pending.");
-		expect(modal.contentEl.textContent).toContain("Notes 1/2");
-		expect(modal.contentEl.textContent).toContain("Conflict copy 0/1");
+		expect(modal.contentEl.textContent).toContain("Selected: 2. Pending: 1.");
+		expect(modal.contentEl.textContent).toContain("Notes 1 / 2");
+		expect(modal.contentEl.textContent).toContain("Conflict copy 0 / 1");
 
 		// Conflict copies perform I/O and only count after that write is acknowledged.
 		runCallback.onEntrySettled("conflict-1", true, "conflict-copy");
 		await flushUI();
 
-		expect(modal.contentEl.textContent).toContain("2 selected. 0 pending.");
-		expect(modal.contentEl.textContent).toContain("2 of 2 selected notes dealt with.");
-		expect(modal.contentEl.textContent).toContain("Notes 2/2");
-		expect(modal.contentEl.textContent).toContain("Created 1/1");
-		expect(modal.contentEl.textContent).toContain("Conflict copy 1/1");
+		expect(modal.contentEl.textContent).toContain("Selected: 2. Pending: 0.");
+		expect(modal.contentEl.textContent).toContain("Selected notes handled: 2 / 2");
+		expect(modal.contentEl.textContent).toContain("Notes 2 / 2");
+		expect(modal.contentEl.textContent).toContain("Created 1 / 1");
+		expect(modal.contentEl.textContent).toContain("Conflict copy 1 / 1");
 
 		deferred.resolve({});
 		await flushUI();
@@ -915,8 +915,8 @@ describe("SyncProgressModal", () => {
 		await flushUI();
 
 		expect(modal.contentEl.textContent).toContain("Sync center");
-		expect(modal.contentEl.textContent).toContain("Last import attempt");
-		expect(modal.contentEl.textContent).toContain("was canceled after 1/1 note");
+		expect(modal.contentEl.textContent).toContain("Sync canceled.");
+		expect(modal.contentEl.textContent).toContain("Notes: 1 / 1");
 		expect(modal.contentEl.textContent).not.toContain("Download failed");
 	});
 
@@ -1014,7 +1014,7 @@ describe("SyncProgressModal", () => {
 		await flushUI();
 
 		expect(modal.contentEl.textContent).toContain("Sync center");
-		expect(modal.contentEl.textContent).toContain("Download step: 3/10");
+		expect(modal.contentEl.textContent).toContain("Download: 3/10");
 
 		(modal as unknown as { isSyncing: boolean }).isSyncing = false;
 		const summary: LastSyncSummary = {
@@ -1029,8 +1029,8 @@ describe("SyncProgressModal", () => {
 		modal.setIdleSummary(summary);
 		await flushUI();
 
-		expect(modal.contentEl.textContent).toContain("Last two-way sync completed");
-		expect(modal.contentEl.textContent).toContain("Synced 4/4 notes");
+		expect(modal.contentEl.textContent).toContain("Two-way sync · Sync complete.");
+		expect(modal.contentEl.textContent).toContain("Notes: 4 / 4");
 	});
 
 	test("shows attachment warnings as a completed download result", async () => {
@@ -1045,7 +1045,7 @@ describe("SyncProgressModal", () => {
 		await flushUI();
 
 		expect(modal.contentEl.textContent).toContain("Download complete with warnings");
-		expect(modal.contentEl.textContent).toContain("Sync complete with 2 warnings. Processed 3 notes.");
+		expect(modal.contentEl.textContent).toContain("3 notes · 2 warnings");
 	});
 
 	test("shows the saved filename after enrichment without changing the reviewed plan", async () => {
