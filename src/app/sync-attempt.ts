@@ -83,11 +83,13 @@ export function formatAttemptStatus(attempt: LastSyncAttempt): string {
 }
 
 export function formatAttemptSummary(attempt: LastSyncAttempt): string {
+	// Persisted history may come from a newer plugin or hand-edited settings.
+	const knownPhase = ["preflight", "storage", "subscription", "fetch", "plan", "review", "execution", "upload-plan", "upload"].includes(attempt.phase);
 	return (
 		t("attempt.summary", {
 			id: attempt.id,
 			outcome: attemptOutcome(attempt),
-			phase: t(`attempt.phase.${attempt.phase}`),
+			phase: knownPhase ? t(`attempt.phase.${attempt.phase}`) : t("attempt.incomplete"),
 			notes: t("sync.notes", { count: attempt.fetchedCount }),
 		}) + (attempt.logUnavailable ? " " + t("attempt.logUnavailable") : "")
 	);

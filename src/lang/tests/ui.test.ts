@@ -106,6 +106,7 @@ describe("UI language preferences", () => {
 		expect(formatAttemptStatus({ ...attempt, outcome: "failed" })).toBe("Last attempt: Failed");
 		expect(formatAttemptSummary(attempt)).toContain(attempt.id);
 		expect(formatAttemptSummary(attempt)).toContain("1 note · Review");
+		expect(() => formatAttemptSummary({ ...attempt, phase: "future-phase" } as never)).not.toThrow();
 	});
 	it("uses singular English and Russian count forms in notices", () => {
 		const en = createTranslator("en"),
