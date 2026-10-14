@@ -77,7 +77,10 @@ it does not suppress them or claim that Electron proves native platform compatib
 - Detailed folder-verification diagnostics, unknown server/helper messages, generated sync logs, and external sign-in,
   billing, documentation and Google pages can remain English. The separate helper app is not translated.
 - At a 320px desktop viewport, Obsidian's settings navigation leaves only a 10px plugin content
-  column. The diagnostic still fails reflow (51px overflow in all four locales). This remains open;
+  column. The diagnostic still fails reflow (51px overflow in all four locales). A comparison with
+  KeepSydian disabled reproduces the allocation and overflow in Obsidian's General and Editor tabs;
+  all four plugin locales fit a controlled 280px allocation without a product change.
+  See [the host boundary and regression procedure](SETTINGS_REFLOW.md). This remains open;
   the passing desktop matrix starts at 430px, where text fits but the settings column is cramped.
 - Full RTL chrome, native screen-reader testing, theme/contrast certification and a complete audit
   of older settings controls and other dialogs remain future work. Automated accessibility acceptance
