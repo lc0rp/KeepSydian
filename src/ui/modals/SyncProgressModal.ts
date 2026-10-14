@@ -221,6 +221,22 @@ export class SyncProgressModal extends Modal {
 	private chromeCloseButtonEl: HTMLElement | null = null;
 	private dismissPromptActionsEl: HTMLDivElement | null = null;
 	private allowBackgroundClose = false;
+	private returnFocusEl: HTMLElement | null = null;
+	private readonly handleDialogKeyDown = (event: KeyboardEvent) => {
+		if (event.key !== "Tab") return;
+		const controls = Array.from(this.modalEl.querySelectorAll<HTMLElement>(
+			"button, input, select, textarea, a[href], [tabindex]"
+		)).filter((element) => element.tabIndex >= 0 && !element.matches(":disabled") &&
+			element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden");
+		const active = document.activeElement;
+		const first = controls[0], last = controls[controls.length - 1];
+		if (!first) { event.preventDefault(); this.modalTitleEl?.focus(); return; }
+		if (event.shiftKey && (active === first || !controls.includes(active as HTMLElement))) {
+			event.preventDefault(); last.focus();
+		} else if (!event.shiftKey && active === last) {
+			event.preventDefault(); first.focus();
+		}
+	};
 	private readonly handleChromeCloseClick = (event: Event) => {
 		if (!this.isSyncing) return;
 		event.preventDefault();
@@ -237,7 +253,15 @@ export class SyncProgressModal extends Modal {
 	};
 	constructor(app: App, options: SyncProgressModalOptions) { super(app); this.options = options; }
 	refreshLanguage() { void this.refreshUI(); }
-	onOpen() { this.bindChromeCloseButton(); this.bindBackdropDismissGuard(); void this.refreshUI(); }
+	onOpen() {
+		if (!this.returnFocusEl?.isConnected) {
+			this.returnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		}
+		this.bindChromeCloseButton(); this.bindBackdropDismissGuard();
+		this.modalEl.addEventListener("keydown", this.handleDialogKeyDown);
+		void this.refreshUI();
+		this.modalTitleEl?.focus();
+	}
 	onClose() {
 		const activeRun = this.isSyncing;
 		if (this.allowBackgroundClose) {
@@ -246,6 +270,7 @@ export class SyncProgressModal extends Modal {
 			this.unbindChromeCloseButton();
 			this.unbindBackdropDismissGuard();
 			this.clearLayout();
+			this.restoreOpeningFocus();
 			this.options.onClose?.({ activeRun });
 			return;
 		}
@@ -264,7 +289,13 @@ export class SyncProgressModal extends Modal {
 		this.unbindBackdropDismissGuard();
 		this.dismissPrompt = null;
 		this.clearLayout();
+		this.restoreOpeningFocus();
 		this.options.onClose?.({ activeRun });
+	}
+	private restoreOpeningFocus() {
+		this.modalEl.removeEventListener("keydown", this.handleDialogKeyDown);
+		if (this.returnFocusEl?.isConnected) this.returnFocusEl.focus();
+		this.returnFocusEl = null;
 	}
 	private clearLayout() {
 		clearElement(this.contentEl);
@@ -524,6 +555,9 @@ export class SyncProgressModal extends Modal {
 		if (this.modalTitleEl && this.stepperEl && this.headerMetaEl && this.statusEl && this.statusActionsEl && this.alertHostEl && this.bodyEl && this.footerEl) return;
 		clearElement(this.contentEl); this.contentEl.className = "keepsidian-modal";
 		this.modalTitleEl = createChild(this.contentEl, "h2"); this.modalTitleEl.classList.add("keepsidian-modal-title");
+		this.modalTitleEl.tabIndex = -1;
+		this.modalEl.setAttribute("role", "dialog");
+		this.modalEl.setAttribute("aria-modal", "true");
 		this.stepperEl = createChild(this.contentEl, "div");
 		this.headerMetaEl = createChild(this.contentEl, "div"); this.headerMetaEl.classList.add("keepsidian-modal-header-meta");
 		this.statusEl = createChild(this.headerMetaEl, "div"); this.statusEl.classList.add("keepsidian-modal-status"); this.statusEl.setAttribute("aria-live", "polite");
@@ -537,6 +571,15 @@ export class SyncProgressModal extends Modal {
 		return "setup";
 	}
 	private async refreshUI() {
+		const focused = document.activeElement;
+		const hadFocus = !!focused && this.modalEl.contains(focused);
+		const focusKey = hadFocus ? focused?.getAttribute("data-keepsidian-focus") : null;
+		const restoreFocus = () => {
+			if (!hadFocus || focused?.isConnected || document.activeElement !== document.body) return;
+			const replacement = focusKey ? Array.from(this.contentEl.querySelectorAll<HTMLElement>("[data-keepsidian-focus]"))
+				.find((element) => element.getAttribute("data-keepsidian-focus") === focusKey) : null;
+			(replacement ?? this.modalTitleEl)?.focus();
+		};
 		const renderVersion = ++this.renderVersion, surface = this.getSurface();
 		this.ensureLayout(); this.bindChromeCloseButton(); this.syncChromeCloseButtonState();
 		if (surface !== "running") this.executionRowRefs.clear();
@@ -545,6 +588,8 @@ export class SyncProgressModal extends Modal {
 		this.modalEl.classList.remove("keepsidian-modal-shell--compact", "keepsidian-modal-shell--plan");
 		this.modalEl.classList.add(surface === "setup" ? "keepsidian-modal-shell--compact" : "keepsidian-modal-shell--plan");
 		if (this.modalTitleEl) this.modalTitleEl.textContent = this.getTitle(surface);
+		this.modalEl.setAttribute("aria-label", this.getTitle(surface));
+		this.modalEl.lang = getUiTranslator().locale;
 		if (this.stepperEl) this.renderStepper(this.stepperEl, surface);
 		if (this.statusEl) this.statusEl.textContent = this.getStatusCopy(surface);
 		if (this.statusActionsEl) {
@@ -563,9 +608,11 @@ export class SyncProgressModal extends Modal {
 			this.planActionsEl = null; this.planPanelEl = null; this.planSummaryEl = null; this.planSelectionSummaryEl = null; this.planListEl = null;
 			if (this.footerEl) clearElement(this.footerEl);
 			await this.renderSetupSurface(renderVersion);
+			if (renderVersion === this.renderVersion) restoreFocus();
 			return;
 		}
 		this.renderPlanSurface(surface);
+		restoreFocus();
 	}
 	private renderAlert(containerEl: HTMLElement, alert: ModalAlertState) {
 		const alertEl = createChild(containerEl, "div"); alertEl.classList.add("keepsidian-modal-alert"); alertEl.setAttribute("role", "alert");
@@ -915,6 +962,7 @@ export class SyncProgressModal extends Modal {
 		if (!canBulkToggle) { createChild(containerEl, "div", { text: t("sync.selectionSupporter") }).classList.add("keepsidian-sync-plan-selection-caption"); return; }
 		const toggleWrap = createChild(containerEl, "label"); toggleWrap.classList.add("keepsidian-sync-plan-select-all");
 		const checkbox = createChild(toggleWrap, "input"); checkbox.type = "checkbox";
+		checkbox.setAttribute("data-keepsidian-focus", "select-all");
 		const selectableEntries = entries.filter((entry) => entry.selectable && !entry.selectionLocked), selectedSelectableCount = selectableEntries.filter((entry) => entry.selected).length;
 		checkbox.checked = selectedSelectableCount > 0 && selectedSelectableCount === selectableEntries.length; checkbox.indeterminate = selectedSelectableCount > 0 && selectedSelectableCount < selectableEntries.length;
 		checkbox.addEventListener("change", () => {
@@ -936,6 +984,7 @@ export class SyncProgressModal extends Modal {
 		if (entry.selectionLocked) { row.classList.add("is-locked"); if (entry.selectionLockedReason) row.setAttribute("title", localizePluginLabel(entry.selectionLockedReason)); }
 		const toggleWrap = createChild(row, "div"); toggleWrap.classList.add("keepsidian-sync-plan-row-toggle");
 		const toggle = createChild(toggleWrap, "input"); toggle.type = "checkbox"; toggle.checked = entry.selected; toggle.disabled = !entry.selectable || entry.selectionLocked || this.isGeneratingReview;
+		toggle.setAttribute("data-keepsidian-focus", `entry:${entry.id}`);
 		toggle.setAttribute("aria-label", `${getReviewEntryLabel(entry)}: ${entry.title}`);
 		if (entry.selectionLockedReason) toggle.title = localizePluginLabel(entry.selectionLockedReason);
 		toggle.addEventListener("change", () => {
@@ -970,8 +1019,10 @@ export class SyncProgressModal extends Modal {
 	private renderEntryBody(body: HTMLElement, entry: SyncPlanEntry, badgeText: string): HTMLSpanElement {
 		const titleLine = createChild(body, "div"); titleLine.classList.add("keepsidian-sync-plan-row-title-line");
 		createChild(titleLine, "div", { text: entry.title }).classList.add("keepsidian-sync-plan-row-title");
+		titleLine.querySelector(".keepsidian-sync-plan-row-title")?.setAttribute("lang", "");
 		const badge = createChild(titleLine, "span", { text: badgeText }); badge.classList.add("keepsidian-sync-plan-row-badge");
 		createChild(body, "div", { text: entry.path }).classList.add("keepsidian-sync-plan-row-path");
+		body.querySelector(".keepsidian-sync-plan-row-path")?.setAttribute("lang", "");
 		const detail = planEntryDetail(entry);
 		if (detail) createChild(body, "div", { text: detail }).classList.add("keepsidian-sync-plan-row-detail");
 		return badge;

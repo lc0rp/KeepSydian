@@ -1,5 +1,5 @@
 import * as obsidian from "obsidian";
-import { bindUiLanguage, getUiTranslator, onUiLanguageChanged, refreshUiLanguage, t } from "../ui";
+import { bindUiLanguage, getAppLanguage, getUiTranslator, onUiLanguageChanged, refreshUiLanguage, t } from "../ui";
 import { createTranslator } from "../index";
 import { planEntryDetail } from "../display";
 import { formatAttemptStatus, formatAttemptSummary } from "../../app/sync-attempt";
@@ -11,6 +11,29 @@ describe("UI language preferences", () => {
 	let cleanup: () => void;
 	afterEach(() => {
 		cleanup?.();
+	});
+	it("guards the actual Obsidian language API when absent or throwing, preserving explicit overrides", () => {
+		const original = Object.getOwnPropertyDescriptor(obsidian, "getLanguage");
+		try {
+			for (const value of [
+				undefined,
+				() => {
+					throw new Error("Unavailable on old runtime");
+				},
+			]) {
+				Object.defineProperty(obsidian, "getLanguage", { configurable: true, value });
+				cleanup = bindUiLanguage(() => ({ language: "system", useDraftTranslations: true }));
+				expect(getAppLanguage()).toBe("en");
+				expect(getUiTranslator().locale).toBe("en");
+				cleanup();
+				cleanup = bindUiLanguage(() => ({ language: "de", useDraftTranslations: true }));
+				expect(getUiTranslator().locale).toBe("de");
+				cleanup();
+			}
+		} finally {
+			if (original) Object.defineProperty(obsidian, "getLanguage", original);
+			else delete (obsidian as { getLanguage?: () => string }).getLanguage;
+		}
 	});
 	it("follows Obsidian, requires draft consent, and falls back for unsupported scripts", () => {
 		let appLanguage = "ru";

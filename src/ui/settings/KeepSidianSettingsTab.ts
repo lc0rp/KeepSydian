@@ -1,4 +1,4 @@
-import { t } from "../../lang/ui";
+import { t, getUiTranslator } from "../../lang/ui";
 import { normalizeLanguagePreference, refreshUiLanguage } from "../../lang/ui";
 import KeepSidianPlugin from "main";
 import { PluginSettingTab, App, Notice, Platform, Setting } from "obsidian";
@@ -55,16 +55,20 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 	}
 
 	private async renderSettings(): Promise<void> {
+		const focusedRole = this.containerEl.contains(document.activeElement)
+			? document.activeElement?.closest("[data-keepsidian-role]")?.getAttribute("data-keepsidian-role") : null;
 		this.containerEl.empty();
 		// Each async render owns a child. A superseded render can only finish in its detached child.
 		const containerEl = this.containerEl.createDiv();
 		containerEl.classList.add("keepsidian-localized-settings");
+		containerEl.lang = getUiTranslator().locale;
 		new Setting(containerEl).setName(t("language.heading")).setHeading();
 		new Setting(containerEl)
 			.setName(t("language.name"))
 			.setDesc(t("language.description"))
 			.addDropdown((dropdown) => {
 				dropdown.selectEl.setAttribute("data-keepsidian-role", "language");
+				dropdown.selectEl.setAttribute("aria-label", t("language.name"));
 				dropdown.addOptions({ system: t("language.system"), en: "English", zh: "简体中文 (草稿)", ru: "Русский (черновик)", de: "Deutsch (Entwurf)" })
 					.setValue(this.plugin.settings.language ?? "system")
 					.onChange(async (value) => {
@@ -86,6 +90,34 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 					this.display();
 				});
 			});
+		const draftControl = containerEl.querySelector<HTMLElement>(".keepsidian-draft-translations .checkbox-container, .keepsidian-draft-translations input");
+		draftControl?.setAttribute("data-keepsidian-role", "draft-translations");
+		draftControl?.setAttribute("aria-label", t("language.drafts"));
+		if (draftControl && draftControl.tagName !== "INPUT") {
+			draftControl.setAttribute("role", "switch");
+			draftControl.setAttribute("aria-checked", String(this.plugin.settings.useDraftTranslations === true));
+			const input = draftControl.querySelector("input");
+			input?.setAttribute("aria-hidden", "true");
+			input?.setAttribute("tabindex", "-1");
+			input?.addEventListener("focus", () => draftControl.focus());
+			draftControl.addEventListener("keydown", (event) => {
+				if (event.key !== " " && event.key !== "Enter") return;
+				event.preventDefault();
+				event.stopImmediatePropagation();
+				if (!event.repeat) draftControl.click();
+			}, true);
+		}
+		for (const role of ["language", "draft-translations"]) {
+			const control = containerEl.querySelector<HTMLElement>(`[data-keepsidian-role="${role}"]`);
+			const description = control?.closest(".setting-item")?.querySelector(".setting-item-description");
+			if (description) {
+				description.id = `keepsidian-${role}-description`;
+				control?.setAttribute("aria-describedby", description.id);
+			}
+		}
+		if (focusedRole === "language" || focusedRole === "draft-translations") {
+			containerEl.querySelector<HTMLElement>(`[data-keepsidian-role="${focusedRole}"]`)?.focus();
+		}
 
 		this.addSupportSection(containerEl);
 		new Setting(containerEl).setName(t("settings.retrieve")).setHeading();
