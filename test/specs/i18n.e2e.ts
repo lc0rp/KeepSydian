@@ -113,6 +113,45 @@ describe("Multilingual UI in an isolated Obsidian vault", () => {
 				(await browser.$(".keepsidian-modal-alert").getText()).includes(tr.t("sync.error.connection"))
 			);
 			await browser.saveScreenshot(resolve(`output/i18n/${locale}-error.png`));
+			if (locale === "ru") {
+				await browser.executeObsidian(({ app }) => {
+					(app.plugins.getPlugin("keepsidian") as any).settings.useDraftTranslations = false;
+				});
+				await browser.waitUntil(async () =>
+					(await browser.$(".keepsidian-modal-alert").getText()).includes(
+						createTranslator("en").t("sync.error.connection")
+					)
+				);
+				await browser.executeObsidian(({ app }) => {
+					(app.plugins.getPlugin("keepsidian") as any).settings.useDraftTranslations = true;
+				});
+				await browser.waitUntil(async () =>
+					(await browser.$(".keepsidian-modal-alert").getText()).includes(tr.t("sync.error.connection"))
+				);
+			}
+			const upload = createPreparedSyncPlanFixture("push", "upload", [
+				createSyncPlanEntryFixture("conflict-copy", "Conflict copy", {
+					stage: "upload",
+					mode: "push",
+					title,
+					path: "Synthetic/中文 Русский عربي.md",
+					meta: { attachmentCount: 2, missingAttachmentCount: 1, uploadDetail: { pendingMerge: true } },
+				}),
+			]);
+			await browser.executeObsidian(async ({ app }, fixture) => {
+				const modal = (app.plugins.getPlugin("keepsidian") as any).progressModal;
+				modal.options.getTwoWayGate = () => ({ allowed: true, reasons: [] });
+				modal.options.buildSyncPlan = async () => fixture;
+				await modal.beginReview("push");
+			}, upload);
+			await expect(browser.$(".keepsidian-sync-plan-list")).toHaveText(
+				expect.stringContaining(tr.t("upload.conflictCopy"))
+			);
+			await expect(browser.$(".keepsidian-sync-plan-list")).toHaveText(
+				expect.stringContaining(tr.t("upload.missingAttachments", { count: 1 }))
+			);
+			await expect(browser.$(".keepsidian-sync-plan-list")).toHaveText(expect.stringContaining(title));
+			await browser.saveScreenshot(resolve(`output/i18n/${locale}-upload-review.png`));
 			await browser.executeObsidian(({ app }) => {
 				(app.plugins.getPlugin("keepsidian") as any).progressModal.close();
 			});

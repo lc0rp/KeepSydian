@@ -491,6 +491,7 @@ function buildImportPlanEntry(
 		let label = "Skipped: identical";
 		let selectable = false;
 		let detail: string | undefined;
+		let downloadDetails: NonNullable<SyncPlanEntry["meta"]>["downloadDetails"] = [];
 
 		switch (duplicateAction) {
 			case "create":
@@ -513,8 +514,10 @@ function buildImportPlanEntry(
 				detail = hasConflict
 					? "Will create a conflict copy next to the existing note unless another merge action is chosen."
 					: undefined;
+				if (hasConflict) downloadDetails.push("conflict-copy");
 				if (getArchivedNoteUpdate(note, existingContent, archivedStatus)) {
 					detail = `${detail ? `${detail} ` : ""}Also marks the existing note as archived.`;
+					downloadDetails.push("also-archive");
 				}
 				break;
 			}
@@ -531,6 +534,7 @@ function buildImportPlanEntry(
 						label = "Archive";
 						selectable = true;
 						detail = "Marks the existing note as archived. Its body and other properties are preserved.";
+						downloadDetails = ["archive-only"];
 					}
 				}
 				break;
@@ -543,17 +547,22 @@ function buildImportPlanEntry(
 				label = "Add tags";
 				selectable = true;
 				detail = "Adds suggested tags while preserving your existing content and tags.";
+				downloadDetails = ["add-tags"];
 			}
 		}
 		if (note.processing_warnings?.length) {
 			detail = `${detail ? `${detail} ` : ""}AI suggestions failed; original content retained.`;
+			downloadDetails.push("suggestions-failed");
 		}
 		if (note.enrichment_pending && duplicateAction === "skip") {
 			action = "overwrite"; label = "Update suggestions"; selectable = true;
 			detail = "Applies available suggestions while preserving your manual edits.";
+			downloadDetails = ["update-suggestions"];
 		}
 		if (note.enrichment_pending) detail = `${detail ? `${detail} ` : ""}New AI suggestions are requested only for selected notes.`;
+		if (note.enrichment_pending) downloadDetails.push("request-suggestions");
 		if (note.enrichment_legacy_held) detail = `${detail ? `${detail} ` : ""}Previously imported titles and tags are kept. New AI tags require the choice in Customize sync.`;
+		if (note.enrichment_legacy_held) downloadDetails.push("legacy-tags");
 
 		return {
 			id: `import:${index}:${normalizePathSafe(noteFilePath)}`,
@@ -567,7 +576,7 @@ function buildImportPlanEntry(
 			selected: selectable,
 			selectionLocked: selectable && !allowPerNoteSelection,
 			selectionLockedReason: selectable && !allowPerNoteSelection ? selectionLockedReason : undefined,
-			meta: detail ? { detail } : undefined,
+			meta: detail ? { detail, downloadDetails } : undefined,
 		};
 	})();
 }

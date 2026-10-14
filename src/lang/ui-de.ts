@@ -1,5 +1,49 @@
 /** UI integration AI-authored draft; native review outstanding. */
 export const uiDe = {
+	"download.conflict-copy":
+		"Erstellt eine Konfliktkopie neben der vorhandenen Notiz, sofern du keine andere Zusammenführungsaktion wählst.",
+	"download.also-archive": "Markiert die vorhandene Notiz außerdem als archiviert.",
+	"download.archive-only":
+		"Markiert die vorhandene Notiz als archiviert. Inhalt und andere Eigenschaften bleiben erhalten.",
+	"download.add-tags": "Fügt vorgeschlagene Tags hinzu. Vorhandene Inhalte und Tags bleiben erhalten.",
+	"download.suggestions-failed": "KI-Vorschläge fehlgeschlagen; ursprünglicher Inhalt beibehalten.",
+	"download.update-suggestions": "Wendet verfügbare Vorschläge an und behält deine manuellen Änderungen bei.",
+	"download.request-suggestions": "Neue KI-Vorschläge werden nur für ausgewählte Notizen angefordert.",
+	"download.legacy-tags":
+		"Bereits importierte Titel und Tags bleiben erhalten. Neue KI-Tags erfordern deine Auswahl unter „Sync anpassen“.",
+	"sync.action.archive": "Archivieren",
+	"sync.action.addTags": "Tags hinzufügen",
+	"sync.action.updateSuggestions": "Vorschläge aktualisieren",
+	"sync.action.unverifiedRemoval": "Entfernung nicht bestätigt",
+	"sync.action.skippedConflictCopy": "Übersprungen: Konfliktkopie",
+	"upload.attachments": {
+		one: "Enthält {{count}} aktualisierten Anhang.",
+		other: "Enthält {{count}} aktualisierte Anhänge.",
+	},
+	"upload.missingAttachments": {
+		one: "{{count}} referenzierter Anhang fehlt.",
+		other: "{{count}} referenzierte Anhänge fehlen.",
+	},
+	"upload.pendingMerge": "Enthält eine heruntergeladene Zusammenführung, die auf einen bestätigten Upload wartet.",
+	"upload.conflictCopy":
+		"Eine lokale Konfliktkopie wird gespeichert. Beide Originale bleiben unverändert, sofern du keine andere Zusammenführungsaktion wählst.",
+	"upload.unresolved":
+		"Beim Download beibehalten. Dieser Lauf lädt das Original mit dem ungelösten Konflikt nicht hoch.",
+	"upload.unchanged": "Seit der letzten Synchronisierung wurden keine Änderungen erkannt.",
+	"upload.neverConflictCopies": "Konfliktkopien werden nie hochgeladen.",
+	"attempt.status": "Letzter Versuch: {{outcome}}",
+	"attempt.ready": "Bereit zur Prüfung",
+	"sync.downloadStep": "Download-Schritt",
+	"sync.uploadStep": "Upload-Schritt",
+	"attempt.phase.preflight": "Vorprüfung",
+	"attempt.phase.storage": "Speicher",
+	"attempt.phase.subscription": "Abonnement",
+	"attempt.phase.fetch": "Herunterladen",
+	"attempt.phase.plan": "Sync-Plan",
+	"attempt.phase.review": "Prüfung",
+	"attempt.phase.execution": "Ausführung",
+	"attempt.phase.upload-plan": "Upload-Plan",
+	"attempt.phase.upload": "Hochladen",
 	"deletion.fromObsidian": "Aus Obsidian löschen",
 	"deletion.preserved": "Lokale Entfernung beibehalten",
 	"deletion.preservedDetail":
@@ -10,12 +54,21 @@ export const uiDe = {
 	"helper.verifying": "Download wird geprüft…",
 	"helper.installing": "Assistent wird installiert…",
 	"helper.installed": "Assistent installiert.",
-	"notices.aiFailed":
-		"KI-Vorschläge für {{count}} Notizen fehlgeschlagen. Die ursprünglichen Inhalte wurden behalten. Prüfe diese Notizen vor der Synchronisierung.",
-	"notices.aiImported":
-		"Google Keep-Notizen importiert. KI-Vorschläge für {{count}} Notizen nicht verfügbar. Prüfe diese Notizen vor einer erneuten KI-Anfrage.",
-	"notices.resume":
-		"Download wird fortgesetzt; {{count}} Notizen wurden bereits abgerufen. Der ursprüngliche Datumsbereich bleibt erhalten.",
+	"notices.aiFailed": {
+		one: "KI-Vorschläge für {{count}} Notiz fehlgeschlagen. Der ursprüngliche Inhalt wurde behalten. Prüfe diese Notiz vor der Synchronisierung.",
+		other:
+			"KI-Vorschläge für {{count}} Notizen fehlgeschlagen. Die ursprünglichen Inhalte wurden behalten. Prüfe diese Notizen vor der Synchronisierung.",
+	},
+	"notices.aiImported": {
+		one: "Google Keep-Notizen importiert. KI-Vorschläge für {{count}} Notiz nicht verfügbar. Prüfe diese Notiz vor einer erneuten KI-Anfrage.",
+		other:
+			"Google Keep-Notizen importiert. KI-Vorschläge für {{count}} Notizen nicht verfügbar. Prüfe diese Notizen vor einer erneuten KI-Anfrage.",
+	},
+	"notices.resume": {
+		one: "Download wird fortgesetzt; {{count}} Notiz wurde bereits abgerufen. Der ursprüngliche Datumsbereich bleibt erhalten.",
+		other:
+			"Download wird fortgesetzt; {{count}} Notizen wurden bereits abgerufen. Der ursprüngliche Datumsbereich bleibt erhalten.",
+	},
 	"notices.restart":
 		"Die vorherige Vorbereitung ist abgelaufen oder ihre Optionen wurden geändert. Der gewählte Datumsbereich wird neu gestartet.",
 	"notices.uploadPlanComplete":
@@ -32,7 +85,7 @@ export const uiDe = {
 		"Ein fehlgeschlagener Bild- oder Anhangsdownload stoppt nicht mehr den Import der übrigen Notizen.",
 	"feedback.yaml":
 		"KeepSydian erhält vorhandene YAML-Kommentare und Formatierungen beim Aktualisieren der Metadaten importierter Notizen.",
-	"attempt.summary": "Letzter Versuch {{id}}: {{outcome}} · {{notes}}",
+	"attempt.summary": "Letzter Versuch {{id}}: {{outcome}} · {{notes}} · {{phase}}",
 	"attempt.incomplete": "Unvollständig",
 	"attempt.abandoned": "Verworfen",
 	"attempt.failed": "Fehlgeschlagen",
@@ -119,7 +172,7 @@ export const uiDe = {
 	"common.pending": "Ausstehend",
 	"sync.expired": "Download-Vorbereitung abgelaufen",
 	"sync.restartRange":
-		"Starte die Synchronisation erneut für den gewählten Zeitraum. Es wurden keine Notizen importiert.",
+		"Die Vorbereitung auf dem Server ist abgelaufen. Starte die Synchronisation erneut für den gewählten Zeitraum. Es wurden keine Notizen importiert.",
 	"sync.paused": "Download angehalten",
 	"sync.aiSelection": "Neue KI-Vorschläge werden nur für ausgewählte Notizen angefordert.",
 	"sync.canceling": "Wird abgebrochen …",

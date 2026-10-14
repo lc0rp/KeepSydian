@@ -1,4 +1,4 @@
-import {t} from "../lang/ui";
+import { t } from "../lang/ui";
 import { Notice } from "obsidian";
 import type KeepSidianPlugin from "@app/main";
 import type { DownloadScope, SyncMode } from "@types";
@@ -62,10 +62,35 @@ function safeCutoff(value: unknown): string | undefined {
 	return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
 }
 
+function attemptOutcome(attempt: LastSyncAttempt): string {
+	return t(
+		attempt.outcome === "success"
+			? "attempt.success"
+			: attempt.outcome === "failed"
+				? "attempt.failed"
+				: attempt.outcome === "canceled"
+					? "attempt.canceled"
+					: attempt.outcome === "abandoned"
+						? "attempt.abandoned"
+						: attempt.phase === "review"
+							? "attempt.ready"
+							: "attempt.incomplete"
+	);
+}
+
+export function formatAttemptStatus(attempt: LastSyncAttempt): string {
+	return t("attempt.status", { outcome: attemptOutcome(attempt) });
+}
+
 export function formatAttemptSummary(attempt: LastSyncAttempt): string {
-	const outcome =
-		attempt.outcome ?? (attempt.phase === "review" ? "ready for review" : "interrupted before a recorded outcome");
-	return t("attempt.summary",{id:attempt.id,outcome:t(outcome === "success" ? "attempt.success" : outcome === "failed" ? "attempt.failed" : outcome === "canceled" ? "attempt.canceled" : outcome === "abandoned" ? "attempt.abandoned" : "attempt.incomplete"),notes:t("sync.notes",{count:attempt.fetchedCount})}) + (attempt.logUnavailable ? " " + t("attempt.logUnavailable") : "");
+	return (
+		t("attempt.summary", {
+			id: attempt.id,
+			outcome: attemptOutcome(attempt),
+			phase: t(`attempt.phase.${attempt.phase}`),
+			notes: t("sync.notes", { count: attempt.fetchedCount }),
+		}) + (attempt.logUnavailable ? " " + t("attempt.logUnavailable") : "")
+	);
 }
 
 /** One owner spans preflight, review and both stages of an execution. */
@@ -178,7 +203,11 @@ export class SyncAttempt {
 		const classified = safeSyncError(error);
 		const httpStatus = classified.httpStatus ?? this.status;
 		const errorKind = classified.errorKind;
-		return t("attempt.error",{reason:httpStatus ? `HTTP ${httpStatus}.` : errorKind === "parse" ? t("errors.parse") : t("sync.error.generic"),id:this.id,help:this.unavailable ? t("attempt.logUnavailable") : t("sync.openLog")});
+		return t("attempt.error", {
+			reason: httpStatus ? `HTTP ${httpStatus}.` : errorKind === "parse" ? t("errors.parse") : t("sync.error.generic"),
+			id: this.id,
+			help: this.unavailable ? t("attempt.logUnavailable") : t("sync.openLog"),
+		});
 	}
 
 	private fallback(): void {
@@ -255,7 +284,7 @@ export class SyncAttempt {
 				this.fallback();
 				summary.logUnavailable = true;
 			}
-			if (outcome && this.plugin.statusTextEl) this.plugin.statusTextEl.textContent = formatAttemptSummary(summary);
+			if (outcome && this.plugin.statusTextEl) this.plugin.statusTextEl.textContent = formatAttemptStatus(summary);
 		});
 		return this.writes;
 	}

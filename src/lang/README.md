@@ -8,16 +8,16 @@ and the original [readiness and rollout plan](READINESS.md).
 
 | File | Purpose | Status on 2026-10-14 |
 | --- | --- | --- |
-| [en-plain-lang.ts](en-plain-lang.ts) and [ui-en.ts](ui-en.ts) | Canonical English source | 138 foundation entries plus 240 UI entries |
+| [en-plain-lang.ts](en-plain-lang.ts) and [ui-en.ts](ui-en.ts) | Canonical English source | 138 foundation entries plus 273 UI entries |
 | [en.ts](en.ts) | Preserved original English extraction, including its original header | 138 entries; unchanged archive, not the active source |
-| [zh.ts](zh.ts), [ui-zh.ts](ui-zh.ts) | Simplified Chinese (`zh`, matching Obsidian) | 378 AI-authored draft entries |
-| [ru.ts](ru.ts), [ui-ru.ts](ui-ru.ts) | Russian | 378 AI-authored draft entries |
-| [de.ts](de.ts), [ui-de.ts](ui-de.ts) | German | 378 AI-authored draft entries |
+| [zh.ts](zh.ts), [ui-zh.ts](ui-zh.ts) | Simplified Chinese (`zh`, matching Obsidian) | 411 AI-authored draft entries |
+| [ru.ts](ru.ts), [ui-ru.ts](ui-ru.ts) | Russian | 411 AI-authored draft entries |
+| [de.ts](de.ts), [ui-de.ts](ui-de.ts) | German | 411 AI-authored draft entries |
 | [types.ts](types.ts) | Keys, message shapes, language status | TypeScript checked |
 | [index.ts](index.ts), [ui.ts](ui.ts), [display.ts](display.ts) | Locale resolution, fallback, interpolation, plurals, UI binding | Integrated |
 | [tests/i18n.test.ts](tests/i18n.test.ts) | Catalog and compatibility checks | Included in Jest |
 
-Each draft covers all 378 keys. The literal email, punctuation-only parameter templates and three
+Each draft covers all 411 keys. The literal email, punctuation-only parameter templates and three
 German cognates intentionally match English; they are not untranslated placeholders.
 These are **not native-speaker-approved translations**. Future untranslated keys should be omitted
 so they fall back to English. Technical diagnostics and external helper/service messages can remain

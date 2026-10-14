@@ -1,4 +1,4 @@
-import { localizePluginLabel } from "../../lang/display";
+import { localizePluginLabel, planEntryDetail } from "../../lang/display";
 import { t, getUiTranslator } from "../../lang/ui";
 import { App, Modal } from "obsidian";
 import type {
@@ -43,7 +43,7 @@ type EntryRunState = "pending" | "done" | "failed" | "unchecked" | "instant";
 interface ExecutionSnapshot { plan: SyncPlan; entryStates: Map<string, EntryRunState>; }
 interface ExecutionRowRefs { row: HTMLDivElement; statusSymbolEl: HTMLSpanElement; badgeEl: HTMLSpanElement; }
 interface ChipRenderState { key: ChipKey; label: string; numerator?: number; denominator?: number; count?: number; isActive: boolean; }
-interface ModalAlertState { title: string; message: string; }
+interface ModalAlertState { title: () => string; message: () => string; }
 interface DismissPromptState { activeRun: boolean; }
 const CHIP_ORDER: ChipKey[] = ["notes", "create", "delete", "merge", "overwrite", "upload", "conflict-copy", "skipped-conflict", "already-up-to-date", "unchecked"];
 const clearElement = (element: HTMLElement) => {
@@ -132,17 +132,25 @@ function getReviewEntryLabel(entry: SyncPlanEntry): string {
 	if (entry.label === "Delete from Obsidian") return t("deletion.fromObsidian");
 	if (entry.label === "Preserved local removal") return t("deletion.preserved");
 	if (entry.label === "No longer in sync folder") return t("deletion.removed");
-	return getReviewChipLabel(getChipKeyForEntry(entry));
+	if (entry.label === "Archive") return t("sync.action.archive");
+	if (entry.label === "Add tags") return t("sync.action.addTags");
+	if (entry.label === "Update suggestions") return t("sync.action.updateSuggestions");
+	if (entry.label === "Removal not verified") return t("sync.action.unverifiedRemoval");
+	if (entry.label === "Deletion conflict") return t("sync.deletionConflict");
+	if (entry.action === "skipped-conflict-copy") return t("sync.action.skippedConflictCopy");
+	if (entry.label === "Skipped: conflict") return t("sync.action.skippedConflict");
+	if (entry.label === "Skipped: identical" || entry.label === "Skipped: up to date") return t("sync.action.upToDate");
+	return localizePluginLabel(entry.label);
 }
 function getFriendlySyncCenterError(error: unknown, context: "review" | "run"): ModalAlertState {
 	const rawMessage = error instanceof Error && error.message ? error.message : typeof error === "string" ? error : "Unknown error";
 	const normalizedMessage = rawMessage.toLowerCase();
 	const looksLikeConnectionProblem = ["err_connection_refused", "failed to fetch", "networkerror", "network error", "econnrefused", "enotfound", "timed out", "etimedout"].some((message) => normalizedMessage.includes(message));
 	if (looksLikeConnectionProblem) return {
-		title: context === "review" ? t("sync.error.prepareTitle") : t("sync.error.runTitle"),
-		message: t("sync.error.connection"),
+		title: () => context === "review" ? t("sync.error.prepareTitle") : t("sync.error.runTitle"),
+		message: () => t("sync.error.connection"),
 	};
-	return { title: context === "review" ? t("sync.error.prepareTitle") : t("sync.error.runTitle"), message: t("sync.error.generic") };
+	return { title: () => context === "review" ? t("sync.error.prepareTitle") : t("sync.error.runTitle"), message: () => t("sync.error.generic") };
 }
 function getSetupPrimaryButtonLabel(isGeneratingReview: boolean, processed: number, total?: number): string {
 	if (!isGeneratingReview) return t("sync.start");
@@ -161,6 +169,7 @@ function getRuntimeStatusLabel(entry: SyncPlanEntry, state: EntryRunState): stri
 	if (state === "unchecked") return t("sync.action.unchecked");
 	if (state === "failed") return entry.action === "skipped-conflict" && entry.label === "Deletion conflict" ? t("sync.deletionConflict") : t("common.failed");
 	if (state === "pending") return t("common.pending");
+	if (state === "instant" || (entry.action === "overwrite" && ["Archive", "Add tags", "Update suggestions"].includes(entry.label))) return getReviewEntryLabel(entry);
 	return getExecutionChipLabel(getChipKeyForEntry(entry));
 }
 function isInstantEntry(entry: SyncPlanEntry): boolean {
@@ -397,17 +406,17 @@ export class SyncProgressModal extends Modal {
 	private showAttemptError(error: unknown, context: "review" | "run", attempt = this.activeAttempt) {
 		this.preparationPaused = false;
 		if (context === "review" && error && typeof error === "object" && "code" in error && error.code === "sync_session_expired") {
-			this.modalAlert = { title: t("sync.expired"), message: t("sync.restartRange") };
+			this.modalAlert = { title: () => t("sync.expired"), message: () => t("sync.restartRange") };
 			return;
 		}
 		if (context === "review" && error instanceof Error && error.message.startsWith("Download paused.")) {
 			this.preparationPaused = true;
-			this.modalAlert = { title: t("sync.paused"), message: `${error.message}${attempt ? ` ${attempt.errorMessage(error)}` : ""}` };
+			this.modalAlert = { title: () => t("sync.paused"), message: () => `${error.message}${attempt ? ` ${attempt.errorMessage(error)}` : ""}` };
 			return;
 		}
 		this.modalAlert = attempt ? {
-			title: context === "review" ? t("sync.preparationFailed",{mode:modeLabel(this.selectedMode)}) : t("sync.modeFailed",{mode:modeLabel(this.selectedMode)}),
-			message: attempt.errorMessage(error),
+			title: () => context === "review" ? t("sync.preparationFailed",{mode:modeLabel(this.selectedMode)}) : t("sync.modeFailed",{mode:modeLabel(this.selectedMode)}),
+			message: () => attempt.errorMessage(error),
 		} : getFriendlySyncCenterError(error, context);
 	}
 	private async runReviewedPlan() {
@@ -472,7 +481,10 @@ export class SyncProgressModal extends Modal {
 		if (!entry || !entry.selected || !entry.selectable) return;
 		entry.path = path;
 		entry.title = path.split("/").pop()?.replace(/\.md$/i, "") ?? entry.title;
-		if (entry.meta?.detail === "New AI suggestions are requested only for selected notes.") delete entry.meta.detail;
+		if (entry.meta?.detail === "New AI suggestions are requested only for selected notes.") {
+			delete entry.meta.detail;
+			delete entry.meta.downloadDetails;
+		}
 		this.updateExecutionRowInPlace(entryId);
 	}
 	private handleEntrySettled(entryId: string, success: boolean, outcome?: SyncPlanAction) {
@@ -557,8 +569,8 @@ export class SyncProgressModal extends Modal {
 	}
 	private renderAlert(containerEl: HTMLElement, alert: ModalAlertState) {
 		const alertEl = createChild(containerEl, "div"); alertEl.classList.add("keepsidian-modal-alert"); alertEl.setAttribute("role", "alert");
-		createChild(alertEl, "div", { text: alert.title }).classList.add("keepsidian-modal-alert-title");
-		createChild(alertEl, "div", { text: alert.message }).classList.add("keepsidian-modal-alert-message");
+		createChild(alertEl, "div", { text: alert.title() }).classList.add("keepsidian-modal-alert-title");
+		createChild(alertEl, "div", { text: alert.message() }).classList.add("keepsidian-modal-alert-message");
 	}
 	private renderDismissPrompt(containerEl: HTMLElement, prompt: DismissPromptState) {
 		const promptEl = createChild(containerEl, "div"); promptEl.classList.add("keepsidian-modal-dismiss-prompt");
@@ -591,9 +603,9 @@ export class SyncProgressModal extends Modal {
 				return t("sync.preparing");
 			}
 			if (this.isSyncing) {
-				const phaseLabel = modeLabel(this.selectedMode);
-				if (typeof this.total === "number" && this.total > 0) return this.isCanceling ? t("sync.countProgress",{label:t("sync.canceling"),processed:this.processed,total:this.total}) : `${phaseLabel}: ${this.processed}/${this.total}`;
-				return this.isCanceling ? t("sync.result",{status:t("sync.canceling"),notes:t("sync.notes",{count:this.processed})}) : `${phaseLabel}: ${this.processed}`;
+				const phase = this.options.getCurrentPhaseLabel();
+				const phaseLabel = phase === "Download step" ? t("sync.downloadStep") : phase === "Upload step" ? t("sync.uploadStep") : modeLabel(this.selectedMode);
+				return t("sync.countProgress", { label: this.isCanceling ? t("sync.canceling") : phaseLabel, processed: this.processed, total: this.total ?? "?" });
 			}
 			const lastAttempt = this.options.getLastAttempt?.();
 			if (lastAttempt && (!this.summary || lastAttempt.updatedAt >= this.summary.timestamp)) return formatAttemptSummary(lastAttempt);
@@ -960,7 +972,8 @@ export class SyncProgressModal extends Modal {
 		createChild(titleLine, "div", { text: entry.title }).classList.add("keepsidian-sync-plan-row-title");
 		const badge = createChild(titleLine, "span", { text: badgeText }); badge.classList.add("keepsidian-sync-plan-row-badge");
 		createChild(body, "div", { text: entry.path }).classList.add("keepsidian-sync-plan-row-path");
-		if (entry.meta?.detail) createChild(body, "div", { text: localizePluginLabel(entry.meta.detail) }).classList.add("keepsidian-sync-plan-row-detail");
+		const detail = planEntryDetail(entry);
+		if (detail) createChild(body, "div", { text: detail }).classList.add("keepsidian-sync-plan-row-detail");
 		return badge;
 	}
 	private getFilteredEntries(surface: "review" | "running" | "result"): SyncPlanEntry[] {

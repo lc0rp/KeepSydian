@@ -1,6 +1,8 @@
 import * as obsidian from "obsidian";
 import { bindUiLanguage, getUiTranslator, onUiLanguageChanged, refreshUiLanguage, t } from "../ui";
 import { createTranslator } from "../index";
+import { planEntryDetail } from "../display";
+import { formatAttemptStatus, formatAttemptSummary } from "../../app/sync-attempt";
 import { resolveLoadedSettings } from "../../types/keepsidian-plugin-settings";
 import { deletionReviewSummary } from "../../ui/modals/deletion-review";
 import { createPreparedSyncPlanFixture, createSyncPlanEntryFixture } from "../../test-utils/fixtures/sync-plan";
@@ -67,5 +69,52 @@ describe("UI language preferences", () => {
 		} finally {
 			Object.defineProperty(Intl, "PluralRules", { configurable: true, value: original });
 		}
+	});
+	it("localizes combined upload safety details at render time without changing plan data", () => {
+		const entry = createSyncPlanEntryFixture("conflict-copy", "Conflict copy", {
+			stage: "upload",
+			title: "Upload",
+			path: "中文/Русский.md",
+			meta: {
+				attachmentCount: 2,
+				missingAttachmentCount: 1,
+				detail: "Legacy English details",
+				uploadDetail: { pendingMerge: true },
+			},
+		});
+		const before = JSON.stringify(entry);
+		cleanup = bindUiLanguage(() => ({ language: "de", useDraftTranslations: true }));
+		expect(planEntryDetail(entry)).toContain("2 aktualisierte Anhänge");
+		expect(planEntryDetail(entry)).toContain("1 referenzierter Anhang fehlt");
+		expect(planEntryDetail(entry)).toContain("Beide Originale bleiben unverändert");
+		expect(planEntryDetail(entry)).toContain("bestätigten Upload");
+		expect(JSON.stringify(entry)).toBe(before);
+	});
+	it("keeps attempt IDs in tooltips and preserves ready-for-review and phase context", () => {
+		const attempt = {
+			id: "attempt-12345678-1234-1234-1234-123456789abc",
+			mode: "import" as const,
+			phase: "review" as const,
+			startedAt: 1,
+			updatedAt: 2,
+			fetchedCount: 1,
+			elapsedMs: 1,
+			logUnavailable: false,
+		};
+		cleanup = bindUiLanguage(() => ({ language: "en" }));
+		expect(formatAttemptStatus(attempt)).toBe("Last attempt: Ready for review");
+		expect(formatAttemptStatus({ ...attempt, outcome: "failed" })).toBe("Last attempt: Failed");
+		expect(formatAttemptSummary(attempt)).toContain(attempt.id);
+		expect(formatAttemptSummary(attempt)).toContain("1 note · Review");
+	});
+	it("uses singular English and Russian count forms in notices", () => {
+		const en = createTranslator("en"),
+			ru = createTranslator("ru", { includeDrafts: true });
+		for (const key of ["notices.aiFailed", "notices.aiImported", "notices.resume"] as const) {
+			expect(en.t(key, { count: 1 })).not.toContain("1 notes");
+		}
+		expect(ru.t("notices.resume", { count: 1 })).toContain("1 заметка");
+		expect(ru.t("notices.resume", { count: 2 })).toContain("2 заметки");
+		expect(ru.t("notices.resume", { count: 5 })).toContain("5 заметок");
 	});
 });

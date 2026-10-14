@@ -47,7 +47,7 @@ function buildPushPlanEntry(note: ReviewedPushNote, index: number, allowPerNoteS
 		label: action === "conflict-copy" ? "Conflict copy" : action === "merge" ? "Merge" : "Upload",
 		selectable: true, selected: true, selectionLocked: !allowPerNoteSelection,
 		selectionLockedReason: !allowPerNoteSelection ? selectionLockedReason : undefined,
-		meta: { relativePath: note.relativePath, attachmentCount, missingAttachmentCount, missingAttachmentNames: note.missingAttachments, detail: detailParts.join(" ") },
+		meta: { relativePath: note.relativePath, attachmentCount, missingAttachmentCount, missingAttachmentNames: note.missingAttachments, detail: detailParts.join(" "), uploadDetail: { pendingMerge: hasPendingUpload(note.frontmatter) } },
 	};
 }
 
@@ -72,7 +72,7 @@ export async function buildPushSyncPlan(plugin: KeepSidianPlugin, allowPerNoteSe
 			action: skipped.reason === "unresolved-conflict" ? "skipped-conflict" : skipped.reason === "up-to-date" ? "skipped-up-to-date" : "skipped-conflict-copy",
 			label: skipped.reason === "unresolved-conflict" ? "Skipped: conflict" : skipped.reason === "up-to-date" ? "Skipped: up to date" : "Skipped: conflict copy",
 			selectable: false, selected: false, selectionLocked: false,
-			meta: { detail: skipped.reason === "unresolved-conflict" ? "Preserved during download. This run will not upload the unresolved original."
+			meta: { uploadDetail: { skipReason: skipped.reason === "unresolved-conflict" ? "unresolved-conflict" : skipped.reason === "up-to-date" ? "up-to-date" : "conflict-copy" }, detail: skipped.reason === "unresolved-conflict" ? "Preserved during download. This run will not upload the unresolved original."
 				: skipped.reason === "up-to-date" ? "No changes detected since the last sync." : "Conflict copies are never uploaded." },
 		})),
 	];

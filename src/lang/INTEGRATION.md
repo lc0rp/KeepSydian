@@ -39,18 +39,19 @@ The service creates a fresh profile and copies `test/vaults/simple`. Only synthe
 and mocked services are used. The six desktop checks cover opt-in, four locales, command labels,
 saved preferences, plugin reload, English fallback, recoverable deletion copy, literal malicious
 markup in note titles, mixed scripts, narrow-window overflow and translated connection errors.
+They also cover upload conflict/attachment warnings and an open error after draft opt-out.
 Screenshots are saved under ignored `output/i18n`.
 
 ## Remaining acceptance and limits
 
-- All 378 entries in each non-English catalog are AI drafts. Native reviewers must check terminology,
+- All 411 entries in each non-English catalog are AI drafts. Native reviewers must check terminology,
   consent, secret storage and destructive-action meanings in context before marking any locale reviewed.
 - Narrow desktop screenshots are not Android or iOS E2E. The current Android service requires
   Appium shell access and grants app permissions. These steps were outside this task's authorization;
   native mobile acceptance is outstanding.
 - The current desktop run uses Obsidian 1.12.4. Minimum-version behavior is covered by guarded API
   tests, not a real 1.6.5 launch.
-- Technical diagnostics, unknown server/helper messages, generated sync logs, and external sign-in,
+- Detailed folder-verification diagnostics, unknown server/helper messages, generated sync logs, and external sign-in,
   billing, documentation and Google pages can remain English. The separate helper app is not translated.
 - Full RTL chrome and locale-specific accessibility review remain future work.
 - No production vault, account, plugin installation, release, push or merge is part of this candidate.

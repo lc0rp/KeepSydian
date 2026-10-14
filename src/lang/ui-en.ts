@@ -1,5 +1,47 @@
 /** UI integration English source. */
 export const uiEn = {
+	"download.conflict-copy":
+		"Will create a conflict copy next to the existing note unless another merge action is chosen.",
+	"download.also-archive": "Also marks the existing note as archived.",
+	"download.archive-only": "Marks the existing note as archived. Its body and other properties are preserved.",
+	"download.add-tags": "Adds suggested tags while preserving your existing content and tags.",
+	"download.suggestions-failed": "AI suggestions failed; original content retained.",
+	"download.update-suggestions": "Applies available suggestions while preserving your manual edits.",
+	"download.request-suggestions": "New AI suggestions are requested only for selected notes.",
+	"download.legacy-tags":
+		"Previously imported titles and tags are kept. New AI tags require the choice in Customize sync.",
+	"sync.action.archive": "Archive",
+	"sync.action.addTags": "Add tags",
+	"sync.action.updateSuggestions": "Update suggestions",
+	"sync.action.unverifiedRemoval": "Removal not verified",
+	"sync.action.skippedConflictCopy": "Skipped: conflict copy",
+	"upload.attachments": {
+		one: "Includes {{count}} updated attachment.",
+		other: "Includes {{count}} updated attachments.",
+	},
+	"upload.missingAttachments": {
+		one: "{{count}} referenced attachment is missing.",
+		other: "{{count}} referenced attachments are missing.",
+	},
+	"upload.pendingMerge": "Contains a downloaded merge awaiting a confirmed upload.",
+	"upload.conflictCopy":
+		"Will save a local conflict copy and leave both originals unchanged unless another merge action is chosen.",
+	"upload.unresolved": "Preserved during download. This run will not upload the unresolved original.",
+	"upload.unchanged": "No changes detected since the last sync.",
+	"upload.neverConflictCopies": "Conflict copies are never uploaded.",
+	"attempt.status": "Last attempt: {{outcome}}",
+	"attempt.ready": "Ready for review",
+	"sync.downloadStep": "Download step",
+	"sync.uploadStep": "Upload step",
+	"attempt.phase.preflight": "Preflight",
+	"attempt.phase.storage": "Storage",
+	"attempt.phase.subscription": "Subscription",
+	"attempt.phase.fetch": "Download",
+	"attempt.phase.plan": "Plan",
+	"attempt.phase.review": "Review",
+	"attempt.phase.execution": "Execution",
+	"attempt.phase.upload-plan": "Upload plan",
+	"attempt.phase.upload": "Upload",
 	"deletion.fromObsidian": "Delete from Obsidian",
 	"deletion.preserved": "Preserved local removal",
 	"deletion.preservedDetail":
@@ -10,11 +52,20 @@ export const uiEn = {
 	"helper.verifying": "Verifying download...",
 	"helper.installing": "Installing helper...",
 	"helper.installed": "Helper installed.",
-	"notices.aiFailed":
-		"AI suggestions failed for {{count}} notes. Their original content was kept. Review these notes before syncing.",
-	"notices.aiImported":
-		"Imported Google Keep notes. AI suggestions unavailable for {{count}} notes. Review these notes before requesting AI again.",
-	"notices.resume": "Resuming download with {{count}} notes already fetched. Your original date range is preserved.",
+	"notices.aiFailed": {
+		one: "AI suggestions failed for {{count}} note. Its original content was kept. Review this note before syncing.",
+		other:
+			"AI suggestions failed for {{count}} notes. Their original content was kept. Review these notes before syncing.",
+	},
+	"notices.aiImported": {
+		one: "Imported Google Keep notes. AI suggestions unavailable for {{count}} note. Review this note before requesting AI again.",
+		other:
+			"Imported Google Keep notes. AI suggestions unavailable for {{count}} notes. Review these notes before requesting AI again.",
+	},
+	"notices.resume": {
+		one: "Resuming download with {{count}} note already fetched. Your original date range is preserved.",
+		other: "Resuming download with {{count}} notes already fetched. Your original date range is preserved.",
+	},
 	"notices.restart": "Previous preparation expired or its options changed. Restarting the selected date range.",
 	"notices.uploadPlanComplete": "Upload plan completed. See the results for saved or skipped conflicts.",
 	"deletion.conflictDetail":
@@ -29,7 +80,7 @@ export const uiEn = {
 		"A failed image or attachment download no longer stops the rest of your notes from importing.",
 	"feedback.yaml":
 		"KeepSydian preserves existing YAML comments and formatting when it refreshes imported-note metadata.",
-	"attempt.summary": "Last attempt {{id}}: {{outcome}} · {{notes}}",
+	"attempt.summary": "Last attempt {{id}}: {{outcome}} · {{notes}} · {{phase}}",
 	"attempt.incomplete": "Incomplete",
 	"attempt.abandoned": "Abandoned",
 	"attempt.failed": "Failed",
@@ -114,7 +165,8 @@ export const uiEn = {
 	"common.failed": "Failed",
 	"common.pending": "Pending",
 	"sync.expired": "Download preparation expired",
-	"sync.restartRange": "Start sync again to restart the selected date range. No notes were imported.",
+	"sync.restartRange":
+		"Preparation expired on the server. Start sync again to restart the selected date range. No notes were imported.",
 	"sync.paused": "Download paused",
 	"sync.aiSelection": "New AI suggestions are requested only for selected notes.",
 	"sync.canceling": "Canceling ...",

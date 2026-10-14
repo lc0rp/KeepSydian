@@ -2,6 +2,7 @@ jest.mock("obsidian");
 
 import { App } from "obsidian";
 import { SyncProgressModal } from "../SyncProgressModal";
+import { bindUiLanguage } from "../../../lang/ui";
 import type { LastSyncSummary, SyncMode } from "../../../types";
 import type { PreparedSyncPlan, RunPreparedSyncPlanResult } from "@app/main-sync-flows";
 import { createPreparedSyncPlanFixture, createSyncPlanEntryFixture } from "../../../test-utils/fixtures/sync-plan";
@@ -57,6 +58,32 @@ describe("SyncProgressModal", () => {
 			preparedPlan,
 		};
 	}
+
+	it("preserves specific review labels and their accessible names", async () => {
+		const labels = ["Archive", "Add tags", "Update suggestions", "Removal not verified", "Deletion conflict", "Skipped: conflict copy"];
+		modalOptions.buildSyncPlan.mockResolvedValue(createPreparedSyncPlanFixture("import", "import", labels.map((label, index) => createSyncPlanEntryFixture(index < 3 ? "overwrite" : index === 5 ? "skipped-conflict-copy" : "skipped-conflict", label, { id: `specific-${index}` }))));
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen(); await flushUI();
+		getTopStartButton(modal).click(); await flushUI();
+		expect(Array.from(modal.contentEl.querySelectorAll(".keepsidian-sync-plan-row-badge")).map(el => el.textContent)).toEqual(labels);
+		for (const label of labels) expect(Array.from(modal.contentEl.querySelectorAll("input[type=checkbox]")).some(el => el.getAttribute("aria-label")?.includes(label))).toBe(true);
+		modal.close();
+	});
+
+	it("retranslates an existing error when drafts are disabled without retrying", async () => {
+		const settings = { language: "ru" as const, useDraftTranslations: true };
+		const unbind = bindUiLanguage(() => settings);
+		const modal = new SyncProgressModal(app, modalOptions);
+		try {
+			modalOptions.buildSyncPlan.mockRejectedValue(new Error("Synthetic network error"));
+			modal.onOpen(); await flushUI(); getTopStartButton(modal).click(); await flushUI();
+			expect(modal.contentEl.querySelector(".keepsidian-modal-alert")?.textContent).toContain("Не удалось");
+			settings.useDraftTranslations = false; modal.refreshLanguage(); await flushUI();
+			expect(modal.contentEl.querySelector(".keepsidian-modal-alert")?.textContent).toContain("Could not connect");
+			expect(modal.contentEl.querySelector(".keepsidian-modal-alert")?.textContent).not.toContain("Не удалось");
+			expect(modalOptions.buildSyncPlan).toHaveBeenCalledTimes(1);
+		} finally { modal.close(); unbind(); }
+	});
 
 	function getButton(modal: SyncProgressModal, label: string): HTMLButtonElement {
 		const buttons = Array.from(modal.contentEl.querySelectorAll("button"));
