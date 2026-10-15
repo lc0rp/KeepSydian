@@ -1,3 +1,4 @@
+import { t } from "../../../lang/ui";
 import type KeepSidianPlugin from "main";
 import { Platform, Setting, setIcon } from "obsidian";
 import { TOKEN_HELPER_SOURCE_URL } from "@integrations/google/tokenHelper";
@@ -15,13 +16,8 @@ interface TokenSettingOptions {
 export function addSyncTokenSetting(containerEl: HTMLElement, options: TokenSettingOptions): void {
 	const { plugin } = options;
 	const tokenSetting = new Setting(containerEl)
-		.setName("Sync token")
-		.setDesc(
-			"This token authorizes access to your Google Keep data. KeepSidian stores it securely via Obsidian secret storage when available." +
-				(Platform.isMobileApp
-					? " Paste a token retrieved on desktop, or follow the GitHub instructions further down below."
-					: " Retrieve your token using the options below, or paste it directly here.")
-		);
+		.setName(t("settings.token.name"))
+		.setDesc(t(Platform.isMobileApp ? "settings.token.description.mobile" : "settings.token.description.desktop"));
 
 	const tokenStatus = tokenSetting.nameEl.createDiv("keepsidian-token-status keepsidian-hidden");
 	const statusIcon = tokenStatus.createEl("span", {
@@ -29,7 +25,7 @@ export function addSyncTokenSetting(containerEl: HTMLElement, options: TokenSett
 	});
 	setIcon(statusIcon, "check-circle");
 	tokenStatus.createEl("span", {
-		text: "Retrieved successfully",
+		text: t("settings.token.retrieved"),
 		cls: "keepsidian-token-status__text",
 	});
 
@@ -46,7 +42,7 @@ export function addSyncTokenSetting(containerEl: HTMLElement, options: TokenSett
 
 	tokenSetting.addText((text) => {
 		text
-			.setPlaceholder("Google Keep sync token.")
+			.setPlaceholder(t("settings.token.placeholder"))
 			.setValue(plugin.settings.token)
 			.onChange(async (value) => {
 				const trimmedValue = value.trim();
@@ -66,16 +62,16 @@ export function addSyncTokenSetting(containerEl: HTMLElement, options: TokenSett
 		};
 		text.inputEl.addEventListener("paste", onPaste);
 		const toggleButton = text.inputEl.parentElement?.createEl("button", {
-			text: "Show",
+			text: t("common.show"),
 		});
 		toggleButton?.addEventListener("click", (event) => {
 			event.preventDefault();
 			if (text.inputEl.type === "password") {
 				text.inputEl.type = "text";
-				toggleButton.textContent = "Hide";
+				toggleButton.textContent = t("common.hide");
 			} else {
 				text.inputEl.type = "password";
-				toggleButton.textContent = "Show";
+				toggleButton.textContent = t("common.show");
 			}
 		});
 
@@ -84,21 +80,21 @@ export function addSyncTokenSetting(containerEl: HTMLElement, options: TokenSett
 
 	if (Platform.isDesktopApp) {
 		const retrievalSetting = new Setting(containerEl)
-			.setName("Option 1: guided token retrieval (desktop only)")
+			.setName(t("settings.token.guided"))
 			.setDesc("");
 		retrievalSetting.descEl.createEl("span", {
 			cls: [
 				"keepsidian-token-helper-availability",
 				options.helperInstalled ? "is-installed" : "is-missing",
 			],
-			text: options.helperInstalled ? "Wizard downloaded." : "Wizard download needed.",
+			text: options.helperInstalled ? t("settings.token.wizardDownloaded") : t("settings.token.wizardNeeded"),
 		});
 		retrievalSetting.descEl.append(
-			" This option uses a Wizard to open a web browser, guide sign-in, and retrieve the token. It requires a small open-source download."
+			" " + t("settings.token.wizardDescription")
 		);
 
 		retrievalSetting.addButton((button) =>
-			button.setButtonText("Launch wizard").onClick(() => void options.onHelperLaunch())
+			button.setButtonText(t("settings.token.launchWizard")).onClick(() => void options.onHelperLaunch())
 		);
 		const sourceLink = retrievalSetting.controlEl.createEl("a", {
 			cls: ["keepsidian-link-button", "keepsidian-token-helper-source-button"],
@@ -108,23 +104,23 @@ export function addSyncTokenSetting(containerEl: HTMLElement, options: TokenSett
 				rel: "noopener noreferrer",
 				role: "button",
 				"data-keepsidian-link": "token-helper-source",
-				"aria-label": "View wizard source code",
+				"aria-label": t("settings.token.viewSource"),
 			},
 		});
 		const sourceIcon = sourceLink.createEl("span", { cls: "keepsidian-token-helper-source-button__icon" });
 		setIcon(sourceIcon, "github");
-		sourceLink.createEl("span", { text: "View wizard source code" });
+		sourceLink.createEl("span", { text: t("settings.token.viewSource") });
 
 		const githubSetting = new Setting(containerEl)
-			.setName("Option 2: manual retrieval instructions")
+			.setName(t("settings.token.manual"))
 			.setDesc(
-				'Prefer manual steps? Click the button to follow the GitHub KIM instructions, and paste the token into the "sync token" field above.'
+				t("settings.token.manualDescription")
 			);
 		options.addGithubInstructionsLink(githubSetting);
 
 		new Setting(containerEl)
-			.setName("Enable debug logging")
-			.setDesc("Log retrieval steps to the console.")
+			.setName(t("settings.debug.name"))
+			.setDesc(t("settings.debug.description"))
 			.addToggle((toggle) => {
 				toggle.setValue(plugin.settings.oauthDebugMode ?? false).onChange(async (value) => {
 					plugin.settings.oauthDebugMode = value;
@@ -132,8 +128,8 @@ export function addSyncTokenSetting(containerEl: HTMLElement, options: TokenSett
 				});
 			});
 	} else {
-		const retrievalSetting = new Setting(containerEl).setName("Token retrieval instructions");
-		retrievalSetting.setDesc("Mobile: use a desktop-synced token or the GitHub KIM instructions below.");
+		const retrievalSetting = new Setting(containerEl).setName(t("settings.token.mobileInstructions"));
+		retrievalSetting.setDesc(t("settings.token.mobileDescription"));
 		options.addGithubInstructionsLink(retrievalSetting);
 	}
 }
@@ -142,10 +138,10 @@ export function addAdvancedSettings(plugin: KeepSidianPlugin, containerEl: HTMLE
 	new Setting(containerEl).setName("Advanced & debug").setHeading();
 
 	const oauthFlowSetting = new Setting(containerEl)
-		.setName("OAuth flow")
-		.setDesc("Choose how KeepSidian opens the Google login flow on desktop. The web viewer opens a separate tab.")
+		.setName(t("settings.oauth.name"))
+		.setDesc(t("settings.oauth.description"))
 		.addDropdown((dropdown) => {
-			dropdown.addOption("desktop", "Embedded panel (default)").addOption("webviewer", "Web viewer tab");
+			dropdown.addOption("desktop", t("settings.oauth.embedded")).addOption("webviewer", t("settings.oauth.webViewer"));
 			dropdown.setValue(plugin.settings.oauthFlow ?? "desktop");
 			dropdown.onChange(async (value) => {
 				plugin.settings.oauthFlow = value as "desktop" | "webviewer";
@@ -157,7 +153,7 @@ export function addAdvancedSettings(plugin: KeepSidianPlugin, containerEl: HTMLE
 		});
 
 	if (!Platform.isDesktopApp) {
-		oauthFlowSetting.setDesc("Desktop only: OAuth flow selection is disabled on mobile.");
+		oauthFlowSetting.setDesc(t("settings.oauth.mobileDescription"));
 	}
 
 	if (plugin.settings.oauthPlaywrightUseSystemBrowser !== true) {

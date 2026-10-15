@@ -1,3 +1,4 @@
+import { t } from "../lang/ui";
 import { Notice } from "obsidian";
 import type KeepSidianPlugin from "@app/main";
 import type { DownloadScope, SyncMode } from "@types";
@@ -61,10 +62,37 @@ function safeCutoff(value: unknown): string | undefined {
 	return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
 }
 
+function attemptOutcome(attempt: LastSyncAttempt): string {
+	return t(
+		attempt.outcome === "success"
+			? "attempt.success"
+			: attempt.outcome === "failed"
+				? "attempt.failed"
+				: attempt.outcome === "canceled"
+					? "attempt.canceled"
+					: attempt.outcome === "abandoned"
+						? "attempt.abandoned"
+						: attempt.phase === "review"
+							? "attempt.ready"
+							: "attempt.incomplete"
+	);
+}
+
+export function formatAttemptStatus(attempt: LastSyncAttempt): string {
+	return t("attempt.status", { outcome: attemptOutcome(attempt) });
+}
+
 export function formatAttemptSummary(attempt: LastSyncAttempt): string {
-	const outcome =
-		attempt.outcome ?? (attempt.phase === "review" ? "ready for review" : "interrupted before a recorded outcome");
-	return `Last attempt ${attempt.id}: ${outcome} (${attempt.phase}, ${attempt.fetchedCount} fetched).${attempt.logUnavailable ? " Sync log unavailable." : ""}`;
+	// Persisted history may come from a newer plugin or hand-edited settings.
+	const knownPhase = ["preflight", "storage", "subscription", "fetch", "plan", "review", "execution", "upload-plan", "upload"].includes(attempt.phase);
+	return (
+		t("attempt.summary", {
+			id: attempt.id,
+			outcome: attemptOutcome(attempt),
+			phase: knownPhase ? t(`attempt.phase.${attempt.phase}`) : t("attempt.incomplete"),
+			notes: t("sync.notes", { count: attempt.fetchedCount }),
+		}) + (attempt.logUnavailable ? " " + t("attempt.logUnavailable") : "")
+	);
 }
 
 /** One owner spans preflight, review and both stages of an execution. */
@@ -177,12 +205,11 @@ export class SyncAttempt {
 		const classified = safeSyncError(error);
 		const httpStatus = classified.httpStatus ?? this.status;
 		const errorKind = classified.errorKind;
-		const reason = httpStatus
-			? `HTTP ${httpStatus}.`
-			: errorKind === "parse"
-				? "Invalid server response."
-				: "The operation could not be completed.";
-		return `${reason} Attempt ${this.id}.${this.unavailable ? " Sync log unavailable; check vault storage permissions." : " Open the sync log for details."}`;
+		return t("attempt.error", {
+			reason: httpStatus ? `HTTP ${httpStatus}.` : errorKind === "parse" ? t("errors.parse") : t("sync.error.generic"),
+			id: this.id,
+			help: this.unavailable ? t("attempt.logUnavailable") : t("sync.openLog"),
+		});
 	}
 
 	private fallback(): void {
@@ -259,7 +286,7 @@ export class SyncAttempt {
 				this.fallback();
 				summary.logUnavailable = true;
 			}
-			if (outcome && this.plugin.statusTextEl) this.plugin.statusTextEl.textContent = `Last attempt ${outcome}`;
+			if (outcome && this.plugin.statusTextEl) this.plugin.statusTextEl.textContent = formatAttemptStatus(summary);
 		});
 		return this.writes;
 	}

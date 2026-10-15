@@ -2,7 +2,7 @@ jest.mock("obsidian");
 
 import { Notice } from "obsidian";
 import KeepSidianPlugin from "../../main";
-import { finishSyncUI, initializeStatusBar, startSyncUI } from "../../app/sync-ui";
+import { finishSyncUI, initializeStatusBar, startSyncUI, updateStatusBarSummary } from "../../app/sync-ui";
 import { HIDDEN_CLASS } from "../../app/ui-constants";
 import { DEFAULT_SETTINGS } from "../../types/keepsidian-plugin-settings";
 
@@ -58,6 +58,12 @@ describe("status bar gating", () => {
 
 		expect(openSyncCenterSpy).toHaveBeenCalledTimes(1);
 		openSyncCenterSpy.mockRestore();
+	});
+	it("keeps a failed attempt ID in the tooltip instead of the status text", () => {
+		plugin.settings.lastSyncAttempt = { id: "attempt-12345678-1234-1234-1234-123456789abc", mode: "import", phase: "fetch", outcome: "failed", startedAt: 1, updatedAt: 2, fetchedCount: 1, elapsedMs: 1, logUnavailable: false };
+		updateStatusBarSummary(plugin);
+		expect(plugin.statusTextEl?.textContent).toBe("Last attempt: Failed");
+		expect(statusBarItem.setAttribute).toHaveBeenLastCalledWith("title", expect.stringContaining(plugin.settings.lastSyncAttempt.id));
 	});
 
 	it("cancels stale finish timers when a new sync starts", () => {
@@ -153,7 +159,7 @@ describe("status bar gating", () => {
 			})
 		);
 		expect(plugin.statusTextEl?.textContent).toBe("Last sync completed with warnings");
-		expect(setMessage).toHaveBeenCalledWith("Synced Google Keep Notes with 2 warnings.");
+		expect(setMessage).toHaveBeenCalledWith("Sync complete. · 2 warnings");
 		expect(plugin.progressContainerEl?.classList.contains("complete")).toBe(true);
 	});
 });

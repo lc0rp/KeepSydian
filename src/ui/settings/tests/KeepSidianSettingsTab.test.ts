@@ -242,22 +242,23 @@ describe("KeepSidianSettingsTab", () => {
 		const settingNames = Array.from(settingsTab.containerEl.querySelectorAll(".setting-item-name")).map(
 			(element) => element.firstChild?.textContent ?? element.textContent
 		);
-		expect(settingNames.slice(0, 7)).toEqual([
+		expect(settingNames.slice(0, 10)).toEqual([
+ "Language", "Interface language", "Use draft translations",
 			"Retrieve sync token",
 			"Email",
 			"Sync token",
-			"Option 1: guided token retrieval (desktop only)",
-			"Option 2: manual retrieval instructions",
+			"Option 1: get a token with the wizard (desktop only)",
+			"Option 2: get a token manually",
 			"Enable debug logging",
 			"Notes",
 		]);
 		const guidedRetrieval = Array.from(settingsTab.containerEl.querySelectorAll(".setting-item")).find(
 			(element) =>
 				element.querySelector(".setting-item-name")?.textContent ===
-				"Option 1: guided token retrieval (desktop only)"
+				"Option 1: get a token with the wizard (desktop only)"
 		);
 		expect(guidedRetrieval?.querySelector(".setting-item-description")?.textContent).toBe(
-			"Wizard downloaded. This option uses a Wizard to open a web browser, guide sign-in, and retrieve the token. It requires a small open-source download."
+			"Wizard downloaded. The wizard opens a web browser, guides you through sign-in and gets your token. You need to download a small open-source tool first."
 		);
 		expect(guidedRetrieval?.textContent).not.toContain("[object DocumentFragment]");
 	});
@@ -268,8 +269,8 @@ describe("KeepSidianSettingsTab", () => {
 
 		await settingsTabInternals.renderSettings();
 
-		expect(settingsTab.containerEl.textContent).toContain("Mobile: use a desktop-synced token");
-		expect(settingsTab.containerEl.textContent).toContain("Token retrieval instructions");
+		expect(settingsTab.containerEl.textContent).toContain("On mobile, use a token synced from desktop");
+		expect(settingsTab.containerEl.textContent).toContain("How to get a token");
 		expect(settingsTab.containerEl.textContent).not.toContain("Option 1:");
 		expect(settingsTab.containerEl.textContent).not.toContain("Option 2:");
 		expect(settingsTab.containerEl.textContent).not.toContain("Launch wizard");
@@ -326,7 +327,7 @@ describe("KeepSidianSettingsTab", () => {
 		expect(getTokenHelperState).toHaveBeenCalledWith(plugin);
 		expect(runTokenHelper).toHaveBeenCalledWith(plugin, expect.any(Function));
 		expect(exchangeOauthToken).toHaveBeenCalledWith(settingsTab, plugin, "oauth_token_value");
-		expect(noticeMock).not.toHaveBeenCalledWith("Please enter a valid email address before retrieving the token.");
+		expect(noticeMock).not.toHaveBeenCalledWith("Enter a valid email address before getting a token.");
 	});
 
 	test("should open install modal when helper is missing", async () => {
@@ -388,7 +389,7 @@ describe("KeepSidianSettingsTab", () => {
 
 		expect(runTokenHelper).not.toHaveBeenCalled();
 		expect(noticeMock).toHaveBeenCalledWith(
-			"Token retrieval helper is only available on desktop. Paste a token instead."
+			"The token helper works on desktop only. Paste a token instead."
 		);
 	});
 
@@ -406,6 +407,6 @@ describe("KeepSidianSettingsTab", () => {
 
 		await settingsTabInternals.handleTokenHelperLaunch();
 
-		expect(noticeMock).toHaveBeenCalledWith("Please enter a valid email address before retrieving the token.");
+		expect(noticeMock).toHaveBeenCalledWith("Enter a valid email address before getting a token.");
 	});
 });

@@ -50,13 +50,16 @@ function hasText(message: Message | undefined): message is Message {
 }
 
 /**
- * Foundation only: no production callers yet. Drafts require explicit preview opt-in.
+ * Drafts require explicit opt-in. Unsupported Obsidian languages use English.
  * Results are plain text for textContent/createEl({text}), never HTML.
  */
 export function createTranslator(appLanguage?: unknown, options: { includeDrafts?: boolean } = {}) {
 	const requestedLocale = resolveLocale(appLanguage);
 	const candidate = languages[requestedLocale];
-	const locale = candidate.status === "draft" && !options.includeDrafts ? "en" : requestedLocale;
+	const locale =
+		(candidate.status === "draft" && !options.includeDrafts) || typeof Intl.PluralRules !== "function"
+			? "en"
+			: requestedLocale;
 	const catalog = languages[locale].messages;
 
 	const t = (key: MessageKey, parameters: MessageParameters = {}): string => {
@@ -76,7 +79,12 @@ export function createTranslator(appLanguage?: unknown, options: { includeDrafts
 			if (typeof count !== "number" || !Number.isFinite(count)) {
 				throw new TypeError(`A finite numeric count is required for ${key}`);
 			}
-			const form = new Intl.PluralRules(messageLocale).select(count);
+			const form =
+				typeof Intl.PluralRules === "function"
+					? new Intl.PluralRules(messageLocale).select(count)
+					: count === 1
+						? "one"
+						: "other";
 			template = message[form] || message.other;
 		}
 		return template.replace(/\{\{([a-zA-Z][a-zA-Z0-9_]*)\}\}/g, (placeholder, name: string) => {

@@ -92,13 +92,13 @@ describe("Google Keep Import Functions", () => {
 		it("should successfully import notes", async () => {
 			await expect(importGoogleKeepNotes(mockPlugin)).resolves.toBe(0);
 			expect(requestUrl).toHaveBeenCalled();
-			expect(Notice).toHaveBeenCalledWith("Imported Google Keep notes.");
+			expect(Notice).toHaveBeenCalledWith("Imported notes from Google Keep.");
 		});
 
 		it("should handle errors during import", async () => {
 			(requestUrl as jest.Mock).mockRejectedValue(new Error("Network error"));
 			await expect(importGoogleKeepNotes(mockPlugin)).rejects.toThrow("Network error");
-			expect(Notice).toHaveBeenCalledWith("Failed to import notes.");
+			expect(Notice).toHaveBeenCalledWith("Could not import notes.");
 			expect(mockPlugin.settings.keepSidianLastSuccessfulSyncDate).toBeNull();
 			expect(setVaultConfigMock).not.toHaveBeenCalled();
 		});
@@ -320,7 +320,7 @@ describe("Google Keep Import Functions", () => {
 		it("should handle errors with premium features", async () => {
 			(requestUrl as jest.Mock).mockRejectedValue(new Error("Premium feature error"));
 			await expect(importGoogleKeepNotesWithOptions(mockPlugin, mockOptions)).rejects.toThrow("Premium feature error");
-			expect(Notice).toHaveBeenCalledWith("Failed to import notes.");
+			expect(Notice).toHaveBeenCalledWith("Could not import notes.");
 		});
 	});
 
@@ -333,8 +333,8 @@ describe("Google Keep Import Functions", () => {
 			(handleDuplicateNotes as jest.Mock).mockResolvedValue("create");
 			await syncModule.importSelectedGoogleKeepNotes(mockPlugin, [note], { onEnrichmentWarning });
 			expect(onEnrichmentWarning).toHaveBeenCalledTimes(1);
-			expect(Notice).toHaveBeenCalledWith(expect.stringContaining("AI suggestions unavailable for 1 notes"), 10_000);
-			expect(Notice).not.toHaveBeenCalledWith("Imported Google Keep notes.");
+			expect(Notice).toHaveBeenCalledWith(expect.stringContaining("AI suggestions unavailable for 1 note."), 10_000);
+			expect(Notice).not.toHaveBeenCalledWith("Imported notes from Google Keep.");
 			expect(loggingModule.logSync).toHaveBeenCalledWith(mockPlugin, expect.stringContaining("AI suggestions unavailable"));
 		});
 
@@ -380,7 +380,7 @@ describe("Google Keep Import Functions", () => {
 			jest.spyOn(loggingModule, "logSync").mockResolvedValue(undefined);
 			const built = await buildImportSyncPlan(mockPlugin);
 			expect(built.plan.entries[0].meta?.detail).toContain("AI suggestions failed");
-			expect(Notice).toHaveBeenCalledWith(expect.stringContaining("AI suggestions failed for 1 notes"), 10_000);
+			expect(Notice).toHaveBeenCalledWith(expect.stringContaining("AI suggestions failed for 1 note."), 10_000);
 		});
 
 		it("serializes vault-wide restrictions including an empty permitted set", () => {

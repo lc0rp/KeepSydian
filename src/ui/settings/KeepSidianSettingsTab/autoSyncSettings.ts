@@ -1,3 +1,4 @@
+import { t } from "../../../lang/ui";
 import type KeepSidianPlugin from "main";
 import { Setting } from "obsidian";
 import type { ToggleComponent } from "obsidian";
@@ -13,13 +14,13 @@ export async function addAutoSyncSettings(plugin: KeepSidianPlugin, containerEl:
 		}
 	};
 
-	new Setting(containerEl).setName("Background sync").setHeading();
+	new Setting(containerEl).setName(t("settings.background.heading")).setHeading();
 
 	let updateTwoWaySettingsState: () => void = () => {};
 
 	new Setting(containerEl)
-		.setName("Enable background sync")
-		.setDesc("Quietly sync your notes at regular intervals.")
+		.setName(t("settings.background.name"))
+		.setDesc(t("settings.background.description"))
 		.addToggle((toggle) =>
 			toggle.setValue(plugin.settings.autoSyncEnabled).onChange(async (value) => {
 				plugin.settings.autoSyncEnabled = value;
@@ -37,8 +38,8 @@ export async function addAutoSyncSettings(plugin: KeepSidianPlugin, containerEl:
 	const isSubscribed = await plugin.subscriptionService.isSubscriptionActive();
 
 	const intervalSetting = new Setting(containerEl)
-		.setName("Sync interval (hours)")
-		.setDesc("Change the default sync interval." + (isSubscribed ? "" : " (Available to project supporters)"))
+		.setName(t("settings.interval.name"))
+		.setDesc(t("settings.interval.description") + (isSubscribed ? "" : " (" + t("supporter.available") + ")"))
 		.addText((text) =>
 			text
 				.setPlaceholder("24")
@@ -60,7 +61,7 @@ export async function addAutoSyncSettings(plugin: KeepSidianPlugin, containerEl:
 		intervalSetting.setClass("requires-subscription");
 	}
 
-	new Setting(containerEl).setName("Two-way sync (experimental)").setHeading();
+	new Setting(containerEl).setName(t("settings.twoWay.heading")).setHeading();
 
 	let suppressTwoWayUpdates = false;
 	let backupToggle: ToggleComponent | undefined;
@@ -73,8 +74,7 @@ export async function addAutoSyncSettings(plugin: KeepSidianPlugin, containerEl:
 		if (items.length === 1) {
 			return items[0];
 		}
-		const last = items[items.length - 1];
-		return `${items.slice(0, -1).join(", ")}, and ${last}`;
+		return items.join(" · ");
 	};
 
 	updateTwoWaySettingsState = () => {
@@ -89,13 +89,13 @@ export async function addAutoSyncSettings(plugin: KeepSidianPlugin, containerEl:
 		manualTwoWayToggle?.setValue(manualTwoWayEnabled);
 		autoTwoWayToggle?.setValue(autoTwoWayEnabled);
 
-		const manualBaseDesc = "Turn on the 'Upload' and 'Two-way sync' commands.";
+		const manualBaseDesc = t("settings.enableCommands");
 		const manualRequirements: string[] = [];
 		if (!isSubscribed) {
-			manualRequirements.push("Available to project supporters");
+			manualRequirements.push(t("supporter.available"));
 		}
 		if (!backupAcknowledged) {
-			manualRequirements.push("Please opt-in above to activate");
+			manualRequirements.push(t("settings.optInFirst"));
 		}
 		const manualDesc = manualRequirements.length
 			? `${manualBaseDesc} (${formatRequirementList(manualRequirements)})`
@@ -105,22 +105,22 @@ export async function addAutoSyncSettings(plugin: KeepSidianPlugin, containerEl:
 
 		const requirements: string[] = [];
 		if (!isSubscribed) {
-			requirements.push("Available to project supporters");
+			requirements.push(t("supporter.available"));
 		}
 		if (!backupAcknowledged) {
-			requirements.push("requires opt-in above");
+			requirements.push(t("settings.requiresOptIn"));
 		}
 		if (backupAcknowledged && !manualTwoWayEnabled) {
-			requirements.push("requires two-way sync");
+			requirements.push(t("settings.requiresTwoWay"));
 		}
 
 		if (backupAcknowledged && manualTwoWayEnabled && isSubscribed && !autoSyncActive) {
-			requirements.push("requires background sync");
+			requirements.push(t("settings.requiresBackground"));
 		}
 
 		const autoDesc = requirements.length
-			? `Background sync will run uploads and downloads together when enabled. (${formatRequirementList(requirements)})`
-			: "Background sync will run uploads and downloads together when enabled.";
+			? `${t("settings.backgroundBoth")} (${formatRequirementList(requirements)})`
+			: t("settings.backgroundBoth");
 		autoTwoWaySetting.setDesc(autoDesc);
 		setSettingDisabledState(autoTwoWaySetting, requirements.length > 0);
 		suppressTwoWayUpdates = false;
@@ -129,13 +129,13 @@ export async function addAutoSyncSettings(plugin: KeepSidianPlugin, containerEl:
 	const backupGuideUrl = "https://help." + "obsidian.md/backup";
 
 	const backupGuideSetting = new Setting(containerEl)
-		.setName("Backup advisory ⚠️")
+		.setName(t("settings.backup.name"))
 		.setDesc(
-			"This is an experimental feature. Media uploads are not supported. To protect your data, KeepSidian attempts to archive conflicting Google Keep notes, and only downloads to the 'save location' specified in the settings above. As always, please remember to back up your vault."
+			t("settings.backup.description")
 		);
 
 	const backupGuideLink = backupGuideSetting.controlEl.createEl("a", {
-		text: "🌎 Obsidian backup guide",
+		text: t("settings.backupGuide"),
 		attr: {
 			href: backupGuideUrl,
 			target: "_blank",
@@ -147,8 +147,8 @@ export async function addAutoSyncSettings(plugin: KeepSidianPlugin, containerEl:
 	backupGuideLink.setAttribute("role", "button");
 
 	new Setting(containerEl)
-		.setName("Confirm opt in")
-		.setDesc("I've reviewed the info above and the backup guide. Let's proceed.")
+		.setName(t("settings.optIn.name"))
+		.setDesc(t("settings.optIn.description"))
 		.addToggle((toggle) => {
 			backupToggle = toggle;
 			toggle.setValue(plugin.settings.twoWaySyncBackupAcknowledged).onChange(async (value) => {
@@ -166,7 +166,7 @@ export async function addAutoSyncSettings(plugin: KeepSidianPlugin, containerEl:
 			});
 		});
 
-	manualTwoWaySetting = new Setting(containerEl).setName("Enable two-way sync").addToggle((toggle) => {
+	manualTwoWaySetting = new Setting(containerEl).setName(t("settings.twoWay.name")).addToggle((toggle) => {
 		manualTwoWayToggle = toggle;
 		toggle.setValue(plugin.settings.twoWaySyncEnabled).onChange(async (value) => {
 			if (suppressTwoWayUpdates) {
@@ -186,7 +186,7 @@ export async function addAutoSyncSettings(plugin: KeepSidianPlugin, containerEl:
 		});
 	});
 
-	autoTwoWaySetting = new Setting(containerEl).setName("Enable two-way background sync").addToggle((toggle) => {
+	autoTwoWaySetting = new Setting(containerEl).setName(t("settings.twoWay.background")).addToggle((toggle) => {
 		autoTwoWayToggle = toggle;
 		toggle.setValue(plugin.settings.twoWaySyncAutoSyncEnabled).onChange(async (value) => {
 			if (suppressTwoWayUpdates) {

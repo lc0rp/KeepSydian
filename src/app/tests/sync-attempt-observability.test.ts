@@ -473,7 +473,7 @@ describe("persistent sync attempt preparation", () => {
 		reopened.onOpen();
 		await Promise.resolve();
 		expect(reopened.contentEl.textContent).toContain("Last attempt");
-		expect(reopened.contentEl.textContent).toContain("failed");
+		expect(reopened.contentEl.textContent).toContain("Failed");
 	});
 
 	it("abandons a prepared review once without changing the checkpoint", async () => {

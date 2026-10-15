@@ -1,26 +1,27 @@
 # Language catalogs
 
-This is a dormant localization foundation. The plugin still renders its existing English strings;
-no production module imports this folder. See [readiness and rollout plan](READINESS.md).
+The plugin uses these catalogs for its main UI. English is the default; Chinese, Russian and German
+require the explicit **Use draft translations** setting. See [integration and acceptance](INTEGRATION.md)
+and the original [readiness and rollout plan](READINESS.md).
 
 ## Files and status
 
 | File | Purpose | Status on 2026-10-14 |
 | --- | --- | --- |
-| [en-plain-lang.ts](en-plain-lang.ts) | Canonical English source after plain-language review | All 138 entries reviewed; 58 revised, 80 retained |
+| [en-plain-lang.ts](en-plain-lang.ts) and [ui-en.ts](ui-en.ts) | Canonical English source | 138 foundation entries plus 273 UI entries |
 | [en.ts](en.ts) | Preserved original English extraction, including its original header | 138 entries; unchanged archive, not the active source |
-| [zh.ts](zh.ts) | Simplified Chinese (`zh`, matching Obsidian) | 138 AI-authored draft entries |
-| [ru.ts](ru.ts) | Russian | 138 AI-authored draft entries |
-| [de.ts](de.ts) | German | 138 AI-authored draft entries |
+| [zh.ts](zh.ts), [ui-zh.ts](ui-zh.ts) | Simplified Chinese (`zh`, matching Obsidian) | 411 AI-authored draft entries |
+| [ru.ts](ru.ts), [ui-ru.ts](ui-ru.ts) | Russian | 411 AI-authored draft entries |
+| [de.ts](de.ts), [ui-de.ts](ui-de.ts) | German | 411 AI-authored draft entries |
 | [types.ts](types.ts) | Keys, message shapes, language status | TypeScript checked |
-| [index.ts](index.ts) | Locale resolution, fallback, interpolation, plurals, display formatting | Tested, not wired to UI |
+| [index.ts](index.ts), [ui.ts](ui.ts), [display.ts](display.ts) | Locale resolution, fallback, interpolation, plurals, UI binding | Integrated |
 | [tests/i18n.test.ts](tests/i18n.test.ts) | Catalog and compatibility checks | Included in Jest |
 
-Each draft covers all 138 current keys: 137 translated entries and the unchanged literal email example.
-These are **not native-speaker-approved translations**. No English placeholder prose remains. Future
-untranslated keys should be omitted so they fall back to English. Full catalog coverage is not full
-plugin coverage: safety dialogs, dynamic sync-plan explanations, helper progress and several settings
-still need extraction. None of the app's UI is localized by this change.
+Each draft covers all 411 keys. The literal email, punctuation-only parameter templates and three
+German cognates intentionally match English; they are not untranslated placeholders.
+These are **not native-speaker-approved translations**. Future untranslated keys should be omitted
+so they fall back to English. Technical diagnostics and external helper/service messages can remain
+English; catalog completeness does not mean every external surface is translated.
 
 The English pass used the installed local `plain-lang` skill, which requires a separate copy and an
 unchanged original. Both the registry and message types now use `en-plain-lang.ts`. Do not update the
@@ -74,16 +75,16 @@ Only the actual script/region subtags select a Chinese catalog: Unicode extensio
 text do not. For example, `zh-TW-x-hans` stays English and `zh-CN-u-nu-latn` selects Simplified Chinese.
 Unknown, absent or invalid locales fall back to English. These rules do not inspect note contents.
 
-`readAppLocale` accepts an optional reader so integration can feature-detect Obsidian's `getLanguage`
-API (available since 1.8.7). A missing/failing reader returns English, preserving support for 1.6.5.
-No browser language guessing, storage writes, global language changes or private Obsidian API are used.
-Decide separately whether older Obsidian needs a plugin-specific language override.
+`ui.ts` feature-detects Obsidian's public `getLanguage` API (available since 1.8.7).
+A missing/failing reader returns English. The plugin language override works independently.
+Preferences are stored in the existing plugin settings. No global app language or note data changes.
+The minimum supported Obsidian 1.6.5 runtime has not been exercised in this acceptance run.
 
 `formatNumber` and `formatDateTime` format display values only. Pass valid values and an explicit time
 zone where required; date formatting throws on an invalid date. Existing machine dates, ISO receipts,
 local-time filename tokens and date input parsing are outside this helper.
-Regional formatting is not preserved by the catalog resolver (`en-GB` becomes `en`). Decide how to
-retain regional display preferences before replacing existing system-locale date formatting.
+UI dates retain the system's date order and time zone via `formatUiDateTime`; the language choice
+does not redefine regional preferences. Counts use the selected message language.
 
 ## Verification
 

@@ -1,3 +1,4 @@
+import { t } from "../../lang/ui";
 import { Notice } from "obsidian";
 import type KeepSidianPlugin from "@app/main";
 import { normalizePathSafe } from "@services/paths";
@@ -46,7 +47,7 @@ function buildPushPlanEntry(note: ReviewedPushNote, index: number, allowPerNoteS
 		label: action === "conflict-copy" ? "Conflict copy" : action === "merge" ? "Merge" : "Upload",
 		selectable: true, selected: true, selectionLocked: !allowPerNoteSelection,
 		selectionLockedReason: !allowPerNoteSelection ? selectionLockedReason : undefined,
-		meta: { relativePath: note.relativePath, attachmentCount, missingAttachmentCount, missingAttachmentNames: note.missingAttachments, detail: detailParts.join(" ") },
+		meta: { relativePath: note.relativePath, attachmentCount, missingAttachmentCount, missingAttachmentNames: note.missingAttachments, detail: detailParts.join(" "), uploadDetail: { pendingMerge: hasPendingUpload(note.frontmatter) } },
 	};
 }
 
@@ -71,7 +72,7 @@ export async function buildPushSyncPlan(plugin: KeepSidianPlugin, allowPerNoteSe
 			action: skipped.reason === "unresolved-conflict" ? "skipped-conflict" : skipped.reason === "up-to-date" ? "skipped-up-to-date" : "skipped-conflict-copy",
 			label: skipped.reason === "unresolved-conflict" ? "Skipped: conflict" : skipped.reason === "up-to-date" ? "Skipped: up to date" : "Skipped: conflict copy",
 			selectable: false, selected: false, selectionLocked: false,
-			meta: { detail: skipped.reason === "unresolved-conflict" ? "Preserved during download. This run will not upload the unresolved original."
+			meta: { uploadDetail: { skipReason: skipped.reason === "unresolved-conflict" ? "unresolved-conflict" : skipped.reason === "up-to-date" ? "up-to-date" : "conflict-copy" }, detail: skipped.reason === "unresolved-conflict" ? "Preserved during download. This run will not upload the unresolved original."
 				: skipped.reason === "up-to-date" ? "No changes detected since the last sync." : "Conflict copies are never uploaded." },
 		})),
 	];
@@ -98,7 +99,7 @@ export async function pushGoogleKeepNotes(plugin: KeepSidianPlugin, callbacks?: 
 			}
 			await flushLogSync(plugin, { batchKey: "push:skipped" });
 		}
-		if (notesToPush.length === 0) { new Notice("No Google Keep notes to push."); return 0; }
+		if (notesToPush.length === 0) { new Notice(t("notices.noUploads")); return 0; }
 		callbacks?.setTotalNotes?.(notesToPush.length);
 		// A later scheduled/legacy upload must not bypass conflict review for a
 		// durable pending merge that originated in the manual Sync Center.
@@ -210,10 +211,10 @@ export async function pushGoogleKeepNotes(plugin: KeepSidianPlugin, callbacks?: 
 		}
 		if ((callbacks?.attempt || mergeAction) && firstFailure !== undefined) throw firstFailure;
 		throwIfSyncCancelled(plugin);
-		new Notice(mergeAction ? "Upload plan completed. See the results for saved or skipped conflicts." : "Pushed Google Keep notes.");
+		new Notice(mergeAction ? t("notices.uploadPlanComplete") : t("notices.uploadComplete"));
 		return successCount;
 	} catch (error: unknown) {
 		if (isSyncCancellationError(error)) throw error;
-		new Notice("Failed to push notes."); throw error;
+		new Notice(t("notices.uploadFailed")); throw error;
 	}
 }

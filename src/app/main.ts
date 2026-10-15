@@ -1,3 +1,6 @@
+import { t } from "../lang/ui";
+import { bindUiLanguage, onUiLanguageChanged, refreshUiLanguage } from "../lang/ui";
+import { localizePluginLabel } from "../lang/display";
 import { Notice, Plugin } from "obsidian";
 import type { ProgressBarComponent } from "obsidian";
 import type { KeepSidianPluginSettings, LastSyncSummary, SyncMode } from "../types/keepsidian-plugin-settings";
@@ -6,7 +9,7 @@ import { SubscriptionService } from "@services/subscription";
 import type { NoteImportOptions } from "@ui/modals/NoteImportOptionsModal";
 import { SyncProgressModal } from "@ui/modals/SyncProgressModal";
 import { FeedbackSurveyModal } from "@ui/modals/FeedbackSurveyModal";
-import { initializeStatusBar } from "@app/sync-ui";
+import { initializeStatusBar, refreshSyncLanguage } from "@app/sync-ui";
 import { logSync } from "@app/logging";
 import { SyncCancellationError } from "@app/sync-cancel";
 import { SyncAttempt } from "@app/sync-attempt";
@@ -93,6 +96,9 @@ export default class KeepSidianPlugin extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
+		this.register(bindUiLanguage(() => this.settings));
+		refreshUiLanguage();
+		this.registerInterval(window.setInterval(refreshUiLanguage, 1000));
 
 		this.subscriptionService = new SubscriptionService(
 			() => this.settings.email,
@@ -115,6 +121,10 @@ export default class KeepSidianPlugin extends Plugin {
 
 		registerRibbonAndCommands(this);
 		initializeStatusBar(this);
+		this.register(onUiLanguageChanged(() => {
+			refreshSyncLanguage(this);
+			this.progressModal?.refreshLanguage();
+		}));
 		this.initializeSettings();
 
 		if (this.settings.autoSyncEnabled) {
@@ -142,13 +152,13 @@ export default class KeepSidianPlugin extends Plugin {
 	private ensureCredentials(): boolean {
 		const email = this.settings.email?.trim();
 		if (!email) {
-			new Notice("KeepSidian: please enter your Google account email in the settings before syncing.");
+			new Notice(t("notices.emailRequired"));
 			return false;
 		}
 
 		const token = this.settings.token?.trim();
 		if (!token) {
-			new Notice("KeepSidian: please add your Google Keep token in the settings before syncing.");
+			new Notice(t("notices.tokenRequired"));
 			return false;
 		}
 
@@ -258,27 +268,27 @@ export default class KeepSidianPlugin extends Plugin {
 
 		const doc = this.app.workspace?.containerEl?.ownerDocument ?? null;
 		if (!doc) {
-			new Notice("KeepSidian uploads & two-way sync are locked until prerequisites are met.", 10000);
+			new Notice(t("gate.locked"), 10000);
 			return;
 		}
 
 		const fragment = doc.createDocumentFragment();
 		fragment.createDiv({
 			cls: "keepsidian-notice-heading",
-			text: "KeepSidian uploads & two-way sync are locked until you:",
+			text: t("gate.heading"),
 		});
 
 		const list = fragment.createEl("ul", { cls: "keepsidian-notice-list" });
 		for (const reason of result.reasons) {
-			list.createEl("li", { text: reason });
+			list.createEl("li", { text: localizePluginLabel(reason) });
 		}
 
 		const actions = fragment.createDiv({ cls: "keepsidian-notice-actions" });
 		const settingsButton = actions.createEl("button", {
 			cls: "keepsidian-notice-button",
-			text: "Open beta settings",
+			text: t("sync.betaSettings"),
 			attr: {
-				"aria-label": "Open beta settings",
+				"aria-label": t("sync.betaSettings"),
 				type: "button",
 			},
 		});

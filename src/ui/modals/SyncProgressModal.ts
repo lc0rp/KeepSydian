@@ -1,3 +1,5 @@
+import { localizePluginLabel, planEntryDetail } from "../../lang/display";
+import { t, getUiTranslator } from "../../lang/ui";
 import { App, Modal } from "obsidian";
 import type {
 	DownloadScope, DownloadScopeKind, LastSyncSummary, MergeAction, SyncMode,
@@ -41,7 +43,7 @@ type EntryRunState = "pending" | "done" | "failed" | "unchecked" | "instant";
 interface ExecutionSnapshot { plan: SyncPlan; entryStates: Map<string, EntryRunState>; }
 interface ExecutionRowRefs { row: HTMLDivElement; statusSymbolEl: HTMLSpanElement; badgeEl: HTMLSpanElement; }
 interface ChipRenderState { key: ChipKey; label: string; numerator?: number; denominator?: number; count?: number; isActive: boolean; }
-interface ModalAlertState { title: string; message: string; }
+interface ModalAlertState { title: () => string; message: () => string; }
 interface DismissPromptState { activeRun: boolean; }
 const CHIP_ORDER: ChipKey[] = ["notes", "create", "delete", "merge", "overwrite", "upload", "conflict-copy", "skipped-conflict", "already-up-to-date", "unchecked"];
 const clearElement = (element: HTMLElement) => {
@@ -52,7 +54,7 @@ const clearElement = (element: HTMLElement) => {
 const createChild = <K extends keyof HTMLElementTagNameMap>(parent: HTMLElement, tagName: K, options?: CreateElOptions): HTMLElementTagNameMap[K] => parent.createEl(tagName, options);
 
 function modeLabel(mode: SyncMode): string {
-	switch (mode) { case "push": return "Upload"; case "two-way": return "Two-way sync"; default: return "Download"; }
+	switch (mode) { case "push": return t("sync.mode.upload"); case "two-way": return t("sync.mode.twoWay"); default: return t("sync.mode.download"); }
 }
 function modeUsesDownload(mode: SyncMode): boolean { return mode !== "push"; }
 function modeRequiresTwoWayGate(mode: SyncMode): boolean { return mode === "push" || mode === "two-way"; }
@@ -60,16 +62,16 @@ function reviewContinuationLabel(prepared: PreparedSyncPlan | null): string | un
 	if (!prepared) return undefined;
 	// An unchecked upload review still settles the attempt and its download
 	// receipts through the normal runner, including conflict/checkpoint guards.
-	if (prepared.stage === "upload") return "Complete review";
+	if (prepared.stage === "upload") return t("sync.completeReview");
 	if (prepared.stage !== "import") return undefined;
 	// The upload review is still required when the download stage has no selected
 	// writes, including when missing tracked identities were protected from import.
-	if (prepared.mode === "two-way") return "Continue to upload";
+	if (prepared.mode === "two-way") return t("sync.continueUpload");
 	// Identical downloads still carry server receipts that can establish tracking.
 	// Keep entirely deselected actionable plans disabled.
 	if (prepared.mode === "import" && (prepared.importNotes?.length ?? 0) > 0 &&
 		prepared.plan.entries.length > 0 && prepared.plan.entries.every((entry) => !entry.selectable && entry.action === "skipped-identical")) {
-		return "Complete review";
+		return t("sync.completeReview");
 	}
 	return undefined;
 }
@@ -104,55 +106,70 @@ function getChipKeyForEntry(entry: SyncPlanEntry): ChipKey {
 }
 function getReviewChipLabel(key: ChipKey): string {
 	switch (key) {
-		case "notes": return "Notes";
-		case "create": return "Create";
-		case "delete": return "Delete";
-		case "merge": return "Merge";
-		case "overwrite": return "Overwrite";
-		case "upload": return "Upload";
-		case "conflict-copy": return "Conflict copy";
-		case "skipped-conflict": return "Skipped conflict";
-		case "already-up-to-date": return "Already up to date";
-		case "unchecked": return "Unchecked";
+		case "notes": return t("common.notes");
+		case "create": return t("sync.action.create");
+		case "delete": return t("sync.action.delete");
+		case "merge": return t("sync.action.merge");
+		case "overwrite": return t("sync.action.overwrite");
+		case "upload": return t("sync.mode.upload");
+		case "conflict-copy": return t("sync.action.conflictCopy");
+		case "skipped-conflict": return t("sync.action.skippedConflict");
+		case "already-up-to-date": return t("sync.action.upToDate");
+		case "unchecked": return t("sync.action.unchecked");
 	}
 }
 function getExecutionChipLabel(key: ChipKey): string {
 	switch (key) {
-		case "create": return "Created";
-		case "delete": return "Deleted";
-		case "merge": return "Merged";
-		case "overwrite": return "Overwritten";
-		case "upload": return "Uploaded";
+		case "create": return t("sync.created");
+		case "delete": return t("sync.deleted");
+		case "merge": return t("sync.merged");
+		case "overwrite": return t("sync.overwritten");
+		case "upload": return t("sync.uploaded");
 		default: return getReviewChipLabel(key);
 	}
+}
+function getReviewEntryLabel(entry: SyncPlanEntry): string {
+	if (entry.label === "Delete from Obsidian") return t("deletion.fromObsidian");
+	if (entry.label === "Preserved local removal") return t("deletion.preserved");
+	if (entry.label === "No longer in sync folder") return t("deletion.removed");
+	if (entry.label === "Archive") return t("sync.action.archive");
+	if (entry.label === "Add tags") return t("sync.action.addTags");
+	if (entry.label === "Update suggestions") return t("sync.action.updateSuggestions");
+	if (entry.label === "Removal not verified") return t("sync.action.unverifiedRemoval");
+	if (entry.label === "Deletion conflict") return t("sync.deletionConflict");
+	if (entry.action === "skipped-conflict-copy") return t("sync.action.skippedConflictCopy");
+	if (entry.label === "Skipped: conflict") return t("sync.action.skippedConflict");
+	if (entry.label === "Skipped: identical" || entry.label === "Skipped: up to date") return t("sync.action.upToDate");
+	return localizePluginLabel(entry.label);
 }
 function getFriendlySyncCenterError(error: unknown, context: "review" | "run"): ModalAlertState {
 	const rawMessage = error instanceof Error && error.message ? error.message : typeof error === "string" ? error : "Unknown error";
 	const normalizedMessage = rawMessage.toLowerCase();
 	const looksLikeConnectionProblem = ["err_connection_refused", "failed to fetch", "networkerror", "network error", "econnrefused", "enotfound", "timed out", "etimedout"].some((message) => normalizedMessage.includes(message));
 	if (looksLikeConnectionProblem) return {
-		title: context === "review" ? "Couldn’t prepare the sync review" : "Couldn’t finish the sync",
-		message: "The KeepSidian server could not be reached. Check your connection or make sure the sync server is running, then try again.",
+		title: () => context === "review" ? t("sync.error.prepareTitle") : t("sync.error.runTitle"),
+		message: () => t("sync.error.connection"),
 	};
-	return { title: context === "review" ? "Couldn’t prepare the sync review" : "Couldn’t finish the sync", message: "The operation could not be completed. Open the sync log for details." };
+	return { title: () => context === "review" ? t("sync.error.prepareTitle") : t("sync.error.runTitle"), message: () => t("sync.error.generic") };
 }
 function getSetupPrimaryButtonLabel(isGeneratingReview: boolean, processed: number, total?: number): string {
-	if (!isGeneratingReview) return "Start sync";
-	if (typeof total === "number" && total > 0 && processed >= total) return "Downloaded, please wait ...";
-	return "Preparing plan...";
+	if (!isGeneratingReview) return t("sync.start");
+	if (typeof total === "number" && total > 0 && processed >= total) return t("sync.downloadedWaiting");
+	return t("sync.preparing");
 }
-function getPlanTitle(plan: SyncPlan): string { return plan.stage === "upload" ? "Review upload plan" : "Review download plan"; }
-function getRunningTitle(plan: SyncPlan): string { return plan.stage === "upload" ? "Running upload plan" : "Running download plan"; }
+function getPlanTitle(plan: SyncPlan): string { return plan.stage === "upload" ? t("sync.reviewUpload") : t("sync.reviewDownload"); }
+function getRunningTitle(plan: SyncPlan): string { return plan.stage === "upload" ? t("sync.runningUpload") : t("sync.runningDownload"); }
 function getResultTitle(plan: SyncPlan, status: SyncRunStatus | null): string {
-	if (status === "canceled") return plan.stage === "upload" ? "Upload canceled" : "Download canceled";
-	if (status === "failed") return plan.stage === "upload" ? "Upload failed" : "Download failed";
-	if (status === "warning") return plan.stage === "upload" ? "Upload complete with warnings" : "Download complete with warnings";
-	return plan.stage === "upload" ? "Upload complete" : "Download complete";
+	if (status === "canceled") return plan.stage === "upload" ? t("sync.uploadCanceled") : t("sync.downloadCanceled");
+	if (status === "failed") return plan.stage === "upload" ? t("sync.uploadFailed") : t("sync.downloadFailed");
+	if (status === "warning") return plan.stage === "upload" ? t("sync.uploadWarnings") : t("sync.downloadWarnings");
+	return plan.stage === "upload" ? t("sync.uploadDone") : t("sync.downloadDone");
 }
 function getRuntimeStatusLabel(entry: SyncPlanEntry, state: EntryRunState): string {
-	if (state === "unchecked") return "Unchecked";
-	if (state === "failed") return entry.action === "skipped-conflict" && entry.label === "Deletion conflict" ? "Deletion conflict" : "Failed";
-	if (state === "pending") return "Pending";
+	if (state === "unchecked") return t("sync.action.unchecked");
+	if (state === "failed") return entry.action === "skipped-conflict" && entry.label === "Deletion conflict" ? t("sync.deletionConflict") : t("common.failed");
+	if (state === "pending") return t("common.pending");
+	if (state === "instant" || (entry.action === "overwrite" && ["Archive", "Add tags", "Update suggestions"].includes(entry.label))) return getReviewEntryLabel(entry);
 	return getExecutionChipLabel(getChipKeyForEntry(entry));
 }
 function isInstantEntry(entry: SyncPlanEntry): boolean {
@@ -204,6 +221,22 @@ export class SyncProgressModal extends Modal {
 	private chromeCloseButtonEl: HTMLElement | null = null;
 	private dismissPromptActionsEl: HTMLDivElement | null = null;
 	private allowBackgroundClose = false;
+	private returnFocusEl: HTMLElement | null = null;
+	private readonly handleDialogKeyDown = (event: KeyboardEvent) => {
+		if (event.key !== "Tab") return;
+		const controls = Array.from(this.modalEl.querySelectorAll<HTMLElement>(
+			"button, input, select, textarea, a[href], [tabindex]"
+		)).filter((element) => element.tabIndex >= 0 && !element.matches(":disabled") &&
+			element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden");
+		const active = document.activeElement;
+		const first = controls[0], last = controls[controls.length - 1];
+		if (!first) { event.preventDefault(); this.modalTitleEl?.focus(); return; }
+		if (event.shiftKey && (active === first || !controls.includes(active as HTMLElement))) {
+			event.preventDefault(); last.focus();
+		} else if (!event.shiftKey && active === last) {
+			event.preventDefault(); first.focus();
+		}
+	};
 	private readonly handleChromeCloseClick = (event: Event) => {
 		if (!this.isSyncing) return;
 		event.preventDefault();
@@ -219,7 +252,16 @@ export class SyncProgressModal extends Modal {
 		this.showDismissPrompt();
 	};
 	constructor(app: App, options: SyncProgressModalOptions) { super(app); this.options = options; }
-	onOpen() { this.bindChromeCloseButton(); this.bindBackdropDismissGuard(); void this.refreshUI(); }
+	refreshLanguage() { void this.refreshUI(); }
+	onOpen() {
+		if (!this.returnFocusEl?.isConnected) {
+			this.returnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		}
+		this.bindChromeCloseButton(); this.bindBackdropDismissGuard();
+		this.modalEl.addEventListener("keydown", this.handleDialogKeyDown);
+		void this.refreshUI();
+		this.modalTitleEl?.focus();
+	}
 	onClose() {
 		const activeRun = this.isSyncing;
 		if (this.allowBackgroundClose) {
@@ -228,6 +270,7 @@ export class SyncProgressModal extends Modal {
 			this.unbindChromeCloseButton();
 			this.unbindBackdropDismissGuard();
 			this.clearLayout();
+			this.restoreOpeningFocus();
 			this.options.onClose?.({ activeRun });
 			return;
 		}
@@ -246,7 +289,13 @@ export class SyncProgressModal extends Modal {
 		this.unbindBackdropDismissGuard();
 		this.dismissPrompt = null;
 		this.clearLayout();
+		this.restoreOpeningFocus();
 		this.options.onClose?.({ activeRun });
+	}
+	private restoreOpeningFocus() {
+		this.modalEl.removeEventListener("keydown", this.handleDialogKeyDown);
+		if (this.returnFocusEl?.isConnected) this.returnFocusEl.focus();
+		this.returnFocusEl = null;
 	}
 	private clearLayout() {
 		clearElement(this.contentEl);
@@ -388,17 +437,17 @@ export class SyncProgressModal extends Modal {
 	private showAttemptError(error: unknown, context: "review" | "run", attempt = this.activeAttempt) {
 		this.preparationPaused = false;
 		if (context === "review" && error && typeof error === "object" && "code" in error && error.code === "sync_session_expired") {
-			this.modalAlert = { title: "Download preparation expired", message: "Start sync again to restart the selected date range. No notes were imported." };
+			this.modalAlert = { title: () => t("sync.expired"), message: () => t("sync.restartRange") };
 			return;
 		}
 		if (context === "review" && error instanceof Error && error.message.startsWith("Download paused.")) {
 			this.preparationPaused = true;
-			this.modalAlert = { title: "Download paused", message: `${error.message}${attempt ? ` ${attempt.errorMessage(error)}` : ""}` };
+			this.modalAlert = { title: () => t("sync.paused"), message: () => `${error.message}${attempt ? ` ${attempt.errorMessage(error)}` : ""}` };
 			return;
 		}
 		this.modalAlert = attempt ? {
-			title: context === "review" ? `${modeLabel(this.selectedMode)} preparation failed` : `${modeLabel(this.selectedMode)} failed`,
-			message: attempt.errorMessage(error),
+			title: () => context === "review" ? t("sync.preparationFailed",{mode:modeLabel(this.selectedMode)}) : t("sync.modeFailed",{mode:modeLabel(this.selectedMode)}),
+			message: () => attempt.errorMessage(error),
 		} : getFriendlySyncCenterError(error, context);
 	}
 	private async runReviewedPlan() {
@@ -463,7 +512,10 @@ export class SyncProgressModal extends Modal {
 		if (!entry || !entry.selected || !entry.selectable) return;
 		entry.path = path;
 		entry.title = path.split("/").pop()?.replace(/\.md$/i, "") ?? entry.title;
-		if (entry.meta?.detail === "New AI suggestions are requested only for selected notes.") delete entry.meta.detail;
+		if (entry.meta?.detail === "New AI suggestions are requested only for selected notes.") {
+			delete entry.meta.detail;
+			delete entry.meta.downloadDetails;
+		}
 		this.updateExecutionRowInPlace(entryId);
 	}
 	private handleEntrySettled(entryId: string, success: boolean, outcome?: SyncPlanAction) {
@@ -503,6 +555,9 @@ export class SyncProgressModal extends Modal {
 		if (this.modalTitleEl && this.stepperEl && this.headerMetaEl && this.statusEl && this.statusActionsEl && this.alertHostEl && this.bodyEl && this.footerEl) return;
 		clearElement(this.contentEl); this.contentEl.className = "keepsidian-modal";
 		this.modalTitleEl = createChild(this.contentEl, "h2"); this.modalTitleEl.classList.add("keepsidian-modal-title");
+		this.modalTitleEl.tabIndex = -1;
+		this.modalEl.setAttribute("role", "dialog");
+		this.modalEl.setAttribute("aria-modal", "true");
 		this.stepperEl = createChild(this.contentEl, "div");
 		this.headerMetaEl = createChild(this.contentEl, "div"); this.headerMetaEl.classList.add("keepsidian-modal-header-meta");
 		this.statusEl = createChild(this.headerMetaEl, "div"); this.statusEl.classList.add("keepsidian-modal-status"); this.statusEl.setAttribute("aria-live", "polite");
@@ -516,6 +571,15 @@ export class SyncProgressModal extends Modal {
 		return "setup";
 	}
 	private async refreshUI() {
+		const focused = document.activeElement;
+		const hadFocus = !!focused && this.modalEl.contains(focused);
+		const focusKey = hadFocus ? focused?.getAttribute("data-keepsidian-focus") : null;
+		const restoreFocus = () => {
+			if (!hadFocus || focused?.isConnected || document.activeElement !== document.body) return;
+			const replacement = focusKey ? Array.from(this.contentEl.querySelectorAll<HTMLElement>("[data-keepsidian-focus]"))
+				.find((element) => element.getAttribute("data-keepsidian-focus") === focusKey) : null;
+			(replacement ?? this.modalTitleEl)?.focus();
+		};
 		const renderVersion = ++this.renderVersion, surface = this.getSurface();
 		this.ensureLayout(); this.bindChromeCloseButton(); this.syncChromeCloseButtonState();
 		if (surface !== "running") this.executionRowRefs.clear();
@@ -524,12 +588,14 @@ export class SyncProgressModal extends Modal {
 		this.modalEl.classList.remove("keepsidian-modal-shell--compact", "keepsidian-modal-shell--plan");
 		this.modalEl.classList.add(surface === "setup" ? "keepsidian-modal-shell--compact" : "keepsidian-modal-shell--plan");
 		if (this.modalTitleEl) this.modalTitleEl.textContent = this.getTitle(surface);
+		this.modalEl.setAttribute("aria-label", this.getTitle(surface));
+		this.modalEl.lang = getUiTranslator().locale;
 		if (this.stepperEl) this.renderStepper(this.stepperEl, surface);
 		if (this.statusEl) this.statusEl.textContent = this.getStatusCopy(surface);
 		if (this.statusActionsEl) {
 			clearElement(this.statusActionsEl);
 			if (surface === "running") {
-				const cancelButton = this.createActionButton(this.statusActionsEl, this.isCanceling ? "Canceling ..." : "Cancel", async () => { this.requestSyncCancellation(); });
+				const cancelButton = this.createActionButton(this.statusActionsEl, this.isCanceling ? t("sync.canceling") : t("common.cancel"), async () => { this.requestSyncCancellation(); });
 				cancelButton.classList.add("keepsidian-modal-inline-action", "keepsidian-modal-inline-action--cancel"); cancelButton.disabled = this.isCanceling;
 			}
 		}
@@ -541,36 +607,42 @@ export class SyncProgressModal extends Modal {
 		if (surface === "setup") {
 			this.planActionsEl = null; this.planPanelEl = null; this.planSummaryEl = null; this.planSelectionSummaryEl = null; this.planListEl = null;
 			if (this.footerEl) clearElement(this.footerEl);
-			await this.renderSetupSurface(renderVersion);
+			const rendering = this.renderSetupSurface(renderVersion);
+			// The synchronous redraw may remove the focused control before a network
+			// check resolves. Keep keyboard focus inside the dialog during that wait.
+			restoreFocus();
+			await rendering;
+			if (renderVersion === this.renderVersion) restoreFocus();
 			return;
 		}
 		this.renderPlanSurface(surface);
+		restoreFocus();
 	}
 	private renderAlert(containerEl: HTMLElement, alert: ModalAlertState) {
 		const alertEl = createChild(containerEl, "div"); alertEl.classList.add("keepsidian-modal-alert"); alertEl.setAttribute("role", "alert");
-		createChild(alertEl, "div", { text: alert.title }).classList.add("keepsidian-modal-alert-title");
-		createChild(alertEl, "div", { text: alert.message }).classList.add("keepsidian-modal-alert-message");
+		createChild(alertEl, "div", { text: alert.title() }).classList.add("keepsidian-modal-alert-title");
+		createChild(alertEl, "div", { text: alert.message() }).classList.add("keepsidian-modal-alert-message");
 	}
 	private renderDismissPrompt(containerEl: HTMLElement, prompt: DismissPromptState) {
 		const promptEl = createChild(containerEl, "div"); promptEl.classList.add("keepsidian-modal-dismiss-prompt");
-		createChild(promptEl, "div", { text: prompt.activeRun ? "Leave this sync running?" : "Close sync center?" }).classList.add("keepsidian-modal-dismiss-prompt-title");
+		createChild(promptEl, "div", { text: prompt.activeRun ? t("sync.leaveRunning") : t("sync.closeQuestion") }).classList.add("keepsidian-modal-dismiss-prompt-title");
 		createChild(promptEl, "div", { text: prompt.activeRun
-			? "You clicked outside the dialog. Choose whether to cancel the sync, let it keep running in the background, or return to the dialog."
-			: "Close sync center or go back without losing your place?" }).classList.add("keepsidian-modal-dismiss-prompt-message");
+			? t("sync.dismissRunning")
+			: t("sync.dismissIdle") }).classList.add("keepsidian-modal-dismiss-prompt-message");
 		this.dismissPromptActionsEl = createChild(promptEl, "div"); this.dismissPromptActionsEl.classList.add("keepsidian-modal-dismiss-prompt-actions");
 		if (prompt.activeRun) {
-			const cancelButton = this.createActionButton(this.dismissPromptActionsEl, this.isCanceling ? "Canceling ..." : "Cancel sync", async () => { this.dismissPrompt = null; this.requestSyncCancellation(); });
+			const cancelButton = this.createActionButton(this.dismissPromptActionsEl, this.isCanceling ? t("sync.canceling") : t("sync.cancel"), async () => { this.dismissPrompt = null; this.requestSyncCancellation(); });
 			cancelButton.classList.add("keepsidian-modal-dismiss-prompt-action--danger"); cancelButton.disabled = this.isCanceling;
-			this.createActionButton(this.dismissPromptActionsEl, "Run in background", async () => { await this.dismissToBackground(); }).classList.add("keepsidian-modal-dismiss-prompt-action--ghost");
+			this.createActionButton(this.dismissPromptActionsEl, t("sync.background"), async () => { await this.dismissToBackground(); }).classList.add("keepsidian-modal-dismiss-prompt-action--ghost");
 		} else {
-			this.createActionButton(this.dismissPromptActionsEl, "Close", async () => { await this.confirmDismiss(); }).classList.add("keepsidian-modal-dismiss-prompt-action--danger");
+			this.createActionButton(this.dismissPromptActionsEl, t("common.close"), async () => { await this.confirmDismiss(); }).classList.add("keepsidian-modal-dismiss-prompt-action--danger");
 		}
-		this.createActionButton(this.dismissPromptActionsEl, "Back", async () => { this.dismissPrompt = null; await this.refreshUI(); }).classList.add("keepsidian-modal-dismiss-prompt-action--ghost");
+		this.createActionButton(this.dismissPromptActionsEl, t("common.back"), async () => { this.dismissPrompt = null; await this.refreshUI(); }).classList.add("keepsidian-modal-dismiss-prompt-action--ghost");
 	}
 	private getTitle(surface: ModalSurface): string {
-		if (surface === "setup") return "Sync center";
+		if (surface === "setup") return t("sync.center");
 		const plan = this.preparedPlan?.plan ?? this.executionSnapshot?.plan;
-		if (!plan) return "Sync plan";
+		if (!plan) return t("sync.plan");
 		if (surface === "review") return getPlanTitle(plan);
 		if (surface === "running") return getRunningTitle(plan);
 		return getResultTitle(plan, this.lastResult?.status ?? null);
@@ -578,31 +650,31 @@ export class SyncProgressModal extends Modal {
 	private getStatusCopy(surface: ModalSurface): string {
 		if (surface === "setup") {
 			if (this.isGeneratingReview) {
-				if (typeof this.planBuildTotal === "number" && this.planBuildTotal > 0) return `Prepared ${this.planBuildProcessed} of ${this.planBuildTotal} notes for review.`;
-				return `Preparing '${modeLabel(this.selectedMode).toLowerCase()}' plan...`;
+				if (typeof this.planBuildTotal === "number" && this.planBuildTotal > 0) return t("sync.prepared", {processed:this.planBuildProcessed,total:this.planBuildTotal});
+				return t("sync.preparing");
 			}
 			if (this.isSyncing) {
-				const phaseLabel = this.options.getCurrentPhaseLabel() ?? "Syncing";
-				if (typeof this.total === "number" && this.total > 0) return this.isCanceling ? `Canceling... ${this.processed}/${this.total}` : `${phaseLabel}: ${this.processed}/${this.total}`;
-				return this.isCanceling ? `Canceling... ${this.processed}` : `${phaseLabel}: ${this.processed}`;
+				const phase = this.options.getCurrentPhaseLabel();
+				const phaseLabel = phase === "Download step" ? t("sync.downloadStep") : phase === "Upload step" ? t("sync.uploadStep") : modeLabel(this.selectedMode);
+				return t("sync.countProgress", { label: this.isCanceling ? t("sync.canceling") : phaseLabel, processed: this.processed, total: this.total ?? "?" });
 			}
 			const lastAttempt = this.options.getLastAttempt?.();
 			if (lastAttempt && (!this.summary || lastAttempt.updatedAt >= this.summary.timestamp)) return formatAttemptSummary(lastAttempt);
 			if (this.summary) return formatModalSummary(this.summary);
-			return "Start or customize sync.";
+			return t("sync.setupDescription");
 		}
-		if (surface === "review" && this.preparedPlan) return `Generated ${formatGeneratedAt(this.preparedPlan.plan.generatedAt)}. Review the plan below.`;
+		if (surface === "review" && this.preparedPlan) return t("sync.generated", {time:formatGeneratedAt(this.preparedPlan.plan.generatedAt)});
 		if ((surface === "running" || surface === "result") && this.executionSnapshot) {
 			const selectedCount = this.executionSnapshot.plan.entries.filter((entry) => entry.selectable && entry.selected).length;
 			const pendingCount = Math.max(0, selectedCount - this.getExecutionHandledCount());
-			if (surface === "running") return this.isCanceling ? `${selectedCount} selected. Canceling...` : `${selectedCount} selected. ${pendingCount} pending.`;
+			if (surface === "running") return this.isCanceling ? t("sync.canceling") : t("sync.selectedPending", {selected:selectedCount,pending:pendingCount});
 			if (this.summary) return formatModalSummary(this.summary);
-			if (this.lastResult?.status === "canceled") return `Sync canceled after ${this.lastResult.processed} notes.`;
+			if (this.lastResult?.status === "canceled") return t("sync.result", {status:t("sync.canceled"),notes:t("sync.notes",{count:this.lastResult.processed})});
 			if (this.lastResult?.status === "warning") {
 				const warningCount = this.lastResult.attachmentWarnings;
-				return `Sync complete with ${warningCount} warning${warningCount === 1 ? "" : "s"}. Processed ${this.lastResult.processed} notes.`;
+				return t("sync.warningResult", {warnings:t("sync.attachmentWarnings",{count:warningCount}),notes:t("sync.notes",{count:this.lastResult.processed})});
 			}
-			return this.lastResult?.status === "success" ? `Sync complete. Processed ${this.lastResult.processed} notes.` : "Sync failed.";
+			return this.lastResult?.status === "success" ? t("sync.result", {status:t("sync.success"),notes:t("sync.notes",{count:this.lastResult.processed})}) : t("sync.failedSentence");
 		}
 		return "";
 	}
@@ -611,9 +683,9 @@ export class SyncProgressModal extends Modal {
 		const firstProgress = this.getStartStepProgress(surface), secondProgress = this.getReviewStepProgress(surface);
 		const isReviewReached = surface === "review" || surface === "running" || surface === "result", isDoneReached = surface === "result";
 		const steps: Array<{ label: string; state: "pending" | "active" | "complete" }> = [
-			{ label: "Start", state: surface === "setup" && !isReviewReached ? "active" : "complete" },
-			{ label: "Review", state: surface === "review" || surface === "running" ? "active" : isDoneReached ? "complete" : "pending" },
-			{ label: "Done", state: isDoneReached ? "active" : "pending" },
+			{ label: t("common.start"), state: surface === "setup" && !isReviewReached ? "active" : "complete" },
+			{ label: t("common.review"), state: surface === "review" || surface === "running" ? "active" : isDoneReached ? "complete" : "pending" },
+			{ label: t("common.done"), state: isDoneReached ? "active" : "pending" },
 		];
 		steps.forEach((step, index) => {
 			const stepEl = createChild(containerEl, "div"); stepEl.classList.add("keepsidian-sync-stepper-step", `is-${step.state}`);
@@ -644,16 +716,16 @@ export class SyncProgressModal extends Modal {
 		if (this.footerEl) { clearElement(this.footerEl); this.footerEl.className = "keepsidian-sync-center-footer"; }
 		clearElement(this.bodyEl);
 		const actionsEl = createChild(this.bodyEl, "div"); actionsEl.classList.add("keepsidian-modal-actions"); this.createSetupStartButton(actionsEl);
-		const openLogButton = this.createActionButton(actionsEl, "Open sync log", async () => { await this.options.onOpenSyncLog(); });
+		const openLogButton = this.createActionButton(actionsEl, t("sync.openLog"), async () => { await this.options.onOpenSyncLog(); });
 		openLogButton.classList.add("keepsidian-modal-action--open-log"); openLogButton.disabled = this.isGeneratingReview;
-		const syncOptionsButton = this.createActionButton(actionsEl, "Customize sync", async () => { this.showSyncOptions = !this.showSyncOptions; await this.refreshUI(); });
+		const syncOptionsButton = this.createActionButton(actionsEl, t("sync.customize"), async () => { this.showSyncOptions = !this.showSyncOptions; await this.refreshUI(); });
 		syncOptionsButton.classList.add("keepsidian-modal-action--sync-options", "keepsidian-modal-action--dropdown");
 		syncOptionsButton.disabled = this.isGeneratingReview; syncOptionsButton.setAttribute("aria-expanded", this.showSyncOptions ? "true" : "false"); syncOptionsButton.classList.toggle("is-expanded", this.showSyncOptions);
 		const syncOptionsContainerEl = createChild(this.bodyEl, "div"); syncOptionsContainerEl.classList.add("keepsidian-sync-center-options"); syncOptionsContainerEl.hidden = !this.showSyncOptions;
 		if (this.showSyncOptions) {
 			const modeSectionEl = createChild(syncOptionsContainerEl, "div"); modeSectionEl.classList.add("keepsidian-sync-center-mode-section", "keepsidian-sync-center-mode-section--primary");
-			createChild(modeSectionEl, "div", { text: "Mode" }).classList.add("keepsidian-sync-center-mode-label");
-			const modePickerEl = createChild(syncOptionsContainerEl, "div"); modePickerEl.classList.add("keepsidian-sync-center-modes"); modePickerEl.setAttribute("role", "radiogroup"); modePickerEl.setAttribute("aria-label", "Sync mode"); modeSectionEl.appendChild(modePickerEl);
+			createChild(modeSectionEl, "div", { text: t("sync.modeLabel") }).classList.add("keepsidian-sync-center-mode-label");
+			const modePickerEl = createChild(syncOptionsContainerEl, "div"); modePickerEl.classList.add("keepsidian-sync-center-modes"); modePickerEl.setAttribute("role", "radiogroup"); modePickerEl.setAttribute("aria-label", t("sync.modeAria")); modeSectionEl.appendChild(modePickerEl);
 			(["import", "push", "two-way"] as SyncMode[]).forEach((mode) => {
 				const button = this.createActionButton(modePickerEl, "", async () => { this.setSelectedMode(mode); });
 				button.classList.add("keepsidian-sync-center-mode-button"); button.classList.toggle("is-selected", this.selectedMode === mode);
@@ -667,8 +739,8 @@ export class SyncProgressModal extends Modal {
 				if (renderVersion !== this.renderVersion) return;
 				if (isSupporterActive) {
 					const importOptionsContainerEl = createChild(syncOptionsContainerEl, "div"); importOptionsContainerEl.classList.add("keepsidian-sync-center-download-options");
-					createChild(importOptionsContainerEl, "h3", { text: "Download options" }).classList.add("keepsidian-sync-center-download-options-title");
-					createChild(importOptionsContainerEl, "p", { text: "Thanks for supporting KeepSidian! Customize your download below." }).classList.add("keepsidian-sync-center-download-options-copy");
+					createChild(importOptionsContainerEl, "h3", { text: t("sync.downloadOptions") }).classList.add("keepsidian-sync-center-download-options-title");
+					createChild(importOptionsContainerEl, "p", { text: t("sync.supporterThanks") }).classList.add("keepsidian-sync-center-download-options-copy");
 					const optionsBody = createChild(importOptionsContainerEl, "div"); optionsBody.classList.add("keepsidian-sync-center-download-options-body");
 					await this.options.renderImportOptions(optionsBody, true);
 					renderLegacyTagChoice(optionsBody, this.legacyTags, (value) => { this.legacyTags = value; });
@@ -679,18 +751,18 @@ export class SyncProgressModal extends Modal {
 				const gate = this.options.getTwoWayGate();
 				if (!gate.allowed) {
 					const gateMessageEl = createChild(syncOptionsContainerEl, "div"); gateMessageEl.classList.add("keepsidian-modal-gate-message");
-					createChild(gateMessageEl, "div", { text: "⚠️ Uploads are a beta feature. Follow the instructions below to enable them." }).classList.add("keepsidian-modal-gate-heading");
-					const list = createChild(gateMessageEl, "ul"); for (const reason of gate.reasons) createChild(list, "li", { text: reason });
-					const openSettings = createChild(gateMessageEl, "button", { text: "Open beta settings" }); openSettings.type = "button"; openSettings.addEventListener("click", () => { this.options.openTwoWaySettings(); });
+					createChild(gateMessageEl, "div", { text: t("sync.betaUploads") }).classList.add("keepsidian-modal-gate-heading");
+					const list = createChild(gateMessageEl, "ul"); for (const reason of gate.reasons) createChild(list, "li", { text: localizePluginLabel(reason) });
+					const openSettings = createChild(gateMessageEl, "button", { text: t("sync.betaSettings") }); openSettings.type = "button"; openSettings.addEventListener("click", () => { this.options.openTwoWaySettings(); });
 				}
 			}
 		}
 		if (!this.footerEl) return;
 		if (this.showSyncOptions) this.createSetupStartButton(this.footerEl).classList.add("keepsidian-modal-action--sync-footer-primary");
-		this.createActionButton(this.footerEl, "Close sync center", async () => { this.close(); }).classList.add("keepsidian-modal-close");
+		this.createActionButton(this.footerEl, t("sync.closeCenter"), async () => { this.close(); }).classList.add("keepsidian-modal-close");
 	}
 	private createSetupStartButton(containerEl: HTMLElement): HTMLButtonElement {
-		const label = this.preparationPaused && !this.isGeneratingReview ? "Resume download" : getSetupPrimaryButtonLabel(this.isGeneratingReview, this.planBuildProcessed, this.planBuildTotal);
+		const label = this.preparationPaused && !this.isGeneratingReview ? t("sync.resume") : getSetupPrimaryButtonLabel(this.isGeneratingReview, this.planBuildProcessed, this.planBuildTotal);
 		const button = this.createActionButton(containerEl, label, async () => { await this.beginReview(); });
 		button.classList.add("mod-cta", "keepsidian-modal-action--primary"); button.disabled = this.isGeneratingReview || this.isSyncing;
 		return button;
@@ -699,23 +771,23 @@ export class SyncProgressModal extends Modal {
 		const sectionEl = createChild(containerEl, "div");
 		sectionEl.classList.add("keepsidian-sync-center-mode-section", "keepsidian-sync-center-scope-section");
 
-		const heading = createChild(sectionEl, "div", { text: "Start & end date" });
+		const heading = createChild(sectionEl, "div", { text: t("scope.heading") });
 		heading.classList.add("keepsidian-sync-center-mode-label");
-		heading.title = "Choose the start and end dates for notes to download. A blank end uses the time sync starts.";
+		heading.title = t("scope.description");
 
 		const optionsEl = createChild(sectionEl, "div");
 		optionsEl.classList.add("keepsidian-sync-center-modes");
 		optionsEl.setAttribute("role", "radiogroup");
-		optionsEl.setAttribute("aria-label", "Start & end date");
+		optionsEl.setAttribute("aria-label", t("scope.heading"));
 
 		const lastSuccessfulDownloadDate = this.getLastSuccessfulDownloadDate();
 		const lastSyncDescription = lastSuccessfulDownloadDate
-			? `Last sync: ${formatScopeTimestamp(lastSuccessfulDownloadDate)}.`
-			: "None yet.";
+			? t("sync.lastTime",{time:formatScopeTimestamp(lastSuccessfulDownloadDate)})
+			: t("scope.none");
 
-		this.renderDownloadScopeOption(optionsEl, "Last sync → Now", "last-sync", lastSyncDescription);
-		this.renderDownloadScopeOption(optionsEl, "All dates", "all", "");
-		this.renderDownloadScopeOption(optionsEl, "Custom", "custom-since", "");
+		this.renderDownloadScopeOption(optionsEl, t("scope.last"), "last-sync", lastSyncDescription);
+		this.renderDownloadScopeOption(optionsEl, t("scope.all"), "all", "");
+		this.renderDownloadScopeOption(optionsEl, t("scope.custom"), "custom-since", "");
 
 		if (this.downloadScopeKind === "custom-since") {
 			renderCustomScopeInputs(
@@ -734,7 +806,7 @@ export class SyncProgressModal extends Modal {
 					if (this.alertHostEl && !this.dismissPrompt) clearElement(this.alertHostEl);
 					// Updating the helpers in place preserves focus when tabbing to the end input.
 					this.contentEl.querySelectorAll<HTMLButtonElement>(".keepsidian-modal-action--primary").forEach((button) => {
-						if (!button.disabled) button.textContent = "Start sync";
+						if (!button.disabled) button.textContent = t("sync.start");
 					});
 				}
 			);
@@ -757,10 +829,10 @@ export class SyncProgressModal extends Modal {
 		button.disabled = this.isGeneratingReview || this.isSyncing;
 		button.title =
 			kind === "custom-since"
-				? "Choose custom start and end dates. Leave the end blank to use the time sync starts."
+				? t("scope.customDescription")
 				: kind === "all"
-					? "Include notes from all start dates, changed before this sync starts."
-					: "Include notes changed after the last successful sync and before this sync starts.";
+					? t("scope.allDescription")
+					: t("scope.lastDescription");
 
 		const indicator = createChild(button, "span");
 		indicator.classList.add("keepsidian-sync-center-mode-indicator");
@@ -790,19 +862,19 @@ export class SyncProgressModal extends Modal {
 		if (!this.planActionsEl || !this.planPanelEl || !this.planSummaryEl || !this.planSelectionSummaryEl || !this.planListEl) return;
 		clearElement(this.planActionsEl); this.planActionsEl.classList.add("keepsidian-modal-actions--plan");
 		if (surface === "review") {
-			this.createActionButton(this.planActionsEl, "◀︎ Back", async () => {
+			this.createActionButton(this.planActionsEl, t("common.backArrow"), async () => {
 				await this.activeAttempt?.finish("abandoned"); this.preparedPlan = null; this.executionSnapshot = null; this.showExecutionResult = false; this.reviewFilterKey = "notes"; await this.refreshUI();
 			}).classList.add("keepsidian-modal-action--back");
-			this.createActionButton(this.planActionsEl, "↻ Refresh", async () => { await this.refreshCurrentReview(); }).classList.add("keepsidian-modal-action--refresh-review");
+			this.createActionButton(this.planActionsEl, t("common.refresh"), async () => { await this.refreshCurrentReview(); }).classList.add("keepsidian-modal-action--refresh-review");
 			const hasSelection = this.preparedPlan?.plan.entries.some((entry) => entry.selectable && entry.selected) ?? false;
 			const continuationLabel = hasSelection ? undefined : reviewContinuationLabel(this.preparedPlan);
-			const runButton = this.createActionButton(this.planActionsEl, continuationLabel ?? "Execute ▶︎", async () => { await this.runReviewedPlan(); });
+			const runButton = this.createActionButton(this.planActionsEl, continuationLabel ?? t("sync.execute"), async () => { await this.runReviewedPlan(); });
 			runButton.classList.add("mod-cta", "keepsidian-modal-action--primary");
 			runButton.disabled = this.isGeneratingReview || !this.preparedPlan || (!hasSelection && !continuationLabel);
 		}
 		clearElement(this.planSummaryEl);
 		if (surface === "review" && this.preparedPlan) {
-			createChild(this.planSummaryEl, "div", { text: `${this.preparedPlan.plan.actionableCount} changes found.` }).classList.add("keepsidian-sync-plan-summary-copy");
+			createChild(this.planSummaryEl, "div", { text: t("sync.changesFound",{count:this.preparedPlan.plan.actionableCount}) }).classList.add("keepsidian-sync-plan-summary-copy");
 			const deletions = this.preparedPlan.plan.entries.filter((entry) => entry.action === "delete");
 			if (deletions.length > 0) {
 				const warning = createChild(this.planSummaryEl, "div", { text: deletionReviewSummary(this.preparedPlan.plan) });
@@ -817,8 +889,8 @@ export class SyncProgressModal extends Modal {
 		if (this.footerEl) { clearElement(this.footerEl); this.footerEl.className = ""; }
 		if (surface === "result" && this.footerEl) {
 			this.footerEl.classList.add("keepsidian-modal-actions");
-			this.createActionButton(this.footerEl, "Open sync log", async () => { await this.options.onOpenSyncLog(); }).classList.add("keepsidian-modal-action--open-log");
-			this.createActionButton(this.footerEl, "Close sync center", async () => { this.close(); }).classList.add("mod-cta", "keepsidian-modal-action--primary");
+			this.createActionButton(this.footerEl, t("sync.openLog"), async () => { await this.options.onOpenSyncLog(); }).classList.add("keepsidian-modal-action--open-log");
+			this.createActionButton(this.footerEl, t("sync.closeCenter"), async () => { this.close(); }).classList.add("mod-cta", "keepsidian-modal-action--primary");
 		}
 	}
 	private async refreshCurrentReview() {
@@ -867,7 +939,7 @@ export class SyncProgressModal extends Modal {
 	private renderChips(containerEl: HTMLElement, surface: "review" | "running" | "result") {
 		const countsEl = createChild(containerEl, "div"); countsEl.classList.add("keepsidian-sync-plan-counts");
 		for (const chip of this.getChipRenderStates(surface)) {
-			const chipButton = createChild(countsEl, "button", { text: typeof chip.count === "number" ? `${chip.label} ${chip.count}` : `${chip.label} ${chip.numerator ?? 0}/${chip.denominator ?? 0}` });
+			const chipButton = createChild(countsEl, "button", { text: typeof chip.count === "number" ? `${chip.label} ${getUiTranslator().formatNumber(chip.count)}` : t("sync.countProgress",{label:chip.label,processed:chip.numerator ?? 0,total:chip.denominator ?? 0}) });
 			chipButton.type = "button"; chipButton.classList.add("keepsidian-sync-plan-chip"); chipButton.classList.toggle("is-active", chip.isActive);
 			chipButton.addEventListener("click", () => { this.reviewFilterKey = chip.key; void this.refreshUI(); });
 		}
@@ -882,7 +954,7 @@ export class SyncProgressModal extends Modal {
 	private renderRunningSummary() {
 		if (!this.planSummaryEl || !this.executionSnapshot) return;
 		clearElement(this.planSummaryEl);
-		createChild(this.planSummaryEl, "div", { text: `${this.getExecutionHandledCount()} of ${this.getExecutionSelectedCount()} selected notes dealt with.` }).classList.add("keepsidian-sync-plan-summary-copy");
+		createChild(this.planSummaryEl, "div", { text: t("sync.notesHandled",{processed:this.getExecutionHandledCount(),total:this.getExecutionSelectedCount()}) }).classList.add("keepsidian-sync-plan-summary-copy");
 		this.renderChips(this.planSummaryEl, "running");
 	}
 	private renderSelectionSummary(containerEl: HTMLElement, surface: "review" | "running" | "result") {
@@ -890,10 +962,11 @@ export class SyncProgressModal extends Modal {
 		if (surface !== "review" || !this.preparedPlan) return;
 		const entries = this.preparedPlan.plan.entries;
 		const canBulkToggle = entries.some((entry) => entry.selectable && !entry.selectionLocked);
-		createChild(containerEl, "div", { text: `${entries.filter((entry) => entry.selectable && entry.selected).length} of ${this.preparedPlan.plan.actionableCount} changes selected.` });
-		if (!canBulkToggle) { createChild(containerEl, "div", { text: "Per-note selection is available to project supporters." }).classList.add("keepsidian-sync-plan-selection-caption"); return; }
+		createChild(containerEl, "div", { text: t("sync.changesSelected",{selected:entries.filter((entry) => entry.selectable && entry.selected).length,total:this.preparedPlan.plan.actionableCount}) });
+		if (!canBulkToggle) { createChild(containerEl, "div", { text: t("sync.selectionSupporter") }).classList.add("keepsidian-sync-plan-selection-caption"); return; }
 		const toggleWrap = createChild(containerEl, "label"); toggleWrap.classList.add("keepsidian-sync-plan-select-all");
 		const checkbox = createChild(toggleWrap, "input"); checkbox.type = "checkbox";
+		checkbox.setAttribute("data-keepsidian-focus", "select-all");
 		const selectableEntries = entries.filter((entry) => entry.selectable && !entry.selectionLocked), selectedSelectableCount = selectableEntries.filter((entry) => entry.selected).length;
 		checkbox.checked = selectedSelectableCount > 0 && selectedSelectableCount === selectableEntries.length; checkbox.indeterminate = selectedSelectableCount > 0 && selectedSelectableCount < selectableEntries.length;
 		checkbox.addEventListener("change", () => {
@@ -901,7 +974,7 @@ export class SyncProgressModal extends Modal {
 			this.preparedPlan!.plan.selectedCount = this.preparedPlan!.plan.entries.filter((entry) => entry.selectable && entry.selected).length;
 			void this.refreshUI();
 		});
-		createChild(toggleWrap, "span", { text: "Select all" });
+		createChild(toggleWrap, "span", { text: t("common.selectAll") });
 	}
 	private renderEntries(containerEl: HTMLElement, surface: "review" | "running" | "result") {
 		clearElement(containerEl); containerEl.className = "keepsidian-sync-plan-list"; this.executionRowRefs.clear();
@@ -912,17 +985,18 @@ export class SyncProgressModal extends Modal {
 		}
 	}
 	private renderReviewRow(row: HTMLElement, entry: SyncPlanEntry) {
-		if (entry.selectionLocked) { row.classList.add("is-locked"); if (entry.selectionLockedReason) row.setAttribute("title", entry.selectionLockedReason); }
+		if (entry.selectionLocked) { row.classList.add("is-locked"); if (entry.selectionLockedReason) row.setAttribute("title", localizePluginLabel(entry.selectionLockedReason)); }
 		const toggleWrap = createChild(row, "div"); toggleWrap.classList.add("keepsidian-sync-plan-row-toggle");
 		const toggle = createChild(toggleWrap, "input"); toggle.type = "checkbox"; toggle.checked = entry.selected; toggle.disabled = !entry.selectable || entry.selectionLocked || this.isGeneratingReview;
-		toggle.setAttribute("aria-label", `${entry.label}: ${entry.title}`);
-		if (entry.selectionLockedReason) toggle.title = entry.selectionLockedReason;
+		toggle.setAttribute("data-keepsidian-focus", `entry:${entry.id}`);
+		toggle.setAttribute("aria-label", `${getReviewEntryLabel(entry)}: ${entry.title}`);
+		if (entry.selectionLockedReason) toggle.title = localizePluginLabel(entry.selectionLockedReason);
 		toggle.addEventListener("change", () => {
 			entry.selected = toggle.checked;
 			if (this.preparedPlan) this.preparedPlan.plan.selectedCount = this.preparedPlan.plan.entries.filter((candidate) => candidate.selectable && candidate.selected).length;
 			void this.refreshUI();
 		});
-		const body = createChild(row, "div"); body.classList.add("keepsidian-sync-plan-row-body"); this.renderEntryBody(body, entry, entry.label);
+		const body = createChild(row, "div"); body.classList.add("keepsidian-sync-plan-row-body"); this.renderEntryBody(body, entry, getReviewEntryLabel(entry));
 	}
 	private renderExecutionRow(row: HTMLDivElement, entry: SyncPlanEntry) {
 		if (!this.executionSnapshot) return;
@@ -949,9 +1023,12 @@ export class SyncProgressModal extends Modal {
 	private renderEntryBody(body: HTMLElement, entry: SyncPlanEntry, badgeText: string): HTMLSpanElement {
 		const titleLine = createChild(body, "div"); titleLine.classList.add("keepsidian-sync-plan-row-title-line");
 		createChild(titleLine, "div", { text: entry.title }).classList.add("keepsidian-sync-plan-row-title");
+		titleLine.querySelector(".keepsidian-sync-plan-row-title")?.setAttribute("lang", "");
 		const badge = createChild(titleLine, "span", { text: badgeText }); badge.classList.add("keepsidian-sync-plan-row-badge");
 		createChild(body, "div", { text: entry.path }).classList.add("keepsidian-sync-plan-row-path");
-		if (entry.meta?.detail) createChild(body, "div", { text: entry.meta.detail }).classList.add("keepsidian-sync-plan-row-detail");
+		body.querySelector(".keepsidian-sync-plan-row-path")?.setAttribute("lang", "");
+		const detail = planEntryDetail(entry);
+		if (detail) createChild(body, "div", { text: detail }).classList.add("keepsidian-sync-plan-row-detail");
 		return badge;
 	}
 	private getFilteredEntries(surface: "review" | "running" | "result"): SyncPlanEntry[] {

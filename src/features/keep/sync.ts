@@ -1,3 +1,4 @@
+import { t } from "../../lang/ui";
 import { Notice, getAllTags } from "obsidian";
 import type KeepSidianPlugin from "@app/main";
 import {
@@ -325,7 +326,7 @@ async function fetchImportPageWithRetry(
 		checkCancelled,
 		onRetry: async (retryCount) => {
 			await attemptContext?.pageEvent("retry", { retryCount });
-			new Notice("Download interrupted. Retrying the same page…", 2500);
+			new Notice(t("notices.retryingDownload"), 2500);
 		},
 	});
 }
@@ -446,7 +447,7 @@ async function fetchImportNotesBase(
 	const failedSuggestions = fetchedNotes.filter((note) => note.processing_warnings?.length).length;
 	if (failedSuggestions) {
 		new Notice(
-			`AI suggestions failed for ${failedSuggestions} notes. Their original content was kept. Review these notes before syncing.`,
+			t("notices.aiFailed",{count:failedSuggestions}),
 			10_000
 		);
 		await logSync(plugin, `AI suggestions failed for ${failedSuggestions} notes; original content retained.`);
@@ -490,6 +491,7 @@ function buildImportPlanEntry(
 		let label = "Skipped: identical";
 		let selectable = false;
 		let detail: string | undefined;
+		let downloadDetails: NonNullable<SyncPlanEntry["meta"]>["downloadDetails"] = [];
 
 		switch (duplicateAction) {
 			case "create":
@@ -512,8 +514,10 @@ function buildImportPlanEntry(
 				detail = hasConflict
 					? "Will create a conflict copy next to the existing note unless another merge action is chosen."
 					: undefined;
+				if (hasConflict) downloadDetails.push("conflict-copy");
 				if (getArchivedNoteUpdate(note, existingContent, archivedStatus)) {
 					detail = `${detail ? `${detail} ` : ""}Also marks the existing note as archived.`;
+					downloadDetails.push("also-archive");
 				}
 				break;
 			}
@@ -530,6 +534,7 @@ function buildImportPlanEntry(
 						label = "Archive";
 						selectable = true;
 						detail = "Marks the existing note as archived. Its body and other properties are preserved.";
+						downloadDetails = ["archive-only"];
 					}
 				}
 				break;
@@ -542,17 +547,22 @@ function buildImportPlanEntry(
 				label = "Add tags";
 				selectable = true;
 				detail = "Adds suggested tags while preserving your existing content and tags.";
+				downloadDetails = ["add-tags"];
 			}
 		}
 		if (note.processing_warnings?.length) {
 			detail = `${detail ? `${detail} ` : ""}AI suggestions failed; original content retained.`;
+			downloadDetails.push("suggestions-failed");
 		}
 		if (note.enrichment_pending && duplicateAction === "skip") {
 			action = "overwrite"; label = "Update suggestions"; selectable = true;
 			detail = "Applies available suggestions while preserving your manual edits.";
+			downloadDetails = ["update-suggestions"];
 		}
 		if (note.enrichment_pending) detail = `${detail ? `${detail} ` : ""}New AI suggestions are requested only for selected notes.`;
+		if (note.enrichment_pending) downloadDetails.push("request-suggestions");
 		if (note.enrichment_legacy_held) detail = `${detail ? `${detail} ` : ""}Previously imported titles and tags are kept. New AI tags require the choice in Customize sync.`;
+		if (note.enrichment_legacy_held) downloadDetails.push("legacy-tags");
 
 		return {
 			id: `import:${index}:${normalizePathSafe(noteFilePath)}`,
@@ -566,7 +576,7 @@ function buildImportPlanEntry(
 			selected: selectable,
 			selectionLocked: selectable && !allowPerNoteSelection,
 			selectionLockedReason: selectable && !allowPerNoteSelection ? selectionLockedReason : undefined,
-			meta: detail ? { detail } : undefined,
+			meta: detail ? { detail, downloadDetails } : undefined,
 		};
 	})();
 }
@@ -628,7 +638,7 @@ async function buildImportSyncPlanBase(
 	) {
 		preparations.delete(plugin);
 		preparation = undefined;
-		new Notice("Previous preparation expired or its options changed. Restarting the selected date range.");
+		new Notice(t("notices.restart"));
 	}
 	if (!preparation) {
 		const requestedFeatureFlags =
@@ -659,7 +669,7 @@ async function buildImportSyncPlanBase(
 	} else {
 		callbacks?.attempt?.setResumedFrom(preparation.originalAttemptId);
 		new Notice(
-			`Resuming download with ${preparation.notes.length} notes already fetched. Your original date range is preserved.`
+			t("notices.resume",{count:preparation.notes.length})
 		);
 	}
 	preparation.active = true;
@@ -699,7 +709,7 @@ async function buildImportSyncPlanBase(
 		preparations.delete(plugin);
 		if (error instanceof NetworkError && error.code === "sync_session_expired")
 			new Notice(
-				"Preparation expired on the server. Start sync again to restart your selected date range. No notes were imported."
+				t("sync.restartRange")
 			);
 		throw error;
 	} finally {
@@ -776,8 +786,8 @@ export async function importSelectedGoogleKeepNotes(
 		else persistLastSuccessfulSyncDate(plugin, completionDate);
 	}
 	if (enrichmentWarnings)
-		new Notice(`Imported Google Keep notes. AI suggestions unavailable for ${enrichmentWarnings} notes. Review these notes before requesting AI again.`, 10_000);
-	else new Notice("Imported Google Keep notes.");
+		new Notice(t("notices.aiImported",{count:enrichmentWarnings}), 10_000);
+	else new Notice(t("notices.downloadComplete"));
 	return notes.length;
 }
 
@@ -806,7 +816,7 @@ async function importGoogleKeepNotesBase(
 		const imported = await importSelectedGoogleKeepNotes(plugin, fetched.notes, callbacks, fetched.completionDate);
 		return imported;
 	} catch (error) {
-		new Notice("Failed to import notes.");
+		new Notice(t("notices.downloadFailed"));
 		throw error;
 	}
 }

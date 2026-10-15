@@ -1,6 +1,7 @@
+import {colorLabel, formatKeepColorSummary} from "../../lang/display";
+import { t } from "../../lang/ui";
 import { App, Modal } from "obsidian";
 import {
-	formatKeepColorSummary,
 	getEffectiveKeepColorValues,
 	KEEP_COLOR_OPTIONS,
 	normalizeKeepColorSelection,
@@ -29,9 +30,9 @@ export class KeepColorPickerModal extends Modal {
 		modalEl.classList.add("keepsidian-color-picker-modal-shell");
 		contentEl.classList.add("keepsidian-color-picker-modal");
 
-		contentEl.createEl("h2", { text: "Choose note colors" });
+		contentEl.createEl("h2", { text: t("colors.title") });
 		contentEl.createEl("p", {
-			text: "Pick the Google Keep colors you want to download.",
+			text: t("colors.description"),
 			cls: "keepsidian-color-picker-description",
 		});
 
@@ -43,11 +44,11 @@ export class KeepColorPickerModal extends Modal {
 				cls: "keepsidian-color-picker-swatch",
 				attr: {
 					type: "button",
-					"aria-label": colorOption.label,
+					"aria-label": colorLabel(colorOption.value),
 				},
 			});
 			swatchButton.style.setProperty("--keepsidian-color-swatch", colorOption.hex);
-			swatchButton.setAttribute("title", colorOption.label);
+			swatchButton.setAttribute("title", colorLabel(colorOption.value));
 			swatchButton.dataset.keepColorValue = colorOption.value;
 			swatchButton.addEventListener("click", () => {
 				this.toggleColor(colorOption.value);
@@ -62,7 +63,7 @@ export class KeepColorPickerModal extends Modal {
 			cls: "keepsidian-color-picker-actions",
 		});
 		const selectAllButton = actionsEl.createEl("button", {
-			text: "Select all",
+			text: t("common.selectAll"),
 			attr: { type: "button" },
 		});
 		selectAllButton.addEventListener("click", () => {
@@ -70,7 +71,7 @@ export class KeepColorPickerModal extends Modal {
 		});
 
 		const clearAllButton = actionsEl.createEl("button", {
-			text: "Clear all",
+			text: t("common.clearAll"),
 			attr: { type: "button" },
 		});
 		clearAllButton.addEventListener("click", () => {
@@ -78,7 +79,7 @@ export class KeepColorPickerModal extends Modal {
 		});
 
 		this.doneButtonEl = actionsEl.createEl("button", {
-			text: "Done",
+			text: t("common.done"),
 			cls: "mod-cta",
 			attr: { type: "button" },
 		});
@@ -143,7 +144,7 @@ export class KeepColorPickerModal extends Modal {
 
 		if (this.helperTextEl) {
 			if (selectedCount === 0) {
-				this.helperTextEl.textContent = "Select at least one color to continue.";
+				this.helperTextEl.textContent = t("colors.required");
 				this.helperTextEl.classList.add("is-warning");
 			} else {
 				this.helperTextEl.textContent = formatKeepColorSummary(

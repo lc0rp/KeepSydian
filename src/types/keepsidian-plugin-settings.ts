@@ -1,6 +1,7 @@
 import { DEFAULT_PREMIUM_FEATURES, PremiumFeatureSettings, SubscriptionCache } from "./subscription";
 import type { TokenHelperManifest } from "./token-helper";
 import type { LastSyncAttempt } from "./sync-attempt";
+import type { LanguagePreference } from "../lang/ui";
 
 export type SyncMode = "import" | "push" | "two-way";
 export type SaveLocationMode = "custom" | "daily-notes";
@@ -22,6 +23,8 @@ export interface LastSyncSummary {
 }
 
 export interface KeepSidianPluginSettings {
+	language?: LanguagePreference;
+	useDraftTranslations?: boolean;
 	enrichmentLedgerInitialized?: boolean;
 	enrichmentApplicationJournalInitialized?: boolean;
 	email: string;
@@ -66,6 +69,8 @@ export interface KeepSidianPluginSettings {
 }
 
 export const DEFAULT_SETTINGS: KeepSidianPluginSettings = {
+	language: "system",
+	useDraftTranslations: false,
 	email: "",
 	token: "",
 	syncTokenSecretId: "google-sync-token",
@@ -119,6 +124,9 @@ export function resolveLoadedSettings(
 	saved: Partial<KeepSidianPluginSettings> | null | undefined
 ): KeepSidianPluginSettings {
 	const merged = { ...DEFAULT_SETTINGS, ...(saved ?? {}) };
+	const language = saved?.language;
+	merged.language = language === "en" || language === "zh" || language === "ru" || language === "de" ? language : "system";
+	merged.useDraftTranslations = saved?.useDraftTranslations === true;
 	merged.premiumFeatures = {
 		...DEFAULT_PREMIUM_FEATURES,
 		...(saved?.premiumFeatures ?? {}),

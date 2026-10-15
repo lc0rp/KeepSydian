@@ -26,6 +26,21 @@ export interface SyncPlanEntryMeta {
 	missingAttachmentCount?: number;
 	missingAttachmentNames?: string[];
 	detail?: string;
+	downloadDetails?: Array<
+		| "conflict-copy"
+		| "also-archive"
+		| "archive-only"
+		| "add-tags"
+		| "suggestions-failed"
+		| "update-suggestions"
+		| "request-suggestions"
+		| "legacy-tags"
+	>;
+	/** Presentation metadata; English detail remains available to existing consumers. */
+	uploadDetail?: {
+		pendingMerge?: boolean;
+		skipReason?: "unresolved-conflict" | "up-to-date" | "conflict-copy";
+	};
 }
 
 export interface SyncPlanEntry {

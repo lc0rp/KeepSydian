@@ -1,107 +1,46 @@
-import type { LastSyncSummary, SyncMode, SyncRunStatus } from "../types/keepsidian-plugin-settings";
+import type { LastSyncSummary } from "../types/keepsidian-plugin-settings";
+import { t, formatUiDateTime } from "../lang/ui";
 
-function formatCount(summary: LastSyncSummary, includeNotesWord = true): string {
-	const { processedNotes, totalNotes } = summary;
-	const base =
-		typeof totalNotes === "number" && totalNotes > 0 ? `${processedNotes}/${totalNotes}` : `${processedNotes}`;
-	if (!includeNotesWord) {
-		return base;
-	}
-	const noteLabel = processedNotes === 1 && totalNotes !== 1 ? "note" : "notes";
-	return `${base} ${noteLabel}`;
-}
-
-function describeMode(mode: SyncMode): string {
-	switch (mode) {
-		case "two-way":
-			return "two-way sync";
-		case "push":
-			return "upload";
-		case "import":
-		default:
-			return "import";
-	}
-}
-
-function formatTimestamp(timestamp: number): string {
-	const date = new Date(timestamp);
-	if (Number.isNaN(date.getTime())) {
-		return "unknown time";
-	}
-	try {
-		return date.toLocaleString();
-	} catch {
-		return date.toISOString();
-	}
-}
-
-function getSummaryStatus(summary: LastSyncSummary): SyncRunStatus {
-	return summary.status ?? (summary.success ? "success" : "failed");
-}
-
-function formatWarnings(summary: LastSyncSummary): string {
-	// The persisted legacy counter includes attachment and AI warnings.
-	const count = summary.attachmentWarnings ?? 0;
-	return `${count} warning${count === 1 ? "" : "s"}`;
-}
-
-export function formatStatusBarText(summary: LastSyncSummary | null): string {
-	if (!summary) {
-		return "Last sync: never";
-	}
-	const status = getSummaryStatus(summary);
-	if (status === "canceled") {
-		return "Last sync canceled";
-	}
-	if (status === "failed") {
-		return "Last sync failed";
-	}
-	if (status === "warning") {
-		return "Last sync completed with warnings";
-	}
+function formatCount(summary: LastSyncSummary): string {
 	return typeof summary.totalNotes === "number" && summary.totalNotes > 0
-		? `Last synced: ${formatCount(summary, false)}`
-		: `Last synced: ${formatCount(summary)}`;
+		? t("sync.noteRatio", { processed: summary.processedNotes, total: summary.totalNotes })
+		: t("sync.notes", { count: summary.processedNotes });
 }
-
+export function formatStatusBarText(summary: LastSyncSummary | null): string {
+	if (!summary) return t("sync.last.never");
+	const status = summary.status ?? (summary.success ? "success" : "failed");
+	if (status === "canceled") return t("sync.last.canceled");
+	if (status === "failed") return t("sync.last.failed");
+	if (status === "warning") return t("sync.last.warning");
+	return t("sync.last.count", { count: formatCount(summary) });
+}
 export function formatStatusBarTooltip(summary: LastSyncSummary | null): string {
-	if (!summary) {
-		return "KeepSidian has not synced yet.";
-	}
-	const formattedTime = formatTimestamp(summary.timestamp);
-	const status = getSummaryStatus(summary);
-	if (status === "canceled") {
-		const count = formatCount(summary);
-		return `KeepSidian last sync was canceled: ${formattedTime} (processed ${count}).`;
-	}
-	if (status === "failed") {
-		const count = formatCount(summary);
-		return `KeepSidian last sync failed: ${formattedTime} (processed ${count}).`;
-	}
-	if (status === "warning") {
-		const count = formatCount(summary);
-		return `KeepSidian last sync completed with ${formatWarnings(summary)}: ${formattedTime} (processed ${count}).`;
-	}
-	const count = formatCount(summary);
-	return `KeepSidian last synced: ${formattedTime} (${count}).`;
+	if (!summary) return t("sync.notYet");
+	const time = Number.isFinite(summary.timestamp) ? formatUiDateTime(summary.timestamp) : t("sync.unknownTime");
+	const status = summary.status ?? (summary.success ? "success" : "failed");
+	const statusText =
+		status === "success"
+			? t("sync.success")
+			: status === "canceled"
+				? t("sync.canceled")
+				: status === "warning"
+					? t("sync.last.warning")
+					: t("sync.failedSentence");
+	const mode = t(
+		summary.mode === "push"
+			? "sync.mode.upload"
+			: summary.mode === "two-way"
+				? "sync.mode.twoWay"
+				: "sync.mode.download"
+	);
+	const parameters = { status: `${mode} · ${statusText}`, time, notes: formatCount(summary) };
+	return summary.status === "warning"
+		? t("sync.warningSummary", {
+				...parameters,
+				warnings: t("sync.attachmentWarnings", { count: summary.attachmentWarnings ?? 0 }),
+			})
+		: t("sync.summary", parameters);
 }
-
 export function formatModalSummary(summary: LastSyncSummary | null): string {
-	if (!summary) {
-		return "No sync has been run yet.";
-	}
-	const formattedTime = formatTimestamp(summary.timestamp);
-	const modeText = describeMode(summary.mode);
-	const count = formatCount(summary);
-	const status = getSummaryStatus(summary);
-	if (status === "success") {
-		return `Last ${modeText} completed on ${formattedTime}: Synced ${count}.`;
-	}
-	if (status === "warning") {
-		return `Last ${modeText} completed on ${formattedTime}: Synced ${count} with ${formatWarnings(summary)}.`;
-	}
-	if (status === "canceled") {
-		return `Last ${modeText} attempt on ${formattedTime} was canceled after ${count}.`;
-	}
-	return `Last ${modeText} attempt on ${formattedTime} failed after ${count}.`;
+	return summary ? formatStatusBarTooltip(summary) : t("sync.noRun");
 }

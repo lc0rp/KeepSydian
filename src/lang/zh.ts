@@ -1,3 +1,4 @@
+import { uiZh } from "./ui-zh";
 import type { LanguageDefinition } from "./types";
 
 /** AI-authored Simplified Chinese draft from en-plain-lang.ts; not native-reviewed or enabled. */
@@ -6,6 +7,7 @@ export const zh = {
 	name: "简体中文",
 	status: "draft",
 	messages: {
+		...uiZh,
 		"commands.syncNow": "立即同步",
 		"commands.openSyncCenter": "打开同步中心",
 		"commands.twoWaySync": "运行双向同步",

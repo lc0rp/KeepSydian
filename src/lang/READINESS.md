@@ -1,5 +1,9 @@
 # KeepSydian multilingual readiness
 
+UI integration update, 2026-10-14: the isolated `codex/multilingual-ui` candidate now
+wires the catalogs into the plugin. See [integration and acceptance](INTEGRATION.md).
+The assessment and public research below remain the dated foundation record.
+
 Assessed 2026-10-12 against plugin revision `2ddb2f363bb3affa7389e3760ea77db91327a4a3`
 (2.1.0-beta.7). This is a planning/catalog foundation, not a localized release.
 Reconciled on 2026-10-14 onto upstream `3822c99c0678f100eb8cae3b302074842bad0646`

@@ -1,3 +1,4 @@
+import { t } from "../../../lang/ui";
 import type KeepSidianPlugin from "main";
 import { Setting, setIcon } from "obsidian";
 import type { IconName } from "obsidian";
@@ -19,7 +20,7 @@ function renderNotePathPreview(plugin: KeepSidianPlugin, containerEl: HTMLElemen
 	containerEl.innerHTML = "";
 	containerEl.createEl("div", {
 		cls: "keepsidian-note-path-preview__label",
-		text: "Location preview:- your notes will be saved here:",
+		text: t("settings.locationPreview"),
 	});
 	containerEl.createEl("code", {
 		cls: "keepsidian-note-path-preview__path",
@@ -43,14 +44,14 @@ export function addSupportSection(plugin: KeepSidianPlugin, containerEl: HTMLEle
 
 	supportRow.createEl("span", {
 		cls: "keepsidian-support-label",
-		text: "Need help?",
+		text: t("settings.needHelp"),
 	});
 
 	const linksContainer = supportRow.createEl("div", {
 		cls: "keepsidian-support-links",
 	});
 
-	createSupportLink(linksContainer, "GitHub Issues", "https://github.com/lc0rp/KeepSidian/issues", "github");
+	createSupportLink(linksContainer, t("settings.issues"), "https://github.com/lc0rp/KeepSidian/issues", "github");
 	createSupportLink(linksContainer, "Discord DM (@lc0rp)", "https://discord.com/users/lc0rp", "message-circle");
 }
 
@@ -86,11 +87,11 @@ export async function addSubscriptionSettings(
 
 export function addEmailSetting(plugin: KeepSidianPlugin, containerEl: HTMLElement): void {
 	new Setting(containerEl)
-		.setName("Email")
-		.setDesc("Your Google Keep email.")
+		.setName(t("settings.email.name"))
+		.setDesc(t("settings.email.description"))
 		.addText((text) =>
 			text
-				.setPlaceholder("Example@gmail.com")
+				.setPlaceholder(t("settings.email.placeholder"))
 				.setValue(plugin.settings.email)
 				.onChange(async (value) => {
 					plugin.settings.email = value;
@@ -113,9 +114,9 @@ export function addSaveLocationSetting(plugin: KeepSidianPlugin, containerEl: HT
 		};
 
 		new Setting(sectionEl)
-			.setName("Save location in vault")
+			.setName(t("settings.saveLocation.name"))
 			.setDesc(
-				"Folder path pattern for imported notes. Variables: {now.*} or {note.*} for date, time, year, month, day, quarter. Examples: {now.date} OR {note.year} OR /KeepSidian/{now.year}/{note.month}-{note.day} OR /path/to/daily notes"
+				t("settings.saveLocation.description")
 			)
 			.addText((text) =>
 				text
@@ -131,9 +132,9 @@ export function addSaveLocationSetting(plugin: KeepSidianPlugin, containerEl: HT
 			);
 
 		new Setting(sectionEl)
-			.setName("Note filename")
+			.setName(t("settings.filename.name"))
 			.setDesc(
-				"Filename pattern for imported notes. Variables: {title}, {now.*} or {note.*} for date, time, year, month, day, quarter. Examples: {title}-{now.date} OR {title}-{note.year}"
+				t("settings.filename.description")
 			)
 			.addText((text) =>
 				text
@@ -147,9 +148,9 @@ export function addSaveLocationSetting(plugin: KeepSidianPlugin, containerEl: HT
 			);
 
 		new Setting(sectionEl)
-			.setName("Display imported images in notes")
+			.setName(t("settings.images.name"))
 			.setDesc(
-				"Embed Google Keep images in imported notes. Image files remain stored in the note folder's media directory."
+				t("settings.images.description")
 			)
 			.addToggle((toggle) =>
 				toggle.setValue(plugin.settings.embedImportedImages).onChange(async (value) => {
@@ -170,7 +171,7 @@ export function addSaveLocationSetting(plugin: KeepSidianPlugin, containerEl: HT
 export function addGithubInstructionsLink(setting: Setting): void {
 	const githubInstructionsUrl = "https://github.com/djsudduth/keep-it-markdown";
 	const githubInstructionsLink = setting.controlEl.createEl("a", {
-		text: "🌎 GitHub KIM instructions",
+		text: t("settings.kim"),
 		attr: {
 			href: githubInstructionsUrl,
 			target: "_blank",

@@ -1,3 +1,4 @@
+import { uiDe } from "./ui-de";
 import type { LanguageDefinition } from "./types";
 
 /** AI-authored German draft from en-plain-lang.ts; not native-reviewed or enabled. */
@@ -6,6 +7,7 @@ export const de = {
 	name: "Deutsch",
 	status: "draft",
 	messages: {
+		...uiDe,
 		"commands.syncNow": "Jetzt synchronisieren",
 		"commands.openSyncCenter": "Synchronisationszentrale öffnen",
 		"commands.twoWaySync": "Synchronisation in beide Richtungen starten",

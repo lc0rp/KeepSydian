@@ -585,7 +585,7 @@ describe("SubscriptionSettingsTab", () => {
 			expect(containerEl.textContent).toContain("✅ Active supporter (Plan: premium)");
 			expect(containerEl.textContent).toContain("Open billing portal");
 			expect(containerEl.textContent).toContain("Usage");
-			expect(containerEl.textContent).toContain("100 / 1000 notes synced");
+			expect(containerEl.textContent).toContain("100 / 1,000 notes synced");
 			expect(containerEl.textContent).toContain("Auto-tags");
 			expect(containerEl.textContent).not.toContain("requires a subscription");
 			expect(containerEl.textContent).not.toContain("Manage billing");
@@ -600,9 +600,9 @@ describe("SubscriptionSettingsTab", () => {
 			expect(containerEl.textContent).toContain("Auto-tags");
 			expect(containerEl.textContent).toContain("Maximum tags");
 			expect(containerEl.textContent).toContain("Tag prefix");
-			expect(containerEl.textContent).toContain("Note colors filter");
-			expect(containerEl.textContent).toContain("Pinned note filter");
-			expect(containerEl.textContent).toContain("Archived note filter");
+			expect(containerEl.textContent).toContain("Filter by note color");
+			expect(containerEl.textContent).toContain("Filter by pinned status");
+			expect(containerEl.textContent).toContain("Filter by archived status");
 			expect(containerEl.textContent).not.toContain("Include yellow notes");
 		});
 
@@ -635,10 +635,10 @@ describe("SubscriptionSettingsTab", () => {
 			const resetColorsButton = Array.from(containerEl.querySelectorAll("button")).find(
 				(button) => button.textContent === "Reset"
 			) as HTMLButtonElement | undefined;
-			const pinnedSelect = findSettingByLabel(containerEl, "Pinned note filter")?.querySelector(
+			const pinnedSelect = findSettingByLabel(containerEl, "Filter by pinned status")?.querySelector(
 				"select"
 			) as HTMLSelectElement | null;
-			const archivedSelect = findSettingByLabel(containerEl, "Archived note filter")?.querySelector(
+			const archivedSelect = findSettingByLabel(containerEl, "Filter by archived status")?.querySelector(
 				"select"
 			) as HTMLSelectElement | null;
 			const smartTitlesToggle = findSettingByLabel(containerEl, "Smart titles")?.querySelector(

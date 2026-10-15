@@ -1,3 +1,4 @@
+import { uiRu } from "./ui-ru";
 import type { LanguageDefinition } from "./types";
 
 /** AI-authored Russian draft from en-plain-lang.ts; not native-reviewed or enabled. */
@@ -6,6 +7,7 @@ export const ru = {
 	name: "Русский",
 	status: "draft",
 	messages: {
+		...uiRu,
 		"commands.syncNow": "Синхронизировать сейчас",
 		"commands.openSyncCenter": "Открыть центр синхронизации",
 		"commands.twoWaySync": "Запустить двустороннюю синхронизацию",

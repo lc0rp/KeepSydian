@@ -1,3 +1,4 @@
+import { t } from "../../lang/ui";
 import { Modal, Setting, type App } from "obsidian";
 
 export const FEEDBACK_SURVEY_URL = "https://forms.gle/pVs8GtohFWmqs5F4A";
@@ -17,20 +18,20 @@ export class FeedbackSurveyModal extends Modal {
 		contentEl.classList.add("keepsidian-feedback-modal");
 		contentEl.createEl("h2", { text: `KeepSydian ${this.version}` });
 
-		contentEl.createEl("h3", { text: "What's new" });
+		contentEl.createEl("h3", { text: t("feedback.whatsNew") });
 		const whatsNewList = contentEl.createEl("ul");
-		for (const item of WHATS_NEW_ITEMS) {
+		for (const item of [t("feedback.attachments"),t("feedback.yaml")]) {
 			whatsNewList.createEl("li", { text: item });
 		}
 
-		contentEl.createEl("h3", { text: "Help shape what we build next" });
+		contentEl.createEl("h3", { text: t("feedback.heading") });
 		contentEl.createEl("p", {
-			text: "Take about 2–3 minutes to tell us what's working, what's frustrating, and what you'd most like us to improve; the survey opens on an external Google form in your browser.",
+			text: t("feedback.description"),
 		});
 
 		const actions = new Setting(contentEl);
 		const surveyLink = actions.controlEl.createEl("a", {
-			text: "Give feedback",
+			text: t("feedback.open"),
 			attr: {
 				href: FEEDBACK_SURVEY_URL,
 				target: "_blank",
@@ -41,7 +42,7 @@ export class FeedbackSurveyModal extends Modal {
 		surveyLink.classList.add("keepsidian-link-button");
 
 		actions.addButton((button) =>
-			button.setButtonText("Maybe later").onClick(() => {
+			button.setButtonText(t("feedback.later")).onClick(() => {
 				this.close();
 			})
 		);

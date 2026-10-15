@@ -27,7 +27,7 @@ describe("FeedbackSurveyModal", () => {
 		expect(WHATS_NEW_ITEMS).toContain(
 			"KeepSydian preserves existing YAML comments and formatting when it refreshes imported-note metadata."
 		);
-		expect(modal.contentEl.textContent).toContain("survey opens on an external Google form in your browser");
+		expect(modal.contentEl.textContent).toContain("survey opens as an external Google form in your browser");
 
 		const surveyLink = modal.contentEl.querySelector<HTMLAnchorElement>(
 			'a[data-keepsidian-link="feedback-survey"]'

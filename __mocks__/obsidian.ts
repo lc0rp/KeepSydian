@@ -135,6 +135,7 @@ export class App {
 type PluginManifest = Record<string, unknown>;
 
 export class Plugin {
+	private cleanups: Array<() => void> = [];
 	app: App;
 	manifest: PluginManifest;
 
@@ -144,14 +145,15 @@ export class Plugin {
 	}
 
 	onload(): void {}
-	onunload(): void {}
+	onunload(): void { this.cleanups.splice(0).forEach((cleanup) => cleanup()); }
+	register(cleanup: () => void): void { this.cleanups.push(cleanup); }
 	addCommand(): void {}
 	addRibbonIcon(): void {}
 	addSettingTab(): void {}
 	loadData(): void {}
 	saveData(): void {}
 	registerDomEvent(): void {}
-	registerInterval(): void {}
+	registerInterval(interval: number): void { this.register(() => window.clearInterval(interval)); }
 	addStatusBarItem(): StatusBarItemElement {
 		const element = enhanceElement(document.createElement("div")) as StatusBarItemElement;
 		element.setText = (text: string) => {

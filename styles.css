@@ -1207,6 +1207,7 @@ If your plugin does not need CSS, delete this file.
 
 	.keepsidian-sync-stepper {
 		gap: 8px;
+		grid-template-columns: auto minmax(24px, 1fr) auto minmax(24px, 1fr) auto;
 	}
 
 	.keepsidian-modal-header-meta {
@@ -1439,4 +1440,86 @@ If your plugin does not need CSS, delete this file.
 	color: var(--text-muted);
 	font-size: var(--font-ui-small);
 	line-height: 1.35;
+}
+/* Localized labels can expand; user titles and paths retain their own direction. */
+.is-mobile .keepsidian-modal {
+	padding-inline: 8px;
+	box-sizing: border-box;
+}
+.keepsidian-sync-plan-merge-value {
+	display: none;
+}
+@media (max-width: 720px) {
+	.keepsidian-sync-plan-merge-value {
+		display: block;
+		flex-basis: 100%;
+		white-space: normal;
+		overflow-wrap: anywhere;
+	}
+}
+.keepsidian-draft-translations [role="switch"]:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: 2px;
+}
+.keepsidian-localized-settings .setting-item-info,
+.keepsidian-sync-plan-row-body {
+	min-inline-size: 0;
+	overflow-wrap: anywhere;
+}
+.keepsidian-localized-settings .setting-item-control {
+	flex-wrap: wrap;
+	min-inline-size: 0;
+	max-inline-size: 100%;
+}
+.keepsidian-localized-settings {
+	overflow-wrap: anywhere;
+	container-type: inline-size;
+}
+.keepsidian-localized-settings input,
+.keepsidian-localized-settings select,
+.keepsidian-localized-settings .keepsidian-support-links,
+.keepsidian-localized-settings .keepsidian-support-link,
+.keepsidian-localized-settings .keepsidian-link-button,
+.keepsidian-sync-plan-merge-action,
+.keepsidian-sync-plan-merge-action select {
+	min-inline-size: 0;
+	max-inline-size: 100%;
+}
+.keepsidian-localized-settings .keepsidian-link-button,
+.keepsidian-localized-settings .keepsidian-color-filter-summary {
+	white-space: normal;
+	height: auto;
+	min-height: var(--input-height);
+}
+.keepsidian-localized-settings button,
+.keepsidian-modal-actions button,
+.keepsidian-sync-plan-chip {
+	height: auto;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+.keepsidian-sync-plan-row-title,
+.keepsidian-sync-plan-row-path {
+	unicode-bidi: plaintext;
+	overflow-wrap: anywhere;
+}
+@media (max-width: 520px) {
+	body:not(.is-mobile) .keepsidian-settings-tab {
+		padding-inline: 8px;
+	}
+	.keepsidian-localized-settings .setting-item {
+		flex-wrap: wrap;
+	}
+	.keepsidian-localized-settings .setting-item-control {
+		max-inline-size: 100%;
+		margin-inline-start: 0;
+	}
+}
+@container (max-width: 520px) {
+	.keepsidian-localized-settings .setting-item {
+		flex-wrap: wrap;
+	}
+	.keepsidian-localized-settings .setting-item-control {
+		margin-inline-start: 0;
+	}
 }
