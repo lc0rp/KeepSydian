@@ -34,7 +34,7 @@ SUFFIX = "---keepsidianserver-i55qr5tvea-uc.a.run.app"
 
 
 V1 = f"https://{REGION}-run.googleapis.com/apis/serving.knative.dev/v1/namespaces/{PROJECT}"
-PROFILE_SPEC_HASH = "bc732af944735aa9d1418618513fd07d457417dc0287558bf2e30cf3ea10230d"
+PROFILE_SPEC_HASH = "9accdd1e49a6b6908c6d070506a72833b66f67b2d1aaf31f773cfb0c64360b99"
 PROFILE_ANNOTATIONS_HASH = (
     "89a8ab83f445fa3a8a8440a48a70f1b543505d026cdda47c4a67c91542bf7467"
 )
