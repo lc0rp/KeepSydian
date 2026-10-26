@@ -23,6 +23,7 @@ export interface LastSyncAttempt {
 	fetchedCount: number;
 	elapsedMs: number;
 	httpStatus?: number;
+	errorCode?: import("../services/errors").UploadPreparationCode;
 	logPath?: string;
 	logUnavailable: boolean;
 }

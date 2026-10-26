@@ -392,8 +392,8 @@ export async function runPreparedSyncPlan(
 			}
 			await stageIdenticalDownloadReceipts(plugin, preparedPlan.importNotes ?? [], preparedPlan.importEntryIds ?? [], preparedPlan.plan.entries);
 			if (preparedPlan.mode === "two-way") {
-				resetProgressIndicatorsForNextStage(plugin);
-				plugin.currentSyncPhaseLabel = "Upload step";
+				// Keep completed download counts until upload preparation succeeds.
+				plugin.currentSyncPhaseLabel = "Upload preparation";
 				await attempt.transition("upload-plan");
 				const active = await getManualSupportState(plugin);
 				const built = await buildPushSyncPlan(plugin, active, active ? undefined : SUPPORTER_LOCK_REASON, {
@@ -405,6 +405,7 @@ export async function runPreparedSyncPlan(
 				const uploadPlan = excludeDeletionUploads(built.plan, preparedPlan.deletions);
 				// Conflict-only deletion plans still need a visible review stage.
 				if (uploadPlan.actionableCount > 0 || (built.localDeletions?.entries.length ?? 0) > 0) {
+					resetProgressIndicatorsForNextStage(plugin);
 					await attempt.transition("review");
 					return { nextPlan: {
 						attempt,

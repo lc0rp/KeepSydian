@@ -1,9 +1,9 @@
 jest.mock("obsidian");
-jest.mock("@integrations/server/keepApi", () => ({ fetchNotes: jest.fn(), pushNotes: jest.fn() }));
+jest.mock("@integrations/server/keepApi", () => ({ fetchNotesWithPremiumFeatures: jest.fn(), pushNotes: jest.fn() }));
 jest.mock("@app/logging", () => ({ logSync: jest.fn().mockResolvedValue(undefined), flushLogSync: jest.fn().mockResolvedValue(undefined) }));
 
 import type KeepSidianPlugin from "@app/main";
-import { fetchNotes, pushNotes } from "@integrations/server/keepApi";
+import { fetchNotesWithPremiumFeatures, pushNotes } from "@integrations/server/keepApi";
 import type { PushNotePayload } from "@integrations/server/keepApi";
 import { buildPushSyncPlan, pushGoogleKeepNotes } from "../push";
 import type { MergeAction } from "@types";
@@ -29,7 +29,7 @@ function fixture(body = "shared\nlocal edit", remoteBody = "shared\nremote edit"
 		app: { vault: { adapter, createFolder: jest.fn(async () => {}) } },
 		throwIfSyncCancelled: jest.fn(),
 	} as unknown as KeepSidianPlugin;
-	(fetchNotes as jest.Mock).mockImplementation(async () => ({ notes: [remote] }));
+	(fetchNotesWithPremiumFeatures as jest.Mock).mockImplementation(async () => ({ notes: [remote] }));
 	(pushNotes as jest.Mock).mockImplementation(async (_email: string, _token: string, notes: PushNotePayload[]) => ({ results: notes.map((note) => ({ path: note.path, success: true })) }));
 	const build = () => buildPushSyncPlan(plugin, true, undefined, { reviewMerges: true });
 	return { plugin, files, content, remote, adapter, build };
@@ -38,6 +38,30 @@ function fixture(body = "shared\nlocal edit", remoteBody = "shared\nremote edit"
 beforeEach(() => jest.clearAllMocks());
 
 describe("reviewed upload merge actions", () => {
+	it("reviews archived linked notes across pages using only the authorized archive filter", async () => {
+		const f = fixture();
+		f.plugin.settings.supporterKeyConfigured = true;
+		f.plugin.settings.supporterKey = "synthetic-supporter";
+		(fetchNotesWithPremiumFeatures as jest.Mock)
+			.mockResolvedValueOnce({ notes: [{ id: "other", text: "active" }], next_cursor: "page-two" })
+			.mockResolvedValueOnce({ notes: [{ ...f.remote, archived: true }] });
+		const built = await f.build();
+		expect(built.notesToPush).toHaveLength(1);
+		expect(fetchNotesWithPremiumFeatures).toHaveBeenNthCalledWith(1, "test@example.com", "test-token", { keep_state_filter: { archived: "all" } }, 0, 100, undefined, undefined, "synthetic-supporter");
+		expect(fetchNotesWithPremiumFeatures).toHaveBeenNthCalledWith(2, "test@example.com", "test-token", { keep_state_filter: { archived: "all" } }, 0, 100, undefined, "page-two", "synthetic-supporter");
+		expect(f.adapter.write).not.toHaveBeenCalled();
+		expect(pushNotes).not.toHaveBeenCalled();
+	});
+
+	it("does not bypass a denied archive lookup or write locally", async () => {
+		const f = fixture();
+		(fetchNotesWithPremiumFeatures as jest.Mock).mockRejectedValueOnce(new Error("synthetic denied response"));
+		await expect(f.build()).rejects.toMatchObject({ code: "upload_review_failed" });
+		expect(fetchNotesWithPremiumFeatures).toHaveBeenCalledTimes(1);
+		expect(f.adapter.write).not.toHaveBeenCalled();
+		expect(pushNotes).not.toHaveBeenCalled();
+	});
+
 	it.each<MergeAction>(["merge-save-conflicts", "merge-skip-conflicts", "merge-overwrite-conflicts", "overwrite-all"])("applies %s to an actual conflicting upload", async (action) => {
 		const f = fixture();
 		const built = await f.build();
@@ -118,7 +142,7 @@ describe("reviewed upload merge actions", () => {
 
 	it("fails safely when a linked remote note cannot be found", async () => {
 		const f = fixture();
-		(fetchNotes as jest.Mock).mockResolvedValue({ notes: [] });
+		(fetchNotesWithPremiumFeatures as jest.Mock).mockResolvedValue({ notes: [] });
 		await expect(f.build()).rejects.toThrow(/linked Keep note is unavailable/);
 		expect(pushNotes).not.toHaveBeenCalled();
 	});
@@ -129,7 +153,7 @@ describe("reviewed upload merge actions", () => {
 		expect(built.notesToPush).toHaveLength(0);
 		expect(built.plan.entries[0].action).toBe("skipped-conflict");
 		expect(built.plan.entries[0].selectable).toBe(false);
-		expect(fetchNotes).not.toHaveBeenCalled();
+		expect(fetchNotesWithPremiumFeatures).not.toHaveBeenCalled();
 	});
 
 	it("includes a clean two-way merge even after download stamped it as synced", async () => {

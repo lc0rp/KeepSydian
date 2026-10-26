@@ -573,6 +573,7 @@ export class SyncProgressModal extends Modal {
 		if (!plan) return "Sync plan";
 		if (surface === "review") return getPlanTitle(plan);
 		if (surface === "running") return getRunningTitle(plan);
+		if (this.lastResult?.status === "failed" && (this.activeAttempt?.phase ?? this.options.getLastAttempt?.()?.phase) === "upload-plan") return "Upload preparation failed";
 		return getResultTitle(plan, this.lastResult?.status ?? null);
 	}
 	private getStatusCopy(surface: ModalSurface): string {

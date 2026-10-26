@@ -113,3 +113,22 @@ it("keeps download-only skipped conflicts eligible for a future download", async
 	expect(buildPushSyncPlan).not.toHaveBeenCalled();
 	expect(persistLastSuccessfulSyncDate).not.toHaveBeenCalled();
 });
+
+ it("preserves completed download counts and pending merge work when upload preparation fails", async () => {
+	const f = setup();
+	(importSelectedGoogleKeepNotes as jest.Mock).mockImplementation(async (_plugin: unknown, _notes: unknown, callbacks: SyncCallbacks) => {
+		f.plugin.processedNotes = 18;
+		f.plugin.totalNotes = 18;
+		callbacks.onEntrySettled?.("download-entry", true, "merge");
+		return 18;
+	});
+	(buildPushSyncPlan as jest.Mock).mockRejectedValueOnce(new Error("synthetic review failure"));
+	const result = await runPreparedSyncPlan(f.plugin, f.prepared, String, f.onSuccess);
+	expect(result.failed).toBe(true);
+	expect(f.plugin.processedNotes).toBe(18);
+	expect(f.plugin.totalNotes).toBe(18);
+	expect(buildPushSyncPlan).toHaveBeenCalledWith(f.plugin, true, undefined, expect.objectContaining({ forcePaths: ["Keep/note.md"] }));
+	expect(pushGoogleKeepNotes).not.toHaveBeenCalled();
+	expect(persistLastSuccessfulSyncDate).not.toHaveBeenCalled();
+	expect(f.onSuccess).not.toHaveBeenCalled();
+ });
