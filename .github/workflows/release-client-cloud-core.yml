@@ -45,7 +45,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 9da45c6a07c33c22f69e35f1b549e2096114b68d
+          ref: 0e82494699a167bf4d62d8241624a195c59bbb45
           path: engine
           persist-credentials: false
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
