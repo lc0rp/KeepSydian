@@ -1033,6 +1033,22 @@ describe("SyncProgressModal", () => {
 		expect(modal.contentEl.textContent).toContain("Synced 4/4 notes");
 	});
 
+	test("labels an upload preparation failure without discarding the completed download rows", async () => {
+		const modal = new SyncProgressModal(app, { ...modalOptions, getLastAttempt: () => ({
+			id: "synthetic", mode: "two-way", phase: "upload-plan", startedAt: 0, updatedAt: 1,
+			fetchedCount: 623, elapsedMs: 1, logUnavailable: false, outcome: "failed",
+		}) });
+		modal.onOpen();
+		getButton(modal, "Start sync").click();
+		await flushUI();
+		getButton(modal, "Execute").click();
+		await flushUI();
+		modal.setComplete("failed", 18);
+		await flushUI();
+		expect(modal.contentEl.textContent).toContain("Upload preparation failed");
+		expect(modal.contentEl.textContent).not.toContain("Download failed");
+	});
+
 	test("shows attachment warnings as a completed download result", async () => {
 		const modal = new SyncProgressModal(app, modalOptions);
 		modal.onOpen();

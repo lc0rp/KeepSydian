@@ -19,7 +19,7 @@ import { getEnrichmentLedger } from "./enrichment/ledger";
 import { buildLocalDeletionPlan, type PreparedLocalDeletions } from "./local-deletions/plan";
 import type { SyncPlan, SyncPlanEntry } from "@types";
 import { safeSyncError } from "@app/sync-attempt";
-import { AppError } from "@services/errors";
+import { AppError, UploadPreparationError, type UploadPreparationCode } from "@services/errors";
 
 const SKIPPED_LOG_BATCH_SIZE = 50;
 const PUSH_PAYLOAD_BATCH_SIZE = 20;
@@ -50,18 +50,26 @@ function buildPushPlanEntry(note: ReviewedPushNote, index: number, allowPerNoteS
 	};
 }
 
+async function preparationStep<T>(code: UploadPreparationCode, work: () => Promise<T>): Promise<T> {
+	try { return await work(); }
+	catch (error) {
+		if (isSyncCancellationError(error) || error instanceof UploadPreparationError) throw error;
+		throw new UploadPreparationError(code, error);
+	}
+}
+
 export async function buildPushSyncPlan(plugin: KeepSidianPlugin, allowPerNoteSelection = true, selectionLockedReason?: string, options?: PushPlanOptions): Promise<BuiltPushSyncPlan> {
-	const collected = options?.forcePaths ? await collectNotesToPush(plugin, options.forcePaths) : await collectNotesToPush(plugin);
+	const collected = await preparationStep("upload_collection_failed", () => collectNotesToPush(plugin, options?.forcePaths));
 	if (options?.reviewMerges && collected.skippedNotes.some((note) => note.reason.startsWith("error:"))) {
-		throw new Error("Some local notes could not be read. Fix the vault errors before reviewing uploads.");
+		throw new UploadPreparationError("upload_collection_failed");
 	}
 	const protectedPaths = new Set((options?.protectedPaths ?? []).map(normalizePathSafe));
 	const protectedNotes = collected.notesToPush.filter((note) => protectedPaths.has(normalizePathSafe(note.fullPath)));
 	let notesToPush: ReviewedPushNote[] = collected.notesToPush.filter((note) => !protectedPaths.has(normalizePathSafe(note.fullPath)))
 		.map((note, index) => ({ ...note, planEntryId: `upload:${index}:${normalizePathSafe(note.fullPath)}` }));
-	if (options?.reviewMerges) notesToPush = await reviewPushNotes(plugin, notesToPush);
+	if (options?.reviewMerges) notesToPush = await preparationStep("upload_review_failed", () => reviewPushNotes(plugin, notesToPush));
 	const skippedNotes = [...collected.skippedNotes, ...protectedNotes.map((note) => ({ path: note.fullPath, reason: "unresolved-conflict" }))];
-	const localDeletions = await buildLocalDeletionPlan(plugin, allowPerNoteSelection, selectionLockedReason);
+	const localDeletions = await preparationStep("upload_deletion_review_failed", () => buildLocalDeletionPlan(plugin, allowPerNoteSelection, selectionLockedReason));
 	const entries: SyncPlanEntry[] = [
 		...notesToPush.map((note, index) => buildPushPlanEntry(note, index, allowPerNoteSelection, selectionLockedReason)),
 		...localDeletions.entries,

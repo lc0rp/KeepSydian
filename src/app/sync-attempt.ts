@@ -1,4 +1,5 @@
 import { Notice } from "obsidian";
+import { UploadPreparationError, UPLOAD_PREPARATION_MESSAGES, type UploadPreparationCode } from "@services/errors";
 import type KeepSidianPlugin from "@app/main";
 import type { DownloadScope, SyncMode } from "@types";
 import type { LastSyncAttempt, SyncAttemptOutcome, SyncAttemptPhase } from "../types/sync-attempt";
@@ -30,12 +31,13 @@ function newAttemptId(): string {
 }
 
 /** Classify only allowlisted primitives. Do not stringify messages, stacks, causes or response bodies. */
-export function safeSyncError(error: unknown): { errorKind: string; httpStatus?: number } {
-	const result: { errorKind: string; httpStatus?: number } = { errorKind: "unknown" };
+export function safeSyncError(error: unknown): { errorKind: string; httpStatus?: number; errorCode?: UploadPreparationCode } {
+	const result: { errorKind: string; httpStatus?: number; errorCode?: UploadPreparationCode } = { errorKind: "unknown" };
 	const visited = new Set<unknown>();
 	for (let depth = 0; depth < 5 && error && typeof error === "object" && !visited.has(error); depth += 1) {
 		visited.add(error);
 		try {
+			if (error instanceof UploadPreparationError && Object.prototype.hasOwnProperty.call(UPLOAD_PREPARATION_MESSAGES, error.code)) result.errorCode ??= error.code;
 			const candidate = error as { status?: unknown; kind?: unknown; cause?: unknown };
 			if (
 				typeof candidate.status === "number" &&
@@ -81,6 +83,7 @@ export class SyncAttempt {
 	private cutoff?: string;
 	private features: Record<string, boolean> = {};
 	private status?: number;
+	private errorCode?: UploadPreparationCode;
 	private resumedFrom?: string;
 	setResumedFrom(id?: string): void {
 		this.resumedFrom = id;
@@ -165,6 +168,7 @@ export class SyncAttempt {
 		if (this.finalization) return this.finalization;
 		this.terminal = outcome;
 		this.status = safeSyncError(error).httpStatus;
+		this.errorCode = safeSyncError(error).errorCode;
 		this.finalization = this.record("outcome", true, error);
 		return this.finalization;
 	}
@@ -182,7 +186,10 @@ export class SyncAttempt {
 			: errorKind === "parse"
 				? "Invalid server response."
 				: "The operation could not be completed.";
-		return `${reason} Attempt ${this.id}.${this.unavailable ? " Sync log unavailable; check vault storage permissions." : " Open the sync log for details."}`;
+		const code = classified.errorCode ?? this.errorCode;
+		const detail = code ? `${UPLOAD_PREPARATION_MESSAGES[code]} (${code})` : reason;
+		const partial = this.mode === "two-way" && this.currentPhase === "upload-plan" ? "Upload preparation failed. Download changes already applied were kept. " : "";
+		return `${partial}${detail} Attempt ${this.id}.${this.unavailable ? " Sync log unavailable; check vault storage permissions." : " Open the sync log for details."}`;
 	}
 
 	private fallback(): void {
@@ -249,6 +256,7 @@ export class SyncAttempt {
 				fetchedCount,
 				elapsedMs,
 				httpStatus: this.status,
+				errorCode: this.errorCode,
 				logPath: this.plugin.lastSyncLogPath ?? undefined,
 				logUnavailable: this.unavailable,
 			};

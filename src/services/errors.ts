@@ -75,3 +75,18 @@ export function toUserMessage(err: unknown): string {
 	}
 	return appErr.message || "An unexpected error occurred";
 }
+
+export const UPLOAD_PREPARATION_MESSAGES = {
+	upload_collection_failed: "Local notes or attachments could not be prepared. Check vault access before rebuilding the upload review.",
+	upload_review_failed: "Remote notes could not be verified for upload review. No uploads were sent.",
+	upload_linked_note_unavailable: "A linked Keep note is unavailable. Refresh the download before uploading it.",
+	upload_deletion_review_failed: "Folder membership could not be verified for upload review. No uploads were sent.",
+} as const;
+export type UploadPreparationCode = keyof typeof UPLOAD_PREPARATION_MESSAGES;
+
+/** Fixed diagnostics only; the cause is retained for status classification, never displayed. */
+export class UploadPreparationError extends AppError {
+	constructor(readonly code: UploadPreparationCode, cause?: unknown) {
+		super("unknown", UPLOAD_PREPARATION_MESSAGES[code], cause);
+	}
+}

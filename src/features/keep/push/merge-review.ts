@@ -1,6 +1,6 @@
 import type KeepSidianPlugin from "@app/main";
 import type { MergeAction, SyncPlanAction } from "@types";
-import { fetchNotes } from "@integrations/server/keepApi";
+import { fetchNotesWithPremiumFeatures } from "@integrations/server/keepApi";
 import { logSync } from "@app/logging";
 import { extractFrontmatter, getFrontmatterStringValue, normalizeNote } from "../domain/note";
 import type { PreNormalizedNote } from "../domain/note";
@@ -13,6 +13,7 @@ import { equivalentPath, withPathLock } from "@services/portable-path";
 import { wrapMarkdown } from "../frontmatter";
 import { ensureParentFolderForFile, normalizePathSafe } from "@services/paths";
 import { retryDownload } from "../download-retry";
+import { UploadPreparationError } from "@services/errors";
 import { assertPendingAttachmentsUnchanged, type NoteForPush } from "./collectNotes";
 import type { SyncCallbacks } from "../sync";
 
@@ -62,7 +63,11 @@ async function fetchRemoteIndex(plugin: KeepSidianPlugin): Promise<Map<string, P
 	for (let page = 0; page < 1000; page += 1) {
 		checkCancelled(plugin);
 		const response = await retryDownload(
-			() => fetchNotes(plugin.settings.email, plugin.settings.token, offset, 100, undefined, cursor),
+			() => fetchNotesWithPremiumFeatures(
+				plugin.settings.email, plugin.settings.token,
+				{ keep_state_filter: { archived: "all" } }, offset, 100, undefined, cursor,
+				plugin.settings.supporterKeyConfigured ? (plugin.settings.supporterKey ?? "") : undefined
+			),
 			{ checkCancelled: () => checkCancelled(plugin), onRetry: async () => {} }
 		);
 		if (!response || !Array.isArray(response.notes)) throw new Error("Unable to read Keep notes for upload review.");
@@ -91,7 +96,7 @@ export async function reviewPushNotes(plugin: KeepSidianPlugin, notes: ReviewedP
 	const remoteIndex = notes.some((note) => localKey(note)) ? await fetchRemoteIndex(plugin) : new Map<string, PreNormalizedNote>();
 	return Promise.all(notes.map(async (note) => {
 		const key = localKey(note), remote = key ? remoteIndex.get(key) : undefined;
-		if (key && !remote) throw new Error("A linked Keep note is unavailable. Refresh the download before uploading it.");
+		if (key && !remote) throw new UploadPreparationError("upload_linked_note_unavailable");
 		const remoteBody = remote ? stripManagedImageEmbeds(normalizeNote(remote).textWithoutFrontmatter) : "";
 		const localBody = stripManagedImageEmbeds(note.body);
 		// Local write time is never a remote baseline. Unknown baselines merge
