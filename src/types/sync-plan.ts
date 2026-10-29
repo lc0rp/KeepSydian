@@ -59,4 +59,7 @@ export interface SyncPlan {
 	actionableCount: number;
 	/** Applies to this reviewed run only; an omitted value preserves the safe default. */
 	mergeAction?: MergeAction;
+	blockedUploads?: number;
+	/** Set only by the explicit eligible-upload action for this reviewed plan. */
+	skipBlockedUploadsConfirmed?: boolean;
 }

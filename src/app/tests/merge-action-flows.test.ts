@@ -9,6 +9,7 @@ jest.mock("@features/keep/sync", () => ({
 }));
 jest.mock("@features/keep/push", () => ({ buildPushSyncPlan: jest.fn(), pushGoogleKeepNotes: jest.fn() }));
 
+import { registerDeletionLedger, type LocalDeletionLedger } from "@features/keep/local-deletions/ledger";
 import type KeepSidianPlugin from "@app/main";
 import type { SyncAttempt } from "@app/sync-attempt";
 import type { SyncCallbacks } from "@features/keep/sync";
@@ -132,3 +133,52 @@ it("keeps download-only skipped conflicts eligible for a future download", async
 	expect(persistLastSuccessfulSyncDate).not.toHaveBeenCalled();
 	expect(f.onSuccess).not.toHaveBeenCalled();
  });
+
+
+it("refuses a blocked upload plan without explicit consent and preserves the checkpoint", async () => {
+    const f = setup();
+    f.prepared.stage = "upload";
+    f.prepared.plan.stage = "upload";
+    f.prepared.plan.blockedUploads = 1;
+    const result = await runPreparedSyncPlan(f.plugin, f.prepared, String, f.onSuccess);
+    expect(result.failed).toBe(true);
+    expect(pushGoogleKeepNotes).not.toHaveBeenCalled();
+    expect(f.onSuccess).not.toHaveBeenCalled();
+});
+
+it("shows an all-blocked second stage rather than completing the two-way run", async () => {
+    const f = setup();
+    (buildPushSyncPlan as jest.Mock).mockResolvedValue({ plan: { ...f.prepared.plan, stage: "upload", blockedUploads: 1, actionableCount: 0, selectedCount: 0, entries: [] }, notesToPush: [] });
+    const result = await runPreparedSyncPlan(f.plugin, f.prepared, String, f.onSuccess);
+    expect(result.nextPlan?.stage).toBe("upload");
+    expect(result.nextPlan?.plan.blockedUploads).toBe(1);
+    expect(f.onSuccess).not.toHaveBeenCalled();
+    expect(pushGoogleKeepNotes).not.toHaveBeenCalled();
+});
+
+it("holds the successful-sync checkpoint after an explicitly accepted partial upload", async () => {
+    const f = setup();
+    const result = await runPreparedSyncPlan(f.plugin, f.prepared, String, f.onSuccess);
+    const upload = result.nextPlan!;
+    upload.plan.blockedUploads = 1;
+    upload.plan.skipBlockedUploadsConfirmed = true;
+    const completed = await runPreparedSyncPlan(f.plugin, upload, String, f.onSuccess);
+    expect(completed.failed).not.toBe(true);
+    expect(pushGoogleKeepNotes).toHaveBeenCalled();
+    expect(f.onSuccess).not.toHaveBeenCalled();
+});
+
+it("discards uncommitted deletion receipts and holds the checkpoint on an accepted partial upload", async () => {
+	const f = setup();
+	const ledger = { beginReceipts: jest.fn(), finishReceipts: jest.fn(), discardReceipts: jest.fn() };
+	registerDeletionLedger(f.plugin, ledger as unknown as LocalDeletionLedger);
+	f.prepared.mode = "push";
+	f.prepared.stage = "upload";
+	f.prepared.plan.entries = [];
+	f.prepared.plan.blockedUploads = 1;
+	f.prepared.plan.skipBlockedUploadsConfirmed = true;
+	await runPreparedSyncPlan(f.plugin, f.prepared, String, f.onSuccess);
+	expect(ledger.discardReceipts).toHaveBeenCalledWith(f.attempt.id);
+	expect(ledger.finishReceipts).not.toHaveBeenCalled();
+	expect(persistLastSuccessfulSyncDate).not.toHaveBeenCalled();
+});

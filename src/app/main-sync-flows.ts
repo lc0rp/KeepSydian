@@ -4,7 +4,7 @@ import type KeepSidianPlugin from "./main";
 import type { NoteImportOptions } from "@ui/modals/NoteImportOptionsModal";
 import type { KeepArchivedStatus } from "../types/subscription";
 import type { PreNormalizedNote } from "@features/keep/domain/note";
-import type { NoteForPush } from "@features/keep/push/collectNotes";
+import type { ReviewedPushNote } from "@features/keep/push/merge-review";
 import { HIDDEN_CLASS } from "@app/ui-constants";
 import { isSyncCancellationError } from "@app/sync-cancel";
 import { startSyncUI, finishSyncUI, setTotalNotes as uiSetTotalNotes, reportSyncProgress } from "@app/sync-ui";
@@ -52,7 +52,7 @@ export interface PreparedSyncPlan {
 	protectedLocalKeepUrls?: string[];
 	archivedStatus?: KeepArchivedStatus;
 	completionDate?: string;
-	pushNotes?: NoteForPush[];
+	pushNotes?: ReviewedPushNote[];
 	attachmentWarnings?: number;
 	/** Originals preserved by the download phase must never be uploaded by this attempt. */
 	unresolvedConflictPaths?: string[];
@@ -295,13 +295,27 @@ function getSelectedImportNotes(preparedPlan: PreparedSyncPlan): PreNormalizedNo
 	});
 }
 
-function getSelectedPushNotes(preparedPlan: PreparedSyncPlan): NoteForPush[] {
+function getSelectedPushNotes(preparedPlan: PreparedSyncPlan): ReviewedPushNote[] {
 	const plan = excludeDeletionUploads(preparedPlan.plan, preparedPlan.deletions);
-	const selectedEntryIds = new Set(plan.entries.filter((entry) => entry.selectable && entry.selected).map((entry) => entry.id));
-	const protectedPaths = new Set(preparedPlan.unresolvedConflictPaths ?? []);
-	return (preparedPlan.pushNotes ?? []).filter((note, index) =>
-		!protectedPaths.has(normalizePathSafe(note.fullPath)) && selectedEntryIds.has(`upload:${index}:${normalizePathSafe(note.fullPath)}`)
-	);
+	const protectedPaths = new Set((preparedPlan.unresolvedConflictPaths ?? []).map(normalizePathSafe));
+	const selectedEntries = plan.entries.filter((entry) => entry.action !== "delete" && entry.selectable && entry.selected && !protectedPaths.has(normalizePathSafe(entry.path)));
+	const candidates = new Map<string, ReviewedPushNote[]>();
+	for (const [index, note] of (preparedPlan.pushNotes ?? []).entries()) {
+		const id = note.planEntryId ?? `upload:${index}:${normalizePathSafe(note.fullPath)}`;
+		const matches = candidates.get(id) ?? [];
+		matches.push(note);
+		candidates.set(id, matches);
+	}
+	const selected = new Set<string>();
+	return selectedEntries.map((entry) => {
+		const matches = candidates.get(entry.id) ?? [];
+		if (selected.has(entry.id) || matches.length !== 1 || matches[0].blockedReason ||
+			normalizePathSafe(matches[0].fullPath) !== normalizePathSafe(entry.path)) {
+			throw new Error("An upload selection no longer matches its reviewed note. Refresh the review before uploading.");
+		}
+		selected.add(entry.id);
+		return matches[0];
+	});
 }
 
 /** Run both prepared and legacy work through the same terminal-outcome owner. */
@@ -355,7 +369,7 @@ export async function runPreparedSyncPlan(
 	const mergeAction = normalizeMergeAction(preparedPlan.plan.mergeAction);
 	const unresolvedPaths = new Set(preparedPlan.unresolvedConflictPaths ?? []);
 	const forceUploadPaths = new Set(preparedPlan.forceUploadPaths ?? []);
-	let attachmentWarnings = preparedPlan.attachmentWarnings ?? 0;
+	let attachmentWarnings = (preparedPlan.attachmentWarnings ?? 0) + (preparedPlan.plan.blockedUploads ?? 0);
 	const callbacks = {
 		archivedStatus: preparedPlan.archivedStatus ?? "active-only",
 		attempt,
@@ -379,6 +393,7 @@ export async function runPreparedSyncPlan(
 		onEnrichmentWarning: () => { attachmentWarnings += 1; },
 	};
 	return executeAttempt(plugin, attempt, async () => {
+		if (preparedPlan.plan.blockedUploads && !preparedPlan.plan.skipBlockedUploadsConfirmed) throw new Error("Choose whether to upload eligible notes or cancel the upload.");
 		await assertPreparedDeletionContext(plugin, preparedPlan);
 		await attempt.transition(preparedPlan.stage === "import" ? "execution" : "upload");
 		if (preparedPlan.stage === "import") {
@@ -404,7 +419,7 @@ export async function runPreparedSyncPlan(
 				});
 				const uploadPlan = excludeDeletionUploads(built.plan, preparedPlan.deletions);
 				// Conflict-only deletion plans still need a visible review stage.
-				if (uploadPlan.actionableCount > 0 || (built.localDeletions?.entries.length ?? 0) > 0) {
+				if ((uploadPlan.blockedUploads ?? 0) > 0 || uploadPlan.actionableCount > 0 || (built.localDeletions?.entries.length ?? 0) > 0) {
 					resetProgressIndicatorsForNextStage(plugin);
 					await attempt.transition("review");
 					return { nextPlan: {
@@ -440,11 +455,11 @@ export async function runPreparedSyncPlan(
 		return {};
 	}, () => attachmentWarnings, async () => {
 		await assertPreparedDeletionContext(plugin, preparedPlan);
-		const blocked = unresolvedPaths.size > 0 || preparedPlan.localDeletions?.hasBlockingConflicts ||
+		const blocked = (preparedPlan.plan.blockedUploads ?? 0) > 0 || unresolvedPaths.size > 0 || preparedPlan.localDeletions?.hasBlockingConflicts ||
 			(preparedPlan.mode === "import" && (preparedPlan.protectedLocalKeepUrls?.length ?? 0) > 0);
 		if (blocked) {
 			getDeletionLedger(plugin)?.discardReceipts(attempt.id);
-			new Notice("Conflicts or unverified folder removals were preserved. The last successful sync checkpoint has not advanced.");
+			new Notice((preparedPlan.plan.blockedUploads ? "Blocked notes were kept unchanged. " : "Conflicts or unverified folder removals were preserved. ") + "The last successful sync checkpoint has not advanced.");
 			return;
 		}
 		if (!await finishDeletionReceipts(plugin, attempt)) return;

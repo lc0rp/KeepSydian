@@ -10,6 +10,7 @@ import { LocalEnrichmentResponseSchema, type EnrichmentSource } from "@schemas/k
 export interface GoogleKeepImportResponse {
 	notes: Array<PreNormalizedNote>;
 	total_notes?: number;
+	upload_review_scope?: string;
 	next_cursor?: string;
 }
 
@@ -195,7 +196,8 @@ export async function fetchNotesWithPremiumFeatures(
 	filters?: SyncFilters,
 	cursor?: string,
 	supporterKey?: string,
-	operationId?: string
+	operationId?: string,
+	uploadReview = false
 ): Promise<GoogleKeepImportResponse> {
 	const query = buildSyncQuery(offset, limit, filters, cursor);
 	const url = `${KEEPSIDIAN_SERVER_URL}/keep/sync/premium/v2?${query}`;
@@ -203,6 +205,7 @@ export async function fetchNotesWithPremiumFeatures(
 		{
 			...recoveryUatHeaders(cursor),
 			...(operationId ? { "X-Sync-Operation": operationId } : {}),
+			...(uploadReview ? { "X-Keep-Upload-Review": "1" } : {}),
 			"Content-Type": "application/json",
 			"X-User-Email": email,
 			Authorization: `Bearer ${token}`,

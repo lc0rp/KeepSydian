@@ -1003,6 +1003,75 @@ describe("SyncProgressModal", () => {
 		expect(modal.contentEl.textContent).toContain("Upload complete");
 	});
 
+    test.each([true, false])("blocked upload review requires explicit consent, eligible=%s", async eligible => {
+        const entries = [createSyncPlanEntryFixture("skipped-conflict", "Blocked: Keep note not found", { stage: "upload", selectable: false, selected: false })];
+        if (eligible) entries.push(createSyncPlanEntryFixture("upload", "Upload", { id: "eligible", stage: "upload" }));
+        const plan = createPreparedSyncPlanFixture("push", "upload", entries);
+        plan.plan.blockedUploads = 1;
+        modalOptions.buildSyncPlan.mockResolvedValueOnce(plan);
+        const modal = new SyncProgressModal(app, modalOptions); modal.onOpen(); modal.setSelectedMode("push");
+        getButton(modal, "Start sync").click(); await flushUI();
+        expect(modal.contentEl.textContent).toContain("canceling does not roll them back");
+        expect(modal.contentEl.textContent).toContain("1 note cannot");
+        expect(modal.contentEl.textContent).not.toContain("1 notes");
+        expect(getButton(modal, "Blocked 1")).toBeTruthy();
+        if (!eligible) expect(modal.contentEl.textContent).toContain("No eligible notes are available");
+        expect(modalOptions.runSyncPlan).not.toHaveBeenCalled();
+        const go = getButton(modal, "Sync selected eligible notes; skip blocked");
+        expect(go.disabled).toBe(!eligible);
+        if (eligible) { go.click(); await flushUI(); expect(modalOptions.runSyncPlan.mock.calls[0][0].plan.skipBlockedUploadsConfirmed).toBe(true); }
+        else { getButton(modal, "Cancel upload").click(); await flushUI(); expect(modalOptions.runSyncPlan).not.toHaveBeenCalled(); }
+    });
+    test("mixed locked uploads remain eligible and untitled execution keeps filename", async () => {
+        const plan = createPreparedSyncPlanFixture("push", "upload", [
+            createSyncPlanEntryFixture("skipped-conflict", "Blocked: Keep note not found", {id:"blocked",stage:"upload",selectable:false,selected:false}),
+            createSyncPlanEntryFixture("upload", "Upload", {id:"eligible",title:"",path:"Keep/Untitled.md",stage:"upload",selectionLocked:true})
+        ]);
+        plan.plan.blockedUploads=1;
+        modalOptions.buildSyncPlan.mockResolvedValueOnce(plan);
+        const modal=new SyncProgressModal(app,modalOptions); modal.onOpen(); modal.setSelectedMode("push");
+        getButton(modal,"Start sync").click(); await flushUI();
+        expect(modal.contentEl.textContent).not.toContain("No eligible notes");
+        expect(getRowTitles(modal)).toContain("Untitled.md");
+        getButton(modal,"Blocked 1").click(); await flushUI();
+        expect(getRowTitles(modal)).toHaveLength(1);
+        getButton(modal,"Notes 2").click(); await flushUI();
+        modalOptions.runSyncPlan.mockImplementationOnce(async (_plan, callbacks) => {
+            callbacks.onEntrySettled("eligible",true,"upload");
+            expect(getRowTitles(modal)).toContain("Untitled.md");
+            return {};
+        });
+        getButton(modal,"Sync selected eligible notes; skip blocked").click(); await flushUI();
+        expect(modal.contentEl.textContent).toContain("Blocked: kept unchanged");
+        const blocked = modal.contentEl.querySelector(".is-group-blocked");
+        expect(blocked?.querySelector(".keepsidian-sync-plan-row-status")?.textContent).toBe("–");
+    });
+
+    test("canceling a mixed upload review sends no uploads", async () => {
+        const plan = createPreparedSyncPlanFixture("push", "upload", [createSyncPlanEntryFixture("upload", "Upload", {stage: "upload"})]);
+        plan.plan.blockedUploads = 1;
+        modalOptions.buildSyncPlan.mockResolvedValueOnce(plan);
+        const modal = new SyncProgressModal(app, modalOptions); modal.onOpen(); modal.setSelectedMode("push");
+        getButton(modal, "Start sync").click(); await flushUI();
+        getButton(modal, "Cancel upload").click(); await flushUI();
+        expect(modalOptions.runSyncPlan).not.toHaveBeenCalled();
+        expect(plan.plan.skipBlockedUploadsConfirmed).not.toBe(true);
+    });
+
+    test("refresh retains unchecked uploads and clears partial-upload consent", async () => {
+        const original = createPreparedSyncPlanFixture("push", "upload", [createSyncPlanEntryFixture("upload", "Upload", {id: "old-index", path: "Keep/A.md", stage: "upload", selected: false})]);
+        original.plan.blockedUploads = 1;
+        const refreshed = createPreparedSyncPlanFixture("push", "upload", [createSyncPlanEntryFixture("upload", "Upload", {id: "new-index", path: "Keep/A.md", stage: "upload"})]);
+        refreshed.plan.blockedUploads = 1;
+        modalOptions.buildSyncPlan.mockResolvedValueOnce(original).mockResolvedValueOnce(refreshed);
+        const modal = new SyncProgressModal(app, modalOptions); modal.onOpen(); modal.setSelectedMode("push");
+        getButton(modal, "Start sync").click(); await flushUI();
+        original.plan.skipBlockedUploadsConfirmed = true;
+        getButton(modal, "Refresh").click(); await flushUI();
+        expect(getButton(modal, "Sync selected eligible notes; skip blocked").disabled).toBe(true);
+        expect(modalOptions.runSyncPlan).not.toHaveBeenCalled();
+    });
+
 	test("setup mode still shows live sync status for background sync monitoring", async () => {
 		const modal = new SyncProgressModal(app, modalOptions);
 		modal.onOpen();
