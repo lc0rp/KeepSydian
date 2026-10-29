@@ -1,11 +1,17 @@
 jest.mock("obsidian");
+jest.mock("@app/sync-ui", () => ({ startSyncUI: jest.fn(), finishSyncUI: jest.fn(), setTotalNotes: jest.fn(), reportSyncProgress: jest.fn() }));
 jest.mock("@integrations/server/keepApi", () => ({ fetchNotesWithPremiumFeatures: jest.fn(), pushNotes: jest.fn() }));
-jest.mock("@app/logging", () => ({ logSync: jest.fn().mockResolvedValue(undefined), flushLogSync: jest.fn().mockResolvedValue(undefined) }));
+jest.mock("@app/logging", () => ({ prepareSyncLog: jest.fn(async () => true), logSync: jest.fn().mockResolvedValue(undefined), flushLogSync: jest.fn().mockResolvedValue(undefined) }));
 
 import type KeepSidianPlugin from "@app/main";
 import { fetchNotesWithPremiumFeatures, pushNotes } from "@integrations/server/keepApi";
 import type { PushNotePayload } from "@integrations/server/keepApi";
 import { buildPushSyncPlan, pushGoogleKeepNotes } from "../push";
+import { runPreparedSyncPlan } from "@app/main-sync-flows";
+import { excludeDeletionUploads } from "../deletion-upload-exclusions";
+import type { PreparedDeletions } from "../deletions";
+import { NetworkError } from "@services/errors";
+import type { SyncAttempt } from "@app/sync-attempt";
 import type { MergeAction } from "@types";
 
 function fixture(body = "shared\nlocal edit", remoteBody = "shared\nremote edit") {
@@ -29,7 +35,7 @@ function fixture(body = "shared\nlocal edit", remoteBody = "shared\nremote edit"
 		app: { vault: { adapter, createFolder: jest.fn(async () => {}) } },
 		throwIfSyncCancelled: jest.fn(),
 	} as unknown as KeepSidianPlugin;
-	(fetchNotesWithPremiumFeatures as jest.Mock).mockImplementation(async () => ({ notes: [remote] }));
+	(fetchNotesWithPremiumFeatures as jest.Mock).mockImplementation(async () => ({ notes: [remote], total_notes: 1, upload_review_scope: "all-nontrashed" }));
 	(pushNotes as jest.Mock).mockImplementation(async (_email: string, _token: string, notes: PushNotePayload[]) => ({ results: notes.map((note) => ({ path: note.path, success: true })) }));
 	const build = () => buildPushSyncPlan(plugin, true, undefined, { reviewMerges: true });
 	return { plugin, files, content, remote, adapter, build };
@@ -43,12 +49,12 @@ describe("reviewed upload merge actions", () => {
 		f.plugin.settings.supporterKeyConfigured = true;
 		f.plugin.settings.supporterKey = "synthetic-supporter";
 		(fetchNotesWithPremiumFeatures as jest.Mock)
-			.mockResolvedValueOnce({ notes: [{ id: "other", text: "active" }], next_cursor: "page-two" })
-			.mockResolvedValueOnce({ notes: [{ ...f.remote, archived: true }] });
+			.mockResolvedValueOnce({ notes: [{ id: "other", text: "active" }], next_cursor: "page-two", total_notes: 2, upload_review_scope: "all-nontrashed" })
+			.mockResolvedValueOnce({ notes: [{ ...f.remote, archived: true }], total_notes: 2, upload_review_scope: "all-nontrashed" });
 		const built = await f.build();
 		expect(built.notesToPush).toHaveLength(1);
-		expect(fetchNotesWithPremiumFeatures).toHaveBeenNthCalledWith(1, "test@example.com", "test-token", { keep_state_filter: { archived: "all" } }, 0, 100, undefined, undefined, "synthetic-supporter");
-		expect(fetchNotesWithPremiumFeatures).toHaveBeenNthCalledWith(2, "test@example.com", "test-token", { keep_state_filter: { archived: "all" } }, 0, 100, undefined, "page-two", "synthetic-supporter");
+		expect(fetchNotesWithPremiumFeatures).toHaveBeenNthCalledWith(1, "test@example.com", "test-token", { keep_state_filter: { archived: "all" } }, 0, 100, undefined, undefined, "synthetic-supporter", undefined, true);
+		expect(fetchNotesWithPremiumFeatures).toHaveBeenNthCalledWith(2, "test@example.com", "test-token", { keep_state_filter: { archived: "all" } }, 0, 100, undefined, "page-two", "synthetic-supporter", undefined, true);
 		expect(f.adapter.write).not.toHaveBeenCalled();
 		expect(pushNotes).not.toHaveBeenCalled();
 	});
@@ -61,6 +67,63 @@ describe("reviewed upload merge actions", () => {
 		expect(f.adapter.write).not.toHaveBeenCalled();
 		expect(pushNotes).not.toHaveBeenCalled();
 	});
+
+    it("offers eligible notes alongside blocked links only for a complete verified index", async () => {
+        const f = fixture();
+        f.files.set("Keep/missing.md", f.content.replace("#NOTE/one", "#NOTE/missing"));
+        (fetchNotesWithPremiumFeatures as jest.Mock).mockResolvedValue({ notes: [f.remote], total_notes: 1, upload_review_scope: "all-nontrashed" });
+        const built = await f.build();
+        expect(built.notesToPush).toHaveLength(1);
+        expect(built.plan.blockedUploads).toBe(1);
+        expect(built.plan.entries.find(e => e.path === "Keep/missing.md")).toMatchObject({ selectable: false, selected: false });
+        expect(f.adapter.write).not.toHaveBeenCalled();
+        expect(pushNotes).not.toHaveBeenCalled();
+    });
+    it("keeps an all-blocked plan visible without actionable uploads", async () => {
+        const f = fixture();
+        f.plugin.settings.frontmatterPascalCaseFixApplied = false;
+        (fetchNotesWithPremiumFeatures as jest.Mock).mockResolvedValue({ notes: [], total_notes: 0, upload_review_scope: "all-nontrashed" });
+        const built = await f.build();
+        expect(built.plan).toMatchObject({ blockedUploads: 1, actionableCount: 0 });
+        expect(built.notesToPush).toEqual([]);
+        expect(f.adapter.write).not.toHaveBeenCalled();
+    });
+    it.each([
+        { notes: [], total_notes: 0 },
+        { notes: [], total_notes: 1, upload_review_scope: "all-nontrashed" },
+    ])("fails the entire plan when scope or completeness is unverified", async response => {
+        const f = fixture();
+        (fetchNotesWithPremiumFeatures as jest.Mock).mockResolvedValue(response);
+        await expect(f.build()).rejects.toMatchObject({ code: response.upload_review_scope ? "upload_review_failed" : "upload_review_scope_unconfirmed" });
+        expect(f.adapter.write).not.toHaveBeenCalled();
+        expect(pushNotes).not.toHaveBeenCalled();
+    });
+
+    it("uploads eligible notes without touching a blocked local note", async () => {
+        const f = fixture("shared", "shared");
+        const blocked = f.content.replace("#NOTE/one", "#NOTE/missing");
+        f.files.set("Keep/missing.md", blocked);
+        (fetchNotesWithPremiumFeatures as jest.Mock).mockResolvedValue({ notes: [f.remote], total_notes: 1, upload_review_scope: "all-nontrashed" });
+        const built = await f.build();
+        await pushGoogleKeepNotes(f.plugin, { mergeAction: "overwrite-all" }, built.notesToPush);
+        expect(f.files.get("Keep/missing.md")).toBe(blocked);
+        expect(pushNotes).toHaveBeenCalledTimes(1);
+        expect((pushNotes as jest.Mock).mock.calls[0][2]).toHaveLength(1);
+    });
+    it("rejects an unconfirmed index even when the linked note is present", async () => {
+        const f = fixture();
+        (fetchNotesWithPremiumFeatures as jest.Mock).mockResolvedValue({ notes: [f.remote], total_notes: 1 });
+        await expect(f.build()).rejects.toMatchObject({ code: "upload_review_scope_unconfirmed" });
+        expect(f.adapter.write).not.toHaveBeenCalled();
+    });
+    it("revalidates scope before writing eligible notes", async () => {
+        const f = fixture();
+        const built = await f.build();
+        (fetchNotesWithPremiumFeatures as jest.Mock).mockResolvedValue({ notes: [f.remote], total_notes: 1 });
+        await expect(pushGoogleKeepNotes(f.plugin, { mergeAction: "overwrite-all" }, built.notesToPush)).rejects.toMatchObject({ code: "upload_review_scope_unconfirmed" });
+        expect(f.adapter.write).not.toHaveBeenCalled();
+        expect(pushNotes).not.toHaveBeenCalled();
+    });
 
 	it.each<MergeAction>(["merge-save-conflicts", "merge-skip-conflicts", "merge-overwrite-conflicts", "overwrite-all"])("applies %s to an actual conflicting upload", async (action) => {
 		const f = fixture();
@@ -143,7 +206,7 @@ describe("reviewed upload merge actions", () => {
 	it("fails safely when a linked remote note cannot be found", async () => {
 		const f = fixture();
 		(fetchNotesWithPremiumFeatures as jest.Mock).mockResolvedValue({ notes: [] });
-		await expect(f.build()).rejects.toThrow(/linked Keep note is unavailable/);
+		await expect(f.build()).rejects.toMatchObject({ code: "upload_review_scope_unconfirmed" });
 		expect(pushNotes).not.toHaveBeenCalled();
 	});
 
@@ -185,4 +248,76 @@ describe("reviewed upload merge actions", () => {
 		const payload = (pushNotes as jest.Mock).mock.calls[0][2] as PushNotePayload[];
 		expect(payload[0].content).toContain("old line");
 	});
+});
+
+
+describe("reviewed plan execution preserves selection identity", () => {
+	it.each([true, false])("uploads the selected eligible note with blocked-first=%s", async (blockedFirst) => {
+		const f = fixture("shared", "shared");
+		f.files.clear();
+		const blocked = f.content.replace("#NOTE/one", "#NOTE/missing");
+		if (blockedFirst) f.files.set("Keep/blocked.md", blocked);
+		f.files.set("Keep/eligible.md", f.content);
+		f.files.set("Keep/unchecked.md", f.content);
+		if (!blockedFirst) f.files.set("Keep/blocked.md", blocked);
+		const built = await f.build();
+		for (const entry of built.plan.entries) if (entry.path === "Keep/unchecked.md") entry.selected = false;
+		built.plan.skipBlockedUploadsConfirmed = true;
+		built.plan.mergeAction = "overwrite-all";
+		const attempt = { id: "identity-regression", mode: "push", start: jest.fn(), transition: jest.fn(), finish: jest.fn(), fail: jest.fn() } as unknown as SyncAttempt;
+		const settled = jest.fn();
+		const result = await runPreparedSyncPlan(f.plugin, { mode: "push", stage: "upload", plan: built.plan, pushNotes: built.notesToPush, attempt }, String, jest.fn(), { onEntrySettled: settled });
+		expect(result.failed).not.toBe(true);
+		expect(pushNotes).toHaveBeenCalledTimes(1);
+		expect((pushNotes as jest.Mock).mock.calls[0][2].map((n: PushNotePayload) => n.path)).toEqual(["eligible.md"]);
+		const selected = built.plan.entries.find(e => e.path === "Keep/eligible.md")!;
+		expect(settled).toHaveBeenCalledWith(selected.id, true, expect.anything());
+		expect(f.files.get("Keep/blocked.md")).toBe(blocked);
+		expect(f.files.get("Keep/unchecked.md")).toBe(f.content);
+	});
+});
+
+it("explains denied archive entitlement without permitting partial uploads", async () => {
+	const f = fixture();
+	const error = new NetworkError("denied", 403);
+	error.code = "sync_upload_review_requires_supporter";
+	(fetchNotesWithPremiumFeatures as jest.Mock).mockRejectedValue(error);
+	await expect(f.build()).rejects.toMatchObject({ code: "upload_review_requires_supporter" });
+	expect(pushNotes).not.toHaveBeenCalled();
+	expect(f.adapter.write).not.toHaveBeenCalled();
+});
+
+it.each(["missing", "duplicate", "wrong-path"])("rejects a %s selected candidate before writes", async kind => {
+	const f = fixture("shared", "shared");
+	const built = await f.build();
+	if (kind === "missing") built.notesToPush = [];
+	if (kind === "duplicate") built.notesToPush.push(built.notesToPush[0]);
+	if (kind === "wrong-path") built.notesToPush[0].fullPath = "Keep/unreviewed.md";
+	const attempt = { id: "mismatch", mode: "push", start: jest.fn(), transition: jest.fn(), finish: jest.fn(), fail: jest.fn() } as unknown as SyncAttempt;
+	const result = await runPreparedSyncPlan(f.plugin, { mode: "push", stage: "upload", plan: built.plan, pushNotes: built.notesToPush, attempt }, String, jest.fn());
+	expect(result.failed).toBe(true);
+	expect(pushNotes).not.toHaveBeenCalled();
+	expect(f.adapter.write).not.toHaveBeenCalled();
+});
+
+it.each(["googleKeepUrl", "google-keep-url"])("sends the reviewed identity for legacy %s without preparation writes", async alias => {
+	const f = fixture("shared", "shared");
+	f.files.set("Keep/note.md", f.content.replace("GoogleKeepUrl", alias));
+	const built = await f.build();
+	expect(f.adapter.write).not.toHaveBeenCalled();
+	await pushGoogleKeepNotes(f.plugin, { mergeAction: "overwrite-all" }, built.notesToPush);
+	const payload = (pushNotes as jest.Mock).mock.calls[0][2][0];
+	expect(payload.content).toContain("GoogleKeepUrl: https://keep.google.com/#NOTE/one");
+	expect(f.files.get("Keep/note.md")!.match(/^(?:googlekeepurl|google-keep-url):/gim)).toEqual(["GoogleKeepUrl:"]);
+	expect((await f.build()).notesToPush).toHaveLength(0);
+});
+
+it("retains blocked consent metadata when deletion exclusions remove an eligible candidate", async () => {
+	const f = fixture();
+	f.files.set("Keep/blocked.md", f.content.replace("#NOTE/one", "#NOTE/missing"));
+	const built = await f.build();
+	const filtered = excludeDeletionUploads(built.plan, { candidates: [{ path: "Keep/note.md", file: { path: "Keep/note.md" } }] } as PreparedDeletions);
+	expect(filtered.blockedUploads).toBe(1);
+	expect(filtered.skipBlockedUploadsConfirmed).not.toBe(true);
+	expect(filtered.entries.every(e => !e.selected)).toBe(true);
 });

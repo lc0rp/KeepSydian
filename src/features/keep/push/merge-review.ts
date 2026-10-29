@@ -13,7 +13,8 @@ import { equivalentPath, withPathLock } from "@services/portable-path";
 import { wrapMarkdown } from "../frontmatter";
 import { ensureParentFolderForFile, normalizePathSafe } from "@services/paths";
 import { retryDownload } from "../download-retry";
-import { UploadPreparationError } from "@services/errors";
+import { readKeepNoteIdentity } from "../domain/noteLookup";
+import { NetworkError, UploadPreparationError } from "@services/errors";
 import { assertPendingAttachmentsUnchanged, type NoteForPush } from "./collectNotes";
 import type { SyncCallbacks } from "../sync";
 
@@ -27,6 +28,7 @@ export interface ReviewedPushNote extends NoteForPush {
 		needsMerge: boolean;
 	};
 	outcome?: SyncPlanAction;
+	blockedReason?: string;
 }
 
 export interface PushPlanOptions {
@@ -39,7 +41,7 @@ function checkCancelled(plugin: KeepSidianPlugin): void { plugin.throwIfSyncCanc
 
 function localKey(note: NoteForPush): string | undefined {
 	const [, , frontmatter] = extractFrontmatter(note.content);
-	const url = getFrontmatterStringValue(frontmatter, FRONTMATTER_GOOGLE_KEEP_URL_KEY);
+	const url = readKeepNoteIdentity(frontmatter);
 	const key = keepKey(url);
 	if (url && !key) throw new Error("A local note has an invalid Keep link. Refresh its download before uploading.");
 	return key;
@@ -55,8 +57,13 @@ function signature(note: PreNormalizedNote): string {
 	return JSON.stringify([note.remote_revision, note.id, note.title, note.text, note.updated, note.blob_names, note.archived, note.trashed, note.tags, note.color, note.pinned]);
 }
 
-async function fetchRemoteIndex(plugin: KeepSidianPlugin): Promise<Map<string, PreNormalizedNote>> {
-	const index = new Map<string, PreNormalizedNote>();
+interface RemoteIndex extends Map<string, PreNormalizedNote> { scopeConfirmed?: boolean }
+
+async function fetchRemoteIndex(plugin: KeepSidianPlugin): Promise<RemoteIndex> {
+	const index: RemoteIndex = new Map();
+	let scopeConfirmed = true;
+	let expectedTotal: number | undefined;
+	let received = 0;
 	const cursors = new Set<string>();
 	let cursor: string | undefined;
 	let offset = 0;
@@ -66,11 +73,22 @@ async function fetchRemoteIndex(plugin: KeepSidianPlugin): Promise<Map<string, P
 			() => fetchNotesWithPremiumFeatures(
 				plugin.settings.email, plugin.settings.token,
 				{ keep_state_filter: { archived: "all" } }, offset, 100, undefined, cursor,
-				plugin.settings.supporterKeyConfigured ? (plugin.settings.supporterKey ?? "") : undefined
-			),
+				plugin.settings.supporterKeyConfigured ? (plugin.settings.supporterKey ?? "") : undefined, undefined, true
+			).catch((error: unknown) => {
+				if (error instanceof NetworkError && error.code === "sync_upload_review_requires_supporter") throw new UploadPreparationError("upload_review_requires_supporter", error);
+				throw error;
+			}),
 			{ checkCancelled: () => checkCancelled(plugin), onRetry: async () => {} }
 		);
 		if (!response || !Array.isArray(response.notes)) throw new Error("Unable to read Keep notes for upload review.");
+		if (response.upload_review_scope !== "all-nontrashed") throw new UploadPreparationError("upload_review_scope_unconfirmed");
+		if (response.total_notes === undefined) throw new UploadPreparationError("upload_review_failed");
+		scopeConfirmed &&= response.upload_review_scope === "all-nontrashed";
+		if (response.total_notes !== undefined) {
+			if (expectedTotal !== undefined && expectedTotal !== response.total_notes) throw new Error("Upload review total changed.");
+			expectedTotal = response.total_notes;
+		}
+		received += response.notes.length;
 		for (const note of response.notes) {
 			const key = remoteKey(note);
 			if (!key) continue;
@@ -84,6 +102,8 @@ async function fetchRemoteIndex(plugin: KeepSidianPlugin): Promise<Map<string, P
 			cursors.add(response.next_cursor);
 			cursor = response.next_cursor;
 		} else if (cursor || response.notes.length < 100) {
+			if (expectedTotal !== undefined && (received !== expectedTotal || index.size !== expectedTotal)) throw new Error("Upload review is incomplete.");
+			index.scopeConfirmed = scopeConfirmed && expectedTotal !== undefined;
 			return index;
 		} else {
 			offset += 100;
@@ -93,10 +113,13 @@ async function fetchRemoteIndex(plugin: KeepSidianPlugin): Promise<Map<string, P
 }
 
 export async function reviewPushNotes(plugin: KeepSidianPlugin, notes: ReviewedPushNote[]): Promise<ReviewedPushNote[]> {
-	const remoteIndex = notes.some((note) => localKey(note)) ? await fetchRemoteIndex(plugin) : new Map<string, PreNormalizedNote>();
+	const remoteIndex: RemoteIndex = notes.some((note) => localKey(note)) ? await fetchRemoteIndex(plugin) : new Map<string, PreNormalizedNote>();
 	return Promise.all(notes.map(async (note) => {
 		const key = localKey(note), remote = key ? remoteIndex.get(key) : undefined;
-		if (key && !remote) throw new UploadPreparationError("upload_linked_note_unavailable");
+		if (key && !remote) {
+			if (!remoteIndex.scopeConfirmed) throw new UploadPreparationError("upload_review_failed");
+			return { ...note, blockedReason: "The linked Keep note ID was not found in this account’s active or archived notes. It may be trashed, deleted, or no longer shared. This local note will be kept unchanged." };
+		}
 		const remoteBody = remote ? stripManagedImageEmbeds(normalizeNote(remote).textWithoutFrontmatter) : "";
 		const localBody = stripManagedImageEmbeds(note.body);
 		// Local write time is never a remote baseline. Unknown baselines merge
@@ -143,9 +166,10 @@ export async function prepareReviewedUploads(
 	action: MergeAction,
 	callbacks?: SyncCallbacks
 ): Promise<ReviewedPushNote[]> {
-	const remoteIndex = notes.some((note) => note.mergeReview?.remoteKey) ? await fetchRemoteIndex(plugin) : new Map<string, PreNormalizedNote>();
+	const remoteIndex: RemoteIndex = notes.some((note) => note.mergeReview?.remoteKey) ? await fetchRemoteIndex(plugin) : new Map<string, PreNormalizedNote>();
 	for (const note of notes) {
 		checkCancelled(plugin);
+		if (note.blockedReason) throw new Error("Blocked notes require manual review; no uploads were sent.");
 		const review = note.mergeReview;
 		if (!review || (await plugin.app.vault.adapter.read(note.fullPath)) !== review.sourceContent) throw new Error("A local note changed after review. Refresh the upload plan.");
 		await assertPendingAttachmentsUnchanged(plugin, note);
