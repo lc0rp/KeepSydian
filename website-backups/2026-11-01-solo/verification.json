@@ -1,0 +1,18 @@
+{
+  "archive_date_utc": "2026-11-01",
+  "asset_files": 37,
+  "local_resource_references_checked": 66,
+  "missing_dependencies": [],
+  "external_loaded_asset_references": 0,
+  "scripts_in_offline_html": 0,
+  "contact_fields_and_buttons_disabled": true,
+  "source_serialized_account_data_removed": true,
+  "credential_pattern_scan": "passed (targeted patterns; not a comprehensive guarantee)",
+  "original_zip_integrity_and_all_checksums": "passed",
+  "offline_browser_visual_check": "Not performed; prior capture browser could not reach workspace localhost and file URLs were disallowed. Static dependency checks passed.",
+  "limitations": [
+    "Historical landing page, not current KeepSydian documentation.",
+    "No private submissions, unpublished content or authenticated account export.",
+    "Outbound links require internet; no service backend reproduced."
+  ]
+}
