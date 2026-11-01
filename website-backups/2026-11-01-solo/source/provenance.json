@@ -1,0 +1,8 @@
+{
+  "public_page_url": "https://soloist.ai/keeptoobsidian",
+  "capture_date_utc": "2026-11-01",
+  "retrieval_method": "Unauthenticated public HTML and referenced assets",
+  "raw_public_response_sha256": "e12e8a71391a72d70b386ce9c8f01667dfb1af1e34b8f46b5b823f118b0b2ebe",
+  "source_sanitization": "All scripts, including serialized Next.js account/settings data, removed. Raw HTML, page-data, response headers and runtime bundles excluded from GitHub archive.",
+  "original_capture_zip_sha256": "6aa9f2b7209a58f528c9fa0fe8ceed80a315c2024ec9b7562e6af0ee0d7274e0"
+}

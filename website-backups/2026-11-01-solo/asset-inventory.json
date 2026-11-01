@@ -1,0 +1,261 @@
+[
+  {
+    "url": "https://cdn.soloist.ai/525e2c63-e639-4d08-90a5-53c6746875b1/a6f66a93-c46f-484c-8c75-32c894f4c976_2048x2048.webp",
+    "file": "assets/3e2789f1e759eae0.webp",
+    "bytes": 14932,
+    "sha256": "e2b171d7e54f15745e34ce84b31f78d4f3021f836148c171cfc04b3c13b6d356",
+    "retrieved_utc": "2026-11-01T15:57:34.492901+00:00"
+  },
+  {
+    "url": "https://images.unsplash.com/photo-1601046668433-65d0c898c8a8?crop=entropy&cs=srgb&fm=jpg&ixid=M3w0OTUyODh8MHwxfHNlYXJjaHwyMHx8cGx1Z2lufGVufDB8MHx8fDE3MjAzNjAwNjZ8MA&ixlib=rb-4.0.3&q=85&w=1400&q=80&auto=format&fit=clip",
+    "file": "assets/60d9e5c44152d264.bin",
+    "bytes": 360364,
+    "sha256": "aa151920e525c9c28d014959b12ba7127f94072a2cd0cb3badf2e69b6de2c4cb",
+    "retrieved_utc": "2026-11-01T15:57:37.890201+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/css/0d7a1f5df5c775d4.css",
+    "file": "assets/721701c74052b9c2.css",
+    "bytes": 241789,
+    "sha256": "fdc647647827ed56d27af685d432ebb9ec2dd2b630455318c2abf48302648e34",
+    "retrieved_utc": "2026-11-01T15:58:00.773787+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/css/6111871830c35f98.css",
+    "file": "assets/34021feafb6d725d.css",
+    "bytes": 3476,
+    "sha256": "7ad1c92457bd1588d19fca84aabe6383a4f492451718d22cbb6350d1062703b8",
+    "retrieved_utc": "2026-11-01T15:58:00.600598+00:00"
+  },
+  {
+    "url": "https://soloist.ai/favicon/favicon.ico",
+    "file": "assets/e0461dc03d8abc3c.ico",
+    "bytes": 34494,
+    "sha256": "0a49f96ed0993c4276d831877055ab6f2515d6aeb83db6b4410a44f81eab0519",
+    "retrieved_utc": "2026-11-01T15:58:00.526250+00:00"
+  },
+  {
+    "url": "https://soloist.ai/img/alert.svg",
+    "file": "assets/4c4d836dc82c178e.svg",
+    "bytes": 813,
+    "sha256": "0c5aff57b83842a9fb4f0adf269dfea459d257eca32fc853cb80ba6d2d5d3bba",
+    "retrieved_utc": "2026-11-01T15:58:05.597052+00:00"
+  },
+  {
+    "url": "https://soloist.ai/img/small-spinner--violet.gif",
+    "file": "assets/9a04099721b55cdb.gif",
+    "bytes": 44105,
+    "sha256": "fb76e939b6e770e8954daa1da71a4044cc44f4b95e0d08fa1e6a28f7210bc3aa",
+    "retrieved_utc": "2026-11-01T15:58:05.561199+00:00"
+  },
+  {
+    "url": "https://soloist.ai/img/small-spinner--white.gif",
+    "file": "assets/1dd00bcf8b04838c.gif",
+    "bytes": 34117,
+    "sha256": "d6e651851a14b2ee63fc971958abcc356c148c9acc9357617cfb0785daf9e944",
+    "retrieved_utc": "2026-11-01T15:58:05.489075+00:00"
+  },
+  {
+    "url": "https://soloist.ai/img/spinner-96-transparent-violet.png",
+    "file": "assets/891bbf67ecbed941.png",
+    "bytes": 86501,
+    "sha256": "f5f3692fa3c1dc5da77bdc34a1374c3123aabb3a757b1853b2452788e7f94f72",
+    "retrieved_utc": "2026-11-01T15:58:05.593779+00:00"
+  },
+  {
+    "url": "https://soloist.ai/img/spinner-96-transparent-white.png",
+    "file": "assets/6660847c9a6f7bcd.png",
+    "bytes": 72825,
+    "sha256": "1999d63492c9e8d7f95a27a705eef9df5fca29da44a11285f948d79f449f63b4",
+    "retrieved_utc": "2026-11-01T15:58:05.582390+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/0283accaa2a34227-s.ttf",
+    "file": "assets/4ad5edefbaae6db9.ttf",
+    "bytes": 347072,
+    "sha256": "8253c6dda5eb9f183cf51a6251aeeae76b0980305f9a01d6cd7e9296181efe9b",
+    "retrieved_utc": "2026-11-01T15:58:09.082025+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/05c56fed721ba6bc-s.ttf",
+    "file": "assets/6dea0f87ac7a6240.ttf",
+    "bytes": 347292,
+    "sha256": "70decc884a5641a35126dc6b7926235f888e7633691259e007ab45d01f09632c",
+    "retrieved_utc": "2026-11-01T15:58:08.929848+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/103798cd4010e613-s.ttf",
+    "file": "assets/4e908998ef38559d.ttf",
+    "bytes": 343180,
+    "sha256": "e5783a67fb77268810cd6a8474d802a0b0011409fd11dd50e218d94f19edadee",
+    "retrieved_utc": "2026-11-01T15:58:09.013853+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/221e59ba426dae06-s.ttf",
+    "file": "assets/5734ef253c8c055c.ttf",
+    "bytes": 348700,
+    "sha256": "952cccc4badf3d0ea5aed7e1b2434238692c196b91f94510ef8a2271a2547f13",
+    "retrieved_utc": "2026-11-01T15:58:09.029877+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/369515e5fe977ce9-s.ttf",
+    "file": "assets/4b9cdef387b158b2.ttf",
+    "bytes": 347836,
+    "sha256": "fb7122407e2001c32793a492d89f9ea6bca041a8dbb7c30e3f44877aa6d7b7c6",
+    "retrieved_utc": "2026-11-01T15:58:09.093093+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/39388b163ed3b633-s.ttf",
+    "file": "assets/cf47133179ca272a.ttf",
+    "bytes": 348732,
+    "sha256": "9b8d51a64c80772802bfe1581893f841f748e699f2701d1ff88805c14a148448",
+    "retrieved_utc": "2026-11-01T15:58:09.105130+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/45b6e56d22921cea-s.ttf",
+    "file": "assets/eb7b7d69acdc7b9a.ttf",
+    "bytes": 344900,
+    "sha256": "1b9fab96ffc7bca31a9d4cd4d660cce80b94695908ec7613afdece2b8cf803c2",
+    "retrieved_utc": "2026-11-01T15:58:12.557208+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/4a5631539d26a306-s.ttf",
+    "file": "assets/deb1fa7e4cb04991.ttf",
+    "bytes": 346892,
+    "sha256": "2a10723dcb34bd195277a92db8589c8c0b0404e76704687bf2037a6c04f10848",
+    "retrieved_utc": "2026-11-01T15:58:12.661312+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/576ead485976221c-s.woff2",
+    "file": "assets/2bd5f3e874ba42c2.woff2",
+    "bytes": 26564,
+    "sha256": "695870d15689c04f75955d6f5c3e3c03841d4351d44332f4049abb0f825dc6e3",
+    "retrieved_utc": "2026-11-01T15:58:12.273218+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/75853b84689e5941-s.ttf",
+    "file": "assets/d9e9ffa7750285b2.ttf",
+    "bytes": 344840,
+    "sha256": "1361749967ed6df22a31a2f320153a931b4154d7e3755d05fb98ed76bd35cb8c",
+    "retrieved_utc": "2026-11-01T15:58:12.637369+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/9104f5fdeb25d20e-s.ttf",
+    "file": "assets/d663a920b9ca03a7.ttf",
+    "bytes": 342616,
+    "sha256": "cde345d089309c65b881b96333a136c2bc882525d611cab39b0b49830efb173e",
+    "retrieved_utc": "2026-11-01T15:58:12.680929+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/98f3a02408ef7d67-s.ttf",
+    "file": "assets/e8472dd2c9a38308.ttf",
+    "bytes": 346824,
+    "sha256": "e9003a5eb6c4c57afdf46fcad086f578f7579e66d7e864ff6b39b2107b7e26d7",
+    "retrieved_utc": "2026-11-01T15:58:12.708926+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/9f86e32e29de7c53-s.ttf",
+    "file": "assets/d9b1248943088b26.ttf",
+    "bytes": 342892,
+    "sha256": "f1738576525e86db1d5cf63a6c1b56e0a7e2a2898b499ac93db95f2e7a9f9cd5",
+    "retrieved_utc": "2026-11-01T15:58:16.184785+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/a745ddc86d0c3d32-s.woff2",
+    "file": "assets/e8dc33c35f2292ec.woff2",
+    "bytes": 16496,
+    "sha256": "dc553c0e8cab2d9284cb3aa879838dddac723862ab3e2e829414256a0ebc87f4",
+    "retrieved_utc": "2026-11-01T15:58:16.005587+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/ad015d8e2c5af426-s.ttf",
+    "file": "assets/d750fec81a566572.ttf",
+    "bytes": 344068,
+    "sha256": "c1c6ba111e8d04d392b741d194ab548186ec3c006ed7cc134be0525402520339",
+    "retrieved_utc": "2026-11-01T15:58:16.441034+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/aeea4b71fe3a3562-s.ttf",
+    "file": "assets/b273feca32c5b1ad.ttf",
+    "bytes": 346444,
+    "sha256": "4da3a591da4809ef65d0ffc0085c50a859723c5574aa5608c1b7175d2dce33e1",
+    "retrieved_utc": "2026-11-01T15:58:16.384778+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/b05000075d590a76-s.ttf",
+    "file": "assets/84607046623f44a6.ttf",
+    "bytes": 343632,
+    "sha256": "f30e9d2574c3bec5144347ff965f9841c8f06857f0b7383000f8c9489a161841",
+    "retrieved_utc": "2026-11-01T15:58:16.208527+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/bd82e0c1746bd560-s.woff2",
+    "file": "assets/06a51a66e3939cd5.woff2",
+    "bytes": 16728,
+    "sha256": "b2dd63db47efae6ed399cac4ae15cc012a77a02e72cb3274b599531152032a3c",
+    "retrieved_utc": "2026-11-01T15:58:16.005989+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/bf5f4e8d527b8aeb-s.ttf",
+    "file": "assets/a20ea244c96e6652.ttf",
+    "bytes": 345956,
+    "sha256": "c8c09e4bd08de7b901b4561f16ce9bb1ab3ffa420cfaef9f2a40286e14300e75",
+    "retrieved_utc": "2026-11-01T15:58:19.842193+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/c69e15c0aa39be25-s.ttf",
+    "file": "assets/e8354c1422fb76f3.ttf",
+    "bytes": 343320,
+    "sha256": "b5d77067f596f8869f856ce593975c870af67421c8ed3854e88a861a47f3f422",
+    "retrieved_utc": "2026-11-01T15:58:19.733365+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/ddd6d944fd8cd3f0-s.woff2",
+    "file": "assets/ecf9f9d8bc922a84.woff2",
+    "bytes": 24152,
+    "sha256": "e920e6b0e7987aceb8df32656d01d44057e2c08646716202d594e06b5010ae70",
+    "retrieved_utc": "2026-11-01T15:58:19.421326+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/e7242cb1a0ca8401-s.ttf",
+    "file": "assets/680306e939bef72b.ttf",
+    "bytes": 342408,
+    "sha256": "a414b48aa577ef2c62ebb135341ddeef33ee26a4f5dc9f787f93c1aab08ebb50",
+    "retrieved_utc": "2026-11-01T15:58:19.637421+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/lg.955a4bcf.woff2",
+    "file": "assets/a989ee7e2d7b257d.woff2",
+    "bytes": 2332,
+    "sha256": "965a0e5f2e07c67826f284b3eb66d4e27865363a43bcdb1ad2b3c37af4bf1a30",
+    "retrieved_utc": "2026-11-01T15:58:19.466157+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/lg.a5ca0178.svg#lg",
+    "file": "assets/ba25b2371ec18f99.svg",
+    "bytes": 12834,
+    "sha256": "f2fe1c00ed9c7bec409ce50038191c71ee54f5cc4877936f5adcf8c6f2e5242d",
+    "retrieved_utc": "2026-11-01T15:58:19.513304+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/lg.c950f0b5.woff",
+    "file": "assets/cee7365eee7c3dc4.woff",
+    "bytes": 4832,
+    "sha256": "fefc5c0d765c26cc5a1779fe4aaab9e0dabb0c14eef068aaf1ad8804592099a1",
+    "retrieved_utc": "2026-11-01T15:58:24.284679+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/lg.dc565ab5.ttf",
+    "file": "assets/ad944a905dce6f84.ttf",
+    "bytes": 4756,
+    "sha256": "22b72ba50bae8c932c55d6fd5b1768dc7dbca856c27a3892c1df69ac4003687f",
+    "retrieved_utc": "2026-11-01T15:58:24.265812+00:00"
+  },
+  {
+    "url": "https://soloist.ai/_next/static/media/loading.49ca460c.gif",
+    "file": "assets/6b7b34534c6fd96e.gif",
+    "bytes": 4178,
+    "sha256": "298ad3ffc38de0d78a845bf1b70f0dd317a3836af385ae9fcf94ed457d9aa1da",
+    "retrieved_utc": "2026-11-01T15:58:24.153422+00:00"
+  }
+]
