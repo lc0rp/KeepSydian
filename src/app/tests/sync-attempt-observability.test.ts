@@ -5,7 +5,7 @@ import {
 	runPreparedSyncPlan,
 	runImportNotesFlow,
 } from "@app/main-sync-flows";
-import { NetworkError, ParseError } from "@services/errors";
+import { NetworkError, ParseError, UploadPreparationError } from "@services/errors";
 import { createMockPlugin } from "@test-utils/mocks/plugin";
 import { DEFAULT_SETTINGS } from "../../types/keepsidian-plugin-settings";
 import * as api from "@integrations/server/keepApi";
@@ -76,6 +76,21 @@ describe("persistent sync attempt preparation", () => {
 		plugin.saveSettings = jest.fn(async () => {
 			saved = JSON.parse(JSON.stringify(plugin.settings));
 		});
+	});
+
+	it("persists only fixed upload diagnostics and keeps the useful message after catch loses the exception", async () => {
+		const attempt = new SyncAttempt(plugin, "two-way");
+		await attempt.start();
+		await attempt.transition("upload-plan");
+		const error = new UploadPreparationError("upload_review_failed", new NetworkError("SECRET synthetic private note", 403));
+		await attempt.fail(error);
+		expect(plugin.settings.lastSyncAttempt).toMatchObject({ errorCode: "upload_review_failed", httpStatus: 403, phase: "upload-plan" });
+		expect(attempt.errorMessage(undefined)).toContain("Download changes already applied were kept");
+		expect(attempt.errorMessage(undefined)).toContain("upload_review_failed");
+		expect(logs()).toContain('"errorCode":"upload_review_failed"');
+		expect(logs()).not.toContain("SECRET");
+		expect(attempt.errorMessage(error)).not.toContain("SECRET");
+		expect(safeSyncError({ code: "upload_review_failed", message: "SECRET" })).not.toHaveProperty("errorCode");
 	});
 
 	const logs = () => [...files.values()].join("\n");

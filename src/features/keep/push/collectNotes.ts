@@ -125,11 +125,11 @@ function deriveNoteTitle(relativePath: string): string {
 	return fileName.replace(/\.md$/i, "");
 }
 
-export async function collectNotesToPush(plugin: KeepSidianPlugin, forcePaths: readonly string[] = []): Promise<CollectedNotesResult> {
+export async function collectNotesToPush(plugin: KeepSidianPlugin, forcePaths: readonly string[] = [], readOnly = false): Promise<CollectedNotesResult> {
 	const adapter = plugin.app.vault.adapter as VaultAdapter;
 	const saveLocation = plugin.settings.saveLocation;
 	const forced = new Set(forcePaths.map(normalizePathSafe));
-	await ensurePascalCaseFrontmatter(plugin);
+	if (!readOnly) await ensurePascalCaseFrontmatter(plugin);
 	const markdownFiles = await listMarkdownFilesRecursively(adapter, saveLocation);
 	const notesToPush: NoteForPush[] = [];
 	const skippedNotes: Array<{ path: string; reason: string }> = [];

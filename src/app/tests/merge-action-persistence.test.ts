@@ -100,7 +100,7 @@ function fixture(ids = ["A"]) {
 		}) as unknown as KeepSidianPlugin;
 	}
 	plugin = makePlugin();
-	const page = (offset: number) => ({ notes: offset === 0 ? JSON.parse(JSON.stringify([...remotes.values()])) as PreNormalizedNote[] : [] });
+	const page = (offset: number) => ({ total_notes: remotes.size, upload_review_scope: "all-nontrashed" as const, notes: offset === 0 ? JSON.parse(JSON.stringify([...remotes.values()])) as PreNormalizedNote[] : [] });
 	jest.spyOn(api, "fetchNotes").mockImplementation(async (_email, _token, offset = 0) => page(offset));
 	jest.spyOn(api, "fetchNotesWithPremiumFeatures").mockImplementation(async (_email, _token, _features, offset = 0) => page(offset));
 	jest.spyOn(api, "getReplayEpoch").mockResolvedValue(undefined);

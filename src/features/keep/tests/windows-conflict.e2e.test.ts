@@ -165,7 +165,7 @@ it("completes two-way conflict download and unrelated upload, then repeats witho
 		{ id: "upload", title: "upload", text: "common", updated: "2024-01-01T00:00:00Z" },
 	];
 	jest.spyOn(api, "getReplayEpoch").mockResolvedValue(undefined);
-	jest.spyOn(api, "fetchNotesWithPremiumFeatures").mockImplementation(async (_email, _token, _flags, offset = 0) => ({ notes: offset ? [] : remote, total_notes: remote.length }));
+	jest.spyOn(api, "fetchNotesWithPremiumFeatures").mockImplementation(async (_email, _token, _flags, offset = 0) => ({ upload_review_scope: "all-nontrashed" as const, notes: offset ? [] : remote, total_notes: remote.length }));
 	jest.spyOn(api, "fetchNotes").mockImplementation(async (_email, _token, offset = 0) => ({ notes: offset ? [] : remote, total_notes: remote.length }));
 	const push = jest.spyOn(api, "pushNotes").mockImplementation(async (_email, _token, notes) => ({ results: notes.map(note => {
 		const target = remote.find(item => item.title === note.title)!;

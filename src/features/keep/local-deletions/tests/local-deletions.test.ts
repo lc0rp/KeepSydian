@@ -32,7 +32,9 @@ afterEach(() => { fixture.cleanup(); jest.restoreAllMocks(); });
 async function absent(...ids: string[]) {
 	await fixture.download(...ids);
 	for (const id of ids) fixture.remove(`Keep/${id}.md`);
-	return buildLocalDeletionPlan(fixture.plugin);
+	const plan = await buildLocalDeletionPlan(fixture.plugin);
+	expect(plan.entries.filter(entry => entry.selectable).every(entry => entry.action === "delete")).toBe(true);
+	return plan;
 }
 
 it("persists only completed account/folder receipts, without bodies or credentials", async () => {

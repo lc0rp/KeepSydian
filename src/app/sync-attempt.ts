@@ -1,5 +1,6 @@
 import { t } from "../lang/ui";
 import { Notice } from "obsidian";
+import { UploadPreparationError, UPLOAD_PREPARATION_MESSAGES, type UploadPreparationCode } from "@services/errors";
 import type KeepSidianPlugin from "@app/main";
 import type { DownloadScope, SyncMode } from "@types";
 import type { LastSyncAttempt, SyncAttemptOutcome, SyncAttemptPhase } from "../types/sync-attempt";
@@ -31,12 +32,13 @@ function newAttemptId(): string {
 }
 
 /** Classify only allowlisted primitives. Do not stringify messages, stacks, causes or response bodies. */
-export function safeSyncError(error: unknown): { errorKind: string; httpStatus?: number } {
-	const result: { errorKind: string; httpStatus?: number } = { errorKind: "unknown" };
+export function safeSyncError(error: unknown): { errorKind: string; httpStatus?: number; errorCode?: UploadPreparationCode } {
+	const result: { errorKind: string; httpStatus?: number; errorCode?: UploadPreparationCode } = { errorKind: "unknown" };
 	const visited = new Set<unknown>();
 	for (let depth = 0; depth < 5 && error && typeof error === "object" && !visited.has(error); depth += 1) {
 		visited.add(error);
 		try {
+			if (error instanceof UploadPreparationError && Object.prototype.hasOwnProperty.call(UPLOAD_PREPARATION_MESSAGES, error.code)) result.errorCode ??= error.code;
 			const candidate = error as { status?: unknown; kind?: unknown; cause?: unknown };
 			if (
 				typeof candidate.status === "number" &&
@@ -109,6 +111,7 @@ export class SyncAttempt {
 	private cutoff?: string;
 	private features: Record<string, boolean> = {};
 	private status?: number;
+	private errorCode?: UploadPreparationCode;
 	private resumedFrom?: string;
 	setResumedFrom(id?: string): void {
 		this.resumedFrom = id;
@@ -193,6 +196,7 @@ export class SyncAttempt {
 		if (this.finalization) return this.finalization;
 		this.terminal = outcome;
 		this.status = safeSyncError(error).httpStatus;
+		this.errorCode = safeSyncError(error).errorCode;
 		this.finalization = this.record("outcome", true, error);
 		return this.finalization;
 	}
@@ -205,8 +209,12 @@ export class SyncAttempt {
 		const classified = safeSyncError(error);
 		const httpStatus = classified.httpStatus ?? this.status;
 		const errorKind = classified.errorKind;
-		return t("attempt.error", {
-			reason: httpStatus ? `HTTP ${httpStatus}.` : errorKind === "parse" ? t("errors.parse") : t("sync.error.generic"),
+		const reason = httpStatus ? `HTTP ${httpStatus}.` : errorKind === "parse" ? t("errors.parse") : t("sync.error.generic");
+		const code = classified.errorCode ?? this.errorCode;
+		const detail = code ? `${UPLOAD_PREPARATION_MESSAGES[code]} (${code})` : reason;
+		const partial = this.mode === "two-way" && this.currentPhase === "upload-plan" ? "Upload preparation failed. Download changes already applied were kept. " : "";
+		return partial + t("attempt.error", {
+			reason: detail,
 			id: this.id,
 			help: this.unavailable ? t("attempt.logUnavailable") : t("sync.openLog"),
 		});
@@ -276,6 +284,7 @@ export class SyncAttempt {
 				fetchedCount,
 				elapsedMs,
 				httpStatus: this.status,
+				errorCode: this.errorCode,
 				logPath: this.plugin.lastSyncLogPath ?? undefined,
 				logUnavailable: this.unavailable,
 			};
