@@ -1,5 +1,7 @@
 import { requestUrl, type RequestUrlParam, type RequestUrlResponse } from "obsidian";
-import { NetworkError, ParseError } from "@services/errors";
+import { NetworkError, ParseError, AccessV1RequestError } from "@services/errors";
+import { usesAccessBoundary, requestAccessBackend } from "@integrations/google/accessV1Backend";
+import { requireAccessTransport } from "@integrations/google/accessV1Transport";
 
 export interface HttpOptions {
 	headers?: Record<string, string>;
@@ -78,6 +80,16 @@ async function parseJsonDefensively<T>(response: ResponseLike): Promise<T> {
 
 export async function httpRequest<T = unknown>(url: string, options: HttpRequestOptions = {}): Promise<T> {
 	const { method = "GET", headers = {}, body } = options;
+	if (usesAccessBoundary(url, headers)) {
+		requireAccessTransport();
+		try {
+			const response = await requestAccessBackend(url, method, headers, body);
+			return (response.text ? JSON.parse(response.text) : undefined) as T;
+		} catch (error) {
+			if (error instanceof AccessV1RequestError) throw error;
+			throw new AccessV1RequestError();
+		}
+	}
 	const hasSupporterKey = Object.keys(headers).some((name) => name.toLowerCase() === "x-supporter-key");
 	const reqInit: RequestUrlParam = {
 		url,
@@ -165,11 +177,22 @@ export async function httpPostJson<TRes = unknown, TReq = unknown>(
 // Returns the raw response without status checking. Useful for endpoints that
 // intentionally use 3xx or non-JSON payloads that the caller will handle.
 export async function httpGetRaw(url: string, headers?: Record<string, string>): Promise<RequestUrlResponse> {
+	if (usesAccessBoundary(url, headers)) {
+		requireAccessTransport();
+		const response = await requestAccessBackend(url, "GET", headers ?? {});
+		const arrayBuffer = new Uint8Array(response.bytes).buffer;
+		return { status: response.status, headers: {}, arrayBuffer, text: response.text, json: undefined };
+	}
 	return requestUrl({ url, method: "GET", headers });
 }
 
 // Fetch a binary payload as an ArrayBuffer with status checking.
 export async function httpGetArrayBuffer(url: string, headers?: Record<string, string>): Promise<ArrayBuffer> {
+	if (usesAccessBoundary(url, headers)) {
+		requireAccessTransport();
+		const response = await requestAccessBackend(url, "GET", headers ?? {});
+		return new Uint8Array(response.bytes).buffer;
+	}
 	const response = await requestUrl({ url, method: "GET", headers });
 	const responseLike = asResponseLike(response);
 	const statusRaw = responseLike.status;
