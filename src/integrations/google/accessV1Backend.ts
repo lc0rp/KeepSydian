@@ -4,7 +4,7 @@ import { ACCESS_V1_ENABLED, getAccessCredential } from "./accessV1Auth";
 import { accessBackendRequest, requireAccessTransport, type AccessWireResponse } from "./accessV1Transport";
 
 const supported =
-	/^\/keep\/(?:sync\/(?:v2|premium\/v2|capabilities)|push|enrich\/local\/(?:v1|capabilities)|deletions\/v1|trash\/(?:preview\/)?v1|media\/[^/]+\/.+)$/;
+	/^\/keep\/(?:subscriber\/info|sync\/(?:v2|premium\/v2|capabilities)|push|enrich\/local\/(?:v1|capabilities)|deletions\/v1|trash\/(?:preview\/)?v1|media\/[^/]+\/.+)$/;
 let capability: Promise<void> | undefined;
 
 export async function requireAccessCapability(): Promise<void> {

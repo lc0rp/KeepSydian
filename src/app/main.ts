@@ -5,7 +5,11 @@ import { Notice, Plugin } from "obsidian";
 import type { ProgressBarComponent } from "obsidian";
 import type { KeepSidianPluginSettings, LastSyncSummary, SyncMode } from "../types/keepsidian-plugin-settings";
 import { resolveLoadedSettings } from "../types/keepsidian-plugin-settings";
-import { SubscriptionService } from "@services/subscription";
+import {
+	SubscriptionService,
+	verifiedEmailSubscriptionIdentity,
+	isFreshSubscriptionCache,
+} from "@services/subscription";
 import type { NoteImportOptions } from "@ui/modals/NoteImportOptionsModal";
 import { SyncProgressModal } from "@ui/modals/SyncProgressModal";
 import { FeedbackSurveyModal } from "@ui/modals/FeedbackSurveyModal";
@@ -91,7 +95,7 @@ export default class KeepSidianPlugin extends Plugin {
 				: undefined;
 		}
 		const email = this.settings.email.trim();
-		return email ? `email:${email}` : undefined;
+		return verifiedEmailSubscriptionIdentity(email, this.settings.token);
 	}
 
 	async onload() {
@@ -116,7 +120,8 @@ export default class KeepSidianPlugin extends Plugin {
 			async () => {
 				this.invalidateSubscriptionIdentity();
 				await this.saveSettings();
-			}
+			},
+			() => this.settings.token
 		);
 
 		registerRibbonAndCommands(this);
@@ -173,10 +178,17 @@ export default class KeepSidianPlugin extends Plugin {
 		const driveSettingsChanged = hydrateDriveSecretsFromSecretStorage(this);
 		const supporterKeySettingsChanged = hydrateSupporterKeyFromSecretStorage(this);
 		const sensitiveSettingsChanged = syncTokenSettingsChanged || driveSettingsChanged || supporterKeySettingsChanged;
+		const subscriptionCacheChanged = Boolean(
+			this.settings.subscriptionCache &&
+			!isFreshSubscriptionCache(this.settings.subscriptionCache, this.getCurrentSubscriptionIdentity())
+		);
+		if (subscriptionCacheChanged) {
+			this.settings.subscriptionCache = undefined;
+		}
 		this.normalizeTwoWaySettings();
 		this.lastSyncSummary = this.settings.lastSyncSummary ?? null;
 		this.lastSyncLogPath = this.settings.lastSyncLogPath ?? null;
-		if (sensitiveSettingsChanged) {
+		if (sensitiveSettingsChanged || subscriptionCacheChanged) {
 			await this.saveData(this.buildPersistedData());
 		}
 	}
@@ -195,17 +207,16 @@ export default class KeepSidianPlugin extends Plugin {
 	}
 
 	private getCachedSubscriptionActive(): boolean | null {
-		const cachedInfo = this.settings.subscriptionCache?.info ?? null;
+		const cache = this.settings.subscriptionCache;
+		if (!isFreshSubscriptionCache(cache, this.getCurrentSubscriptionIdentity())) return null;
+		const cachedInfo = cache?.info ?? null;
 		if (!cachedInfo) {
 			return null;
 		}
 		return cachedInfo.subscription_status === "active";
 	}
 
-	private computeTwoWayGate(
-		options: TwoWayGateOptions = {},
-		subscriptionOverride: boolean | null = null
-	): TwoWayGateResult {
+	private computeTwoWayGate(options: TwoWayGateOptions = {}, subscriptionOverride?: boolean | null): TwoWayGateResult {
 		const reasons: string[] = [];
 		const requirePremium = options.requirePremium ?? false;
 		const requireAutoSync = options.requireAutoSync ?? false;
@@ -221,9 +232,15 @@ export default class KeepSidianPlugin extends Plugin {
 			reasons.push("Please enable two-way sync in settings first.");
 		}
 
-		const subscriptionActive = subscriptionOverride ?? this.subscriptionActive ?? this.getCachedSubscriptionActive();
-		if (requirePremium && subscriptionActive === false) {
-			reasons.push("To enable uploads & two-way sync, please consider becoming a KeepSidian supporter.");
+		// A bare in-memory boolean has no account or freshness binding.
+		const subscriptionActive =
+			subscriptionOverride !== undefined ? subscriptionOverride : this.getCachedSubscriptionActive();
+		if (requirePremium && subscriptionActive !== true) {
+			reasons.push(
+				subscriptionActive === false
+					? "To enable uploads & two-way sync, please consider becoming a KeepSidian supporter."
+					: "Verify your subscription or enter a supporter key before using uploads & two-way sync."
+			);
 		}
 
 		if (requireAutoSync) {
@@ -248,6 +265,28 @@ export default class KeepSidianPlugin extends Plugin {
 
 	async requireTwoWaySafeguards(options?: TwoWayGateOptions): Promise<TwoWayGateResult> {
 		this.normalizeTwoWaySettings();
+		if (options?.requirePremium === true) {
+			const identity = this.getCurrentSubscriptionIdentity();
+			const credential = this.settings.supporterKeyConfigured ? this.settings.supporterKey : this.settings.token;
+			let verifiedActive: boolean | null = null;
+			try {
+				const info = await this.subscriptionService.checkSubscription();
+				const currentCredential = this.settings.supporterKeyConfigured
+					? this.settings.supporterKey
+					: this.settings.token;
+				if (
+					identity &&
+					identity === this.getCurrentSubscriptionIdentity() &&
+					credential === currentCredential &&
+					info
+				) {
+					verifiedActive = info.subscription_status === "active";
+				}
+			} catch {
+				// Unavailable verification is not an inactive subscription or stale authorization.
+			}
+			return this.computeTwoWayGate(options, verifiedActive);
+		}
 		const requirePremium = options?.requirePremium ?? true;
 		let subscriptionActive: boolean | null = this.subscriptionActive;
 		try {

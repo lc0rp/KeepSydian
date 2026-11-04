@@ -332,3 +332,58 @@ it("404 capability blocks registration without Google or legacy fallback", async
 	expect(transport.googleAuthRequest).not.toHaveBeenCalled();
 	expect(native.requestUrl).not.toHaveBeenCalled();
 });
+
+it("routes subscription lookup through the authenticated access boundary without a master header", async () => {
+	await http.httpGetJson("https://backend.example.invalid/keep/subscriber/info?refresh=true", headers());
+	expect(transport.accessBackendRequest).toHaveBeenLastCalledWith(
+		"https://backend.example.invalid/keep/access-v1/subscriber/info?refresh=true",
+		"GET",
+		{ Authorization: `Bearer ${ACCESS}`, "X-User-Email": EMAIL, "X-Keep-Auth-Protocol": "access-v1" },
+		""
+	);
+	expect(native.requestUrl).not.toHaveBeenCalled();
+});
+
+it("sends actual subscription-service email lookup through verified access and never legacy transport", async () => {
+	const { SubscriptionService } = require("@services/subscription") as typeof import("@services/subscription");
+	const save = jest.fn();
+	const service = new SubscriptionService(
+		() => EMAIL,
+		() => undefined,
+		save,
+		() => null,
+		() => undefined,
+		async () => undefined,
+		() => MASTER
+	);
+	await service.checkSubscription(true);
+	expect(transport.googleAuthRequest).toHaveBeenCalledTimes(1);
+	expect(transport.accessBackendRequest).toHaveBeenLastCalledWith(
+		"https://backend.example.invalid/keep/access-v1/subscriber/info?refresh=true",
+		"GET",
+		{ Authorization: `Bearer ${ACCESS}`, "X-User-Email": EMAIL, "X-Keep-Auth-Protocol": "access-v1" },
+		""
+	);
+	expect(native.requestUrl).not.toHaveBeenCalled();
+	expect(JSON.stringify(save.mock.calls)).not.toContain(MASTER);
+});
+it("disabled access never falls back to an email-only or master-token subscription lookup", async () => {
+	process.env.KEEPSIDIAN_ACCESS_V1 = "false";
+	jest.resetModules();
+	const { SubscriptionService } = require("@services/subscription") as typeof import("@services/subscription");
+	const legacy = require("obsidian") as typeof native;
+	const currentTransport = require("../accessV1Transport") as typeof transport;
+	const service = new SubscriptionService(
+		() => EMAIL,
+		() => undefined,
+		jest.fn(),
+		() => null,
+		() => undefined,
+		async () => undefined,
+		() => MASTER
+	);
+	expect(await service.checkSubscription()).toBeNull();
+	expect(legacy.requestUrl).not.toHaveBeenCalled();
+	expect(currentTransport.googleAuthRequest).not.toHaveBeenCalled();
+	expect(currentTransport.accessBackendRequest).not.toHaveBeenCalled();
+});
