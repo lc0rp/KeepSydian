@@ -49,6 +49,7 @@ export const PreNormalizedNoteSchema = z.object({
 
 // Response schema for the Keep import endpoints
 export const GoogleKeepImportResponseSchema = z.object({
+	upload_review_scope: z.string().optional(),
 	notes: z.array(PreNormalizedNoteSchema),
 	total_notes: z.number().optional(),
 	next_cursor: z.string().optional(),

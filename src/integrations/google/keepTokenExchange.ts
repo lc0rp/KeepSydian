@@ -4,6 +4,9 @@ import type { KeepSidianSettingsTab } from "ui/settings/KeepSidianSettingsTab";
 import { KEEPSIDIAN_SERVER_URL } from "../../config";
 import { httpPostJson } from "../../services/http";
 import { logRetrievalWizardEvent } from "./retrievalSessionLogger";
+import { ACCESS_V1_ENABLED, exchangeBrowserLocally } from "./accessV1Auth";
+import { requireAccessCapability } from "./accessV1Backend";
+import { requireAccessTransport } from "./accessV1Transport";
 
 function logErrorIfNotTest(...args: unknown[]) {
 	try {
@@ -63,6 +66,21 @@ export async function exchangeOauthToken(
 	plugin: KeepSidianPlugin,
 	oauthToken: string
 ) {
+	if (ACCESS_V1_ENABLED) {
+		requireAccessTransport();
+		try {
+			await requireAccessCapability();
+			const master = await exchangeBrowserLocally(plugin.settings.email, oauthToken);
+			plugin.settings.token = master;
+			await plugin.saveSettings();
+			settingsTab.display();
+			new Notice("Token exchanged locally.");
+			return;
+		} catch {
+			// Never enter the legacy logger, /register, or its raw exception handling.
+			throw new Error("Local registration failed. No legacy server registration was attempted.");
+		}
+	}
 	try {
 		const trimmedToken = oauthToken.trim();
 		if (!trimmedToken.startsWith("oauth2_4")) {

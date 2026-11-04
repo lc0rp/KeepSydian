@@ -156,6 +156,7 @@ function deriveFileName(url: URL, index: number, blobNames?: string[]): string |
 
 function isRetryableAttachmentFetchError(error: unknown): boolean {
 	if (error instanceof NetworkError) {
+		if (error.retryAllowed === false) return false;
 		if (typeof error.status === "number") {
 			return ATTACHMENT_FETCH_RETRYABLE_STATUSES.has(error.status);
 		}
