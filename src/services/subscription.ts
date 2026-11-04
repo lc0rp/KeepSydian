@@ -3,8 +3,21 @@ import { Notice } from "obsidian";
 import { KEEPSIDIAN_SERVER_URL } from "../config";
 import { httpGetJson } from "./http";
 import { NetworkError } from "./errors";
+import { ACCESS_V1_ENABLED } from "@integrations/google/accessV1Auth";
 
 const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+
+/** Versioned identity excludes caches populated by the former unverified email lookup. */
+export function verifiedEmailSubscriptionIdentity(email: string, token: string): string | undefined {
+	return ACCESS_V1_ENABLED && email && token ? `verified-email-v1:${email}` : undefined;
+}
+
+export function isFreshSubscriptionCache(cache: SubscriptionCache | undefined, identity: string | undefined): boolean {
+	const age = cache ? Date.now() - cache.timestamp : NaN;
+	return Boolean(
+		cache && identity && cache.identity === identity && Number.isFinite(age) && age >= 0 && age < CACHE_DURATION
+	);
+}
 
 export class SubscriptionService {
 	constructor(
@@ -13,13 +26,15 @@ export class SubscriptionService {
 		private setCache: (cache: SubscriptionCache) => Promise<void>,
 		private getSupporterKey: () => string | null = () => null,
 		private getSupporterKeyIdentity: () => string | undefined = () => undefined,
-		private clearCache: () => Promise<void> = async () => undefined
+		private clearCache: () => Promise<void> = async () => undefined,
+		private getToken: () => string = () => ""
 	) {}
 
 	async checkSubscription(forceRefresh = false): Promise<SubscriptionInfo | null> {
 		const email = this.getEmail().trim();
 		const supporterKey = this.getSupporterKey();
 		const usesSupporterKey = supporterKey !== null;
+		const token = usesSupporterKey ? "" : this.getToken();
 		if (!usesSupporterKey && !email) {
 			return null;
 		}
@@ -30,32 +45,31 @@ export class SubscriptionService {
 		}
 
 		const identity = this.buildIdentity(email, usesSupporterKey);
+		if (!usesSupporterKey && !identity) {
+			if (this.getCache()) await this.clearCache();
+			return null;
+		}
 
 		const cache = this.getCache();
-		if (
-			!forceRefresh &&
-			cache &&
-			this.cacheMatchesIdentity(cache, identity, email, usesSupporterKey) &&
-			Date.now() - cache.timestamp < CACHE_DURATION
-		) {
-			return cache.info;
+		if (!forceRefresh && isFreshSubscriptionCache(cache, identity)) {
+			return cache!.info;
 		}
 
 		try {
-			const info = await this.fetchSubscriptionInfo(email, supporterKey, forceRefresh);
-			if (!this.isCurrentIdentity(email, supporterKey, identity)) {
+			const info = await this.fetchSubscriptionInfo(email, supporterKey, forceRefresh, token);
+			if (!this.isCurrentIdentity(email, supporterKey, identity, token)) {
 				return null;
 			}
 			await this.cacheInfo(info, identity, email, usesSupporterKey);
-			if (!this.isCurrentIdentity(email, supporterKey, identity)) {
+			if (!this.isCurrentIdentity(email, supporterKey, identity, token)) {
 				return null;
 			}
 			return info;
 		} catch (error) {
-			if (!this.isCurrentIdentity(email, supporterKey, identity)) {
+			if (!this.isCurrentIdentity(email, supporterKey, identity, token)) {
 				return null;
 			}
-			if (usesSupporterKey && error instanceof NetworkError && error.status === 403) {
+			if (!usesSupporterKey || (error instanceof NetworkError && error.status === 403)) {
 				await this.clearCache();
 			}
 			this.reportSubscriptionError(error, usesSupporterKey);
@@ -72,6 +86,7 @@ export class SubscriptionService {
 		const supporterKey = this.getSupporterKey();
 		const usesSupporterKey = supporterKey !== null;
 		const identity = this.buildIdentity(email, usesSupporterKey);
+		if (!usesSupporterKey) return; // Only key validation primes status outside an authenticated request.
 		await this.cacheInfo(info, identity, email, usesSupporterKey);
 	}
 
@@ -80,31 +95,22 @@ export class SubscriptionService {
 			const keyIdentity = this.getSupporterKeyIdentity();
 			return keyIdentity ? `supporter-key:${keyIdentity}` : undefined;
 		}
-		return email ? `email:${email}` : undefined;
+		return verifiedEmailSubscriptionIdentity(email, this.getToken());
 	}
 
-	private cacheMatchesIdentity(
-		cache: SubscriptionCache,
-		identity: string | undefined,
+	private isCurrentIdentity(
 		email: string,
-		usesSupporterKey: boolean
+		supporterKey: string | null,
+		identity: string | undefined,
+		token: string
 	): boolean {
-		if (!identity) {
-			return false;
-		}
-		if (cache.identity) {
-			return cache.identity === identity;
-		}
-		return !usesSupporterKey && cache.email === email;
-	}
-
-	private isCurrentIdentity(email: string, supporterKey: string | null, identity: string | undefined): boolean {
 		const currentEmail = this.getEmail().trim();
 		const currentSupporterKey = this.getSupporterKey();
 		const currentUsesSupporterKey = currentSupporterKey !== null;
 		return (
 			currentEmail === email &&
 			currentSupporterKey === supporterKey &&
+			(currentUsesSupporterKey || this.getToken() === token) &&
 			this.buildIdentity(currentEmail, currentUsesSupporterKey) === identity
 		);
 	}
@@ -129,12 +135,19 @@ export class SubscriptionService {
 	private async fetchSubscriptionInfo(
 		email: string,
 		supporterKey: string | null,
-		forceRefresh: boolean
+		forceRefresh: boolean,
+		token = ""
 	): Promise<SubscriptionInfo> {
 		const refreshQuery = forceRefresh ? "?refresh=true" : "";
-		const url = `${KEEPSIDIAN_SERVER_URL}/subscriber/info${refreshQuery}`;
+		if (supporterKey === null && !verifiedEmailSubscriptionIdentity(email, token)) {
+			throw new NetworkError("Verified subscription identity required", 401);
+		}
+		const path = supporterKey !== null ? "/subscriber/info" : "/keep/subscriber/info";
+		const url = `${KEEPSIDIAN_SERVER_URL}${path}${refreshQuery}`;
 		const headers: Record<string, string> =
-			supporterKey !== null ? { "X-Supporter-Key": supporterKey } : { "X-User-Email": email };
+			supporterKey !== null
+				? { "X-Supporter-Key": supporterKey }
+				: { "X-User-Email": email, Authorization: `Bearer ${token}` };
 		return await httpGetJson<SubscriptionInfo>(url, headers);
 	}
 
@@ -154,6 +167,12 @@ export class SubscriptionService {
 		}
 		if (usesSupporterKey && status === 503) {
 			new Notice("Supporter key checks are temporarily unavailable. Please try again later.");
+			return;
+		}
+		if (!usesSupporterKey && (status === 401 || status === 403 || status === 404)) {
+			new Notice(
+				"Your subscription could not be verified. Sign in to Google Keep, use a compatible server, or enter a supporter key."
+			);
 			return;
 		}
 		new Notice("Failed to check subscription status. Please try again later.");
