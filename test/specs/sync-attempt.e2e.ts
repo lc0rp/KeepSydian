@@ -1,3 +1,4 @@
+import { offlineBanner } from "../support/legacy-e2e.mjs";
 import { mkdir } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { build } from "esbuild";
@@ -48,6 +49,7 @@ describe("Sync attempt observability in installed Obsidian", function () {
 		if (!address || typeof address === "string") throw new Error("No loopback server address");
 		const bundle = await build({
 			entryPoints: ["src/main.ts"],
+			banner: { js: offlineBanner(`http://127.0.0.1:${address.port}`) },
 			bundle: true,
 			write: false,
 			platform: "node",
@@ -56,6 +58,7 @@ describe("Sync attempt observability in installed Obsidian", function () {
 			tsconfig: "tsconfig.json",
 			external: ["obsidian", "electron", "@codemirror/*", "@lezer/*"],
 			define: {
+				"process.env.KEEPSIDIAN_ACCESS_V1": JSON.stringify("false"),
 				"process.env.KEEPSIDIAN_SERVER_URL": JSON.stringify(`http://127.0.0.1:${address.port}`),
 			},
 		});

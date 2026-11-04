@@ -6,10 +6,12 @@ import { GoogleKeepImportResponseSchema, PremiumFeatureFlagsSchema } from "@sche
 import type { KeepArchivedStatus, KeepPinnedStatus } from "../../types/subscription";
 import { recoveryUatHeaders, recoveryUatResponse } from "@services/recovery-uat";
 import { LocalEnrichmentResponseSchema, type EnrichmentSource } from "@schemas/keep";
+import { ACCESS_V1_ENABLED } from "@integrations/google/accessV1Auth";
 
 export interface GoogleKeepImportResponse {
 	notes: Array<PreNormalizedNote>;
 	total_notes?: number;
+	upload_review_scope?: string;
 	next_cursor?: string;
 }
 
@@ -195,7 +197,8 @@ export async function fetchNotesWithPremiumFeatures(
 	filters?: SyncFilters,
 	cursor?: string,
 	supporterKey?: string,
-	operationId?: string
+	operationId?: string,
+	uploadReview = false
 ): Promise<GoogleKeepImportResponse> {
 	const query = buildSyncQuery(offset, limit, filters, cursor);
 	const url = `${KEEPSIDIAN_SERVER_URL}/keep/sync/premium/v2?${query}`;
@@ -203,6 +206,7 @@ export async function fetchNotesWithPremiumFeatures(
 		{
 			...recoveryUatHeaders(cursor),
 			...(operationId ? { "X-Sync-Operation": operationId } : {}),
+			...(uploadReview ? { "X-Keep-Upload-Review": "1" } : {}),
 			"Content-Type": "application/json",
 			"X-User-Email": email,
 			Authorization: `Bearer ${token}`,
@@ -227,7 +231,9 @@ export async function getReplayEpoch(email: string, token: string): Promise<stri
 			{ "X-User-Email": email, Authorization: `Bearer ${token}` }
 		);
 		return response.replay_version === 1 ? response.replay_epoch : undefined;
-	} catch {
+	} catch (error) {
+		// Enabled authentication failure cannot silently continue into another admission.
+		if (ACCESS_V1_ENABLED) throw error;
 		return undefined;
 	}
 }

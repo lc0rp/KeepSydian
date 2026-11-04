@@ -1,6 +1,6 @@
 {
 	"name": "keepsidian",
-	"version": "2.1.0-beta.8b",
+	"version": "2.1.0-beta.11",
 	"description": "Sync Google Keep notes to Obsidian",
 	"main": "main.js",
 	"scripts": {
@@ -23,8 +23,8 @@
 		"lint:fix": "node scripts/lint-wrapper.mjs --fix",
 		"verify:bundles": "node scripts/verify-bundles.mjs",
 		"preversion": "npm run lint",
-		"test": "npx jest",
-		"coverage": "npx jest --coverage --runInBand",
+		"test": "node --test test/support/legacy-e2e.test.mjs && node scripts/test-access-v1-mobile.mjs && node scripts/test-access-v1-native-google.mjs && jest",
+		"coverage": "node --test test/support/legacy-e2e.test.mjs && node scripts/test-access-v1-mobile.mjs && node scripts/test-access-v1-native-google.mjs && jest --coverage --runInBand",
 		"bmad:refresh": "bmad-method install -f -i codex",
 		"bmad:list": "bmad-method list:agents",
 		"bmad:validate": "bmad-method validate",
@@ -32,11 +32,12 @@
 		"wdio:mobile": "wdio run ./wdio.mobile.conf.mts",
 		"wdio:live": "wdio run ./wdio.live.conf.mts",
 		"bundle:live": "node esbuild.config.mjs production && npm run verify:bundles",
-		"e2e:desktop": "npm run build && npm run wdio",
-		"e2e:android": "npm run build && npm run wdio:mobile",
+		"e2e:desktop": "npm run build:e2e:legacy && npm run wdio",
+		"e2e:android": "npm run build:e2e:legacy && npm run wdio:mobile",
 		"e2e:live": "npm run bundle:live && npm run wdio:live",
 		"e2e:live:build": "npm run build && npm run wdio:live",
-		"appium:android": "ANDROID_SDK_ROOT=\"$HOME/Library/Android/sdk\" ANDROID_HOME=\"$HOME/Library/Android/sdk\" PATH=\"$HOME/Library/Android/sdk/platform-tools:$HOME/Library/Android/sdk/emulator:$HOME/Library/Android/sdk/cmdline-tools/latest/bin:$PATH\" npx appium server --address 127.0.0.1 --port 4723 --allow-insecure \"*:chromedriver_autodownload,*:adb_shell\""
+		"appium:android": "ANDROID_SDK_ROOT=\"$HOME/Library/Android/sdk\" ANDROID_HOME=\"$HOME/Library/Android/sdk\" PATH=\"$HOME/Library/Android/sdk/platform-tools:$HOME/Library/Android/sdk/emulator:$HOME/Library/Android/sdk/cmdline-tools/latest/bin:$PATH\" npx appium server --address 127.0.0.1 --port 4723 --allow-insecure \"*:chromedriver_autodownload,*:adb_shell\"",
+		"build:e2e:legacy": "node esbuild.config.mjs production legacy-e2e"
 	},
 	"keywords": [
 		"obsidian",

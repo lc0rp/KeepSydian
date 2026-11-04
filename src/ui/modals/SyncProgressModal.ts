@@ -38,14 +38,20 @@ interface SyncProgressModalOptions {
 	renderImportOptions: (containerEl: HTMLElement, isActive: boolean) => void | Promise<void>;
 }
 type ModalSurface = "setup" | "review" | "running" | "result";
-type ChipKey = "notes" | "create" | "delete" | "merge" | "overwrite" | "upload" | "conflict-copy" | "skipped-conflict" | "already-up-to-date" | "unchecked";
+function retainUploadChoices(previous: SyncPlan, refreshed: SyncPlan): SyncPlan {
+    const unchecked = new Set(previous.entries.filter((entry) => entry.stage === "upload" && entry.selectable && !entry.selected).map((entry) => entry.path));
+    const entries = refreshed.entries.map((entry) => entry.stage === "upload" && unchecked.has(entry.path) ? { ...entry, selected: false } : entry);
+    return { ...refreshed, entries, skipBlockedUploadsConfirmed: false, selectedCount: entries.filter((entry) => entry.selectable && entry.selected).length };
+}
+
+type ChipKey = "blocked" | "notes" | "create" | "delete" | "merge" | "overwrite" | "upload" | "conflict-copy" | "skipped-conflict" | "already-up-to-date" | "unchecked";
 type EntryRunState = "pending" | "done" | "failed" | "unchecked" | "instant";
 interface ExecutionSnapshot { plan: SyncPlan; entryStates: Map<string, EntryRunState>; }
 interface ExecutionRowRefs { row: HTMLDivElement; statusSymbolEl: HTMLSpanElement; badgeEl: HTMLSpanElement; }
 interface ChipRenderState { key: ChipKey; label: string; numerator?: number; denominator?: number; count?: number; isActive: boolean; }
 interface ModalAlertState { title: () => string; message: () => string; }
 interface DismissPromptState { activeRun: boolean; }
-const CHIP_ORDER: ChipKey[] = ["notes", "create", "delete", "merge", "overwrite", "upload", "conflict-copy", "skipped-conflict", "already-up-to-date", "unchecked"];
+const CHIP_ORDER: ChipKey[] = ["notes", "create", "delete", "merge", "overwrite", "upload", "conflict-copy", "skipped-conflict", "blocked", "already-up-to-date", "unchecked"];
 const clearElement = (element: HTMLElement) => {
 	const maybeObsidianElement = element as MaybeObsidianElement;
 	if (typeof maybeObsidianElement.empty === "function") { maybeObsidianElement.empty(); return; }
@@ -62,7 +68,7 @@ function reviewContinuationLabel(prepared: PreparedSyncPlan | null): string | un
 	if (!prepared) return undefined;
 	// An unchecked upload review still settles the attempt and its download
 	// receipts through the normal runner, including conflict/checkpoint guards.
-	if (prepared.stage === "upload") return t("sync.completeReview");
+	if (prepared.stage === "upload") return prepared.plan.blockedUploads ? undefined : t("sync.completeReview");
 	if (prepared.stage !== "import") return undefined;
 	// The upload review is still required when the download stage has no selected
 	// writes, including when missing tracked identities were protected from import.
@@ -92,7 +98,9 @@ function toCustomScopeInputValue(isoString: string): string {
 function clonePlan(plan: SyncPlan): SyncPlan {
 	return { ...plan, counts: { ...plan.counts }, entries: plan.entries.map((entry) => ({ ...entry, meta: entry.meta ? { ...entry.meta } : undefined })) };
 }
+function entryDisplayTitle(entry: SyncPlanEntry): string { return entry.title || entry.path.split("/").pop() || "Untitled note"; }
 function getChipKeyForEntry(entry: SyncPlanEntry): ChipKey {
+	if (entry.label === "Blocked: Keep note not found") return "blocked";
 	switch (entry.action) {
 		case "create": return "create";
 		case "delete": return "delete";
@@ -107,6 +115,7 @@ function getChipKeyForEntry(entry: SyncPlanEntry): ChipKey {
 function getReviewChipLabel(key: ChipKey): string {
 	switch (key) {
 		case "notes": return t("common.notes");
+		case "blocked": return "Blocked";
 		case "create": return t("sync.action.create");
 		case "delete": return t("sync.action.delete");
 		case "merge": return t("sync.action.merge");
@@ -166,6 +175,7 @@ function getResultTitle(plan: SyncPlan, status: SyncRunStatus | null): string {
 	return plan.stage === "upload" ? t("sync.uploadDone") : t("sync.downloadDone");
 }
 function getRuntimeStatusLabel(entry: SyncPlanEntry, state: EntryRunState): string {
+	if (entry.label === "Blocked: Keep note not found") return "Blocked: kept unchanged";
 	if (state === "unchecked") return t("sync.action.unchecked");
 	if (state === "failed") return entry.action === "skipped-conflict" && entry.label === "Deletion conflict" ? t("sync.deletionConflict") : t("common.failed");
 	if (state === "pending") return t("common.pending");
@@ -645,6 +655,7 @@ export class SyncProgressModal extends Modal {
 		if (!plan) return t("sync.plan");
 		if (surface === "review") return getPlanTitle(plan);
 		if (surface === "running") return getRunningTitle(plan);
+		if (this.lastResult?.status === "failed" && (this.activeAttempt?.phase ?? this.options.getLastAttempt?.()?.phase) === "upload-plan") return "Upload preparation failed";
 		return getResultTitle(plan, this.lastResult?.status ?? null);
 	}
 	private getStatusCopy(surface: ModalSurface): string {
@@ -862,19 +873,25 @@ export class SyncProgressModal extends Modal {
 		if (!this.planActionsEl || !this.planPanelEl || !this.planSummaryEl || !this.planSelectionSummaryEl || !this.planListEl) return;
 		clearElement(this.planActionsEl); this.planActionsEl.classList.add("keepsidian-modal-actions--plan");
 		if (surface === "review") {
-			this.createActionButton(this.planActionsEl, t("common.backArrow"), async () => {
-				await this.activeAttempt?.finish("abandoned"); this.preparedPlan = null; this.executionSnapshot = null; this.showExecutionResult = false; this.reviewFilterKey = "notes"; await this.refreshUI();
+			this.createActionButton(this.planActionsEl, this.preparedPlan?.plan.blockedUploads ? "Cancel upload" : t("common.backArrow"), async () => {
+				await this.activeAttempt?.finish(this.preparedPlan?.plan.blockedUploads ? "canceled" : "abandoned"); this.preparedPlan = null; this.executionSnapshot = null; this.showExecutionResult = false; this.reviewFilterKey = "notes"; await this.refreshUI();
 			}).classList.add("keepsidian-modal-action--back");
 			this.createActionButton(this.planActionsEl, t("common.refresh"), async () => { await this.refreshCurrentReview(); }).classList.add("keepsidian-modal-action--refresh-review");
 			const hasSelection = this.preparedPlan?.plan.entries.some((entry) => entry.selectable && entry.selected) ?? false;
 			const continuationLabel = hasSelection ? undefined : reviewContinuationLabel(this.preparedPlan);
-			const runButton = this.createActionButton(this.planActionsEl, continuationLabel ?? t("sync.execute"), async () => { await this.runReviewedPlan(); });
+			const runButton = this.createActionButton(this.planActionsEl, this.preparedPlan?.plan.blockedUploads ? "Sync selected eligible notes; skip blocked" : continuationLabel ?? t("sync.execute"), async () => {
+				if (this.preparedPlan?.plan.blockedUploads) this.preparedPlan.plan.skipBlockedUploadsConfirmed = true;
+				await this.runReviewedPlan();
+			});
 			runButton.classList.add("mod-cta", "keepsidian-modal-action--primary");
 			runButton.disabled = this.isGeneratingReview || !this.preparedPlan || (!hasSelection && !continuationLabel);
 		}
 		clearElement(this.planSummaryEl);
 		if (surface === "review" && this.preparedPlan) {
 			createChild(this.planSummaryEl, "div", { text: t("sync.changesFound",{count:this.preparedPlan.plan.actionableCount}) }).classList.add("keepsidian-sync-plan-summary-copy");
+			if (this.preparedPlan.plan.blockedUploads) {
+				createChild(this.planSummaryEl, "div", { text: `${this.preparedPlan.plan.blockedUploads} ${this.preparedPlan.plan.blockedUploads === 1 ? "note cannot" : "notes cannot"} be uploaded because the linked Keep note could not be found. Review the blocked rows below. Choose to sync selected eligible notes and keep blocked notes unchanged, or cancel the upload. Download changes already applied will be kept; canceling does not roll them back.` }).setAttribute("role", "status");
+			}
 			const deletions = this.preparedPlan.plan.entries.filter((entry) => entry.action === "delete");
 			if (deletions.length > 0) {
 				const warning = createChild(this.planSummaryEl, "div", { text: deletionReviewSummary(this.preparedPlan.plan) });
@@ -883,7 +900,10 @@ export class SyncProgressModal extends Modal {
 				warning.setAttribute("data-keepsidian-role", "deletion-summary");
 			}
 		}
-		if ((surface === "running" || surface === "result") && this.executionSnapshot) this.renderRunningSummary();
+		if ((surface === "running" || surface === "result") && this.executionSnapshot) {
+			this.renderRunningSummary();
+			if (this.executionSnapshot.plan.blockedUploads) createChild(this.planSummaryEl, "div", { text: `${this.executionSnapshot.plan.blockedUploads} blocked ${this.executionSnapshot.plan.blockedUploads === 1 ? "note was" : "notes were"} skipped and kept unchanged. The successful-sync checkpoint will not advance.` });
+		}
 		if (surface === "review") this.renderChips(this.planSummaryEl, surface);
 		this.renderSelectionSummary(this.planSelectionSummaryEl, surface); this.renderEntries(this.planListEl, surface);
 		if (this.footerEl) { clearElement(this.footerEl); this.footerEl.className = ""; }
@@ -913,7 +933,7 @@ export class SyncProgressModal extends Modal {
 				refreshedPlan.deletions = original.deletions;
 				refreshedPlan.deletionContext = original.deletionContext;
 				refreshedPlan.protectedLocalKeepUrls = original.protectedLocalKeepUrls;
-				refreshedPlan.plan = retainUncheckedDeletions(original.plan, excludeDeletionUploads(refreshedPlan.plan, original.deletions));
+				refreshedPlan.plan = retainUploadChoices(original.plan, retainUncheckedDeletions(original.plan, excludeDeletionUploads(refreshedPlan.plan, original.deletions)));
 				refreshedPlan.unresolvedConflictPaths = original.unresolvedConflictPaths; refreshedPlan.forceUploadPaths = original.forceUploadPaths; refreshedPlan.mode = "two-way";
 				refreshedPlan.plan = {
 					...refreshedPlan.plan, mode: "two-way", mergeAction: normalizeMergeAction(original.plan.mergeAction),
@@ -932,7 +952,7 @@ export class SyncProgressModal extends Modal {
 		const previous = this.preparedPlan.plan;
 		await this.beginReview(this.preparedPlan.mode, normalizeMergeAction(previous.mergeAction));
 		if (this.preparedPlan) {
-			this.preparedPlan.plan = retainUncheckedDeletions(previous, this.preparedPlan.plan);
+			this.preparedPlan.plan = retainUploadChoices(previous, retainUncheckedDeletions(previous, this.preparedPlan.plan));
 			await this.refreshUI();
 		}
 	}
@@ -963,7 +983,10 @@ export class SyncProgressModal extends Modal {
 		const entries = this.preparedPlan.plan.entries;
 		const canBulkToggle = entries.some((entry) => entry.selectable && !entry.selectionLocked);
 		createChild(containerEl, "div", { text: t("sync.changesSelected",{selected:entries.filter((entry) => entry.selectable && entry.selected).length,total:this.preparedPlan.plan.actionableCount}) });
-		if (!canBulkToggle) { createChild(containerEl, "div", { text: t("sync.selectionSupporter") }).classList.add("keepsidian-sync-plan-selection-caption"); return; }
+		if (!canBulkToggle) {
+			const caption = this.preparedPlan.plan.blockedUploads && !entries.some((entry) => entry.selectable) ? "No eligible notes are available to upload. Cancel to keep all local notes unchanged." : entries.some((entry) => entry.selectionLocked) ? t("sync.selectionSupporter") : "No changes are available to select.";
+			createChild(containerEl, "div", { text: caption }).classList.add("keepsidian-sync-plan-selection-caption"); return;
+		}
 		const toggleWrap = createChild(containerEl, "label"); toggleWrap.classList.add("keepsidian-sync-plan-select-all");
 		const checkbox = createChild(toggleWrap, "input"); checkbox.type = "checkbox";
 		checkbox.setAttribute("data-keepsidian-focus", "select-all");
@@ -989,7 +1012,7 @@ export class SyncProgressModal extends Modal {
 		const toggleWrap = createChild(row, "div"); toggleWrap.classList.add("keepsidian-sync-plan-row-toggle");
 		const toggle = createChild(toggleWrap, "input"); toggle.type = "checkbox"; toggle.checked = entry.selected; toggle.disabled = !entry.selectable || entry.selectionLocked || this.isGeneratingReview;
 		toggle.setAttribute("data-keepsidian-focus", `entry:${entry.id}`);
-		toggle.setAttribute("aria-label", `${getReviewEntryLabel(entry)}: ${entry.title}`);
+		toggle.setAttribute("aria-label", `${getReviewEntryLabel(entry)}: ${entryDisplayTitle(entry)}`);
 		if (entry.selectionLockedReason) toggle.title = localizePluginLabel(entry.selectionLockedReason);
 		toggle.addEventListener("change", () => {
 			entry.selected = toggle.checked;
@@ -1002,7 +1025,7 @@ export class SyncProgressModal extends Modal {
 		if (!this.executionSnapshot) return;
 		const state = this.executionSnapshot.entryStates.get(entry.id) ?? "pending"; row.classList.add(`is-${state}`);
 		const statusEl = createChild(row, "div"); statusEl.classList.add("keepsidian-sync-plan-row-status");
-		const statusSymbolEl = createChild(statusEl, "span", { text: state === "done" || state === "instant" ? "✓" : state === "failed" ? "!" : state === "unchecked" ? "–" : "…" });
+		const statusSymbolEl = createChild(statusEl, "span", { text: getChipKeyForEntry(entry) === "blocked" ? "–" : state === "done" || state === "instant" ? "✓" : state === "failed" ? "!" : state === "unchecked" ? "–" : "…" });
 		const body = createChild(row, "div"); body.classList.add("keepsidian-sync-plan-row-body");
 		const badgeEl = this.renderEntryBody(body, entry, getRuntimeStatusLabel(entry, state)); this.executionRowRefs.set(entry.id, { row, statusSymbolEl, badgeEl });
 	}
@@ -1016,13 +1039,13 @@ export class SyncProgressModal extends Modal {
 		refs.badgeEl.textContent = getRuntimeStatusLabel(entry, state);
 		const titleEl = refs.row.querySelector(".keepsidian-sync-plan-row-title");
 		const pathEl = refs.row.querySelector(".keepsidian-sync-plan-row-path");
-		if (titleEl) titleEl.textContent = entry.title;
+		if (titleEl) titleEl.textContent = entryDisplayTitle(entry);
 		if (pathEl) pathEl.textContent = entry.path;
 		if (!entry.meta?.detail) refs.row.querySelector(".keepsidian-sync-plan-row-detail")?.remove();
 	}
 	private renderEntryBody(body: HTMLElement, entry: SyncPlanEntry, badgeText: string): HTMLSpanElement {
 		const titleLine = createChild(body, "div"); titleLine.classList.add("keepsidian-sync-plan-row-title-line");
-		createChild(titleLine, "div", { text: entry.title }).classList.add("keepsidian-sync-plan-row-title");
+		createChild(titleLine, "div", { text: entryDisplayTitle(entry) }).classList.add("keepsidian-sync-plan-row-title");
 		titleLine.querySelector(".keepsidian-sync-plan-row-title")?.setAttribute("lang", "");
 		const badge = createChild(titleLine, "span", { text: badgeText }); badge.classList.add("keepsidian-sync-plan-row-badge");
 		createChild(body, "div", { text: entry.path }).classList.add("keepsidian-sync-plan-row-path");
