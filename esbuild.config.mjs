@@ -1,4 +1,5 @@
 import esbuild from "esbuild";
+import { offlineBanner } from "./test/support/legacy-e2e.mjs";
 import { builtinModules } from "module";
 import fs from "fs";
 import path from "path";
@@ -10,6 +11,7 @@ if you want to view the source, please visit the github repository of this plugi
 */
 `;
 
+const legacyE2E = process.argv.includes("legacy-e2e");
 const prod = process.argv.includes("production");
 
 function loadEnvFile(filePath) {
@@ -125,7 +127,7 @@ const resolvedServerUrl = String(process.env.KEEPSIDIAN_SERVER_URL ?? defaultSer
 
 const context = await esbuild.context({
 	banner: {
-		js: banner,
+		js: banner + (legacyE2E ? offlineBanner() : ""),
 	},
 	outfile: "main.js",
 	entryPoints: ["src/main.ts"],
@@ -156,7 +158,8 @@ const context = await esbuild.context({
 	treeShaking: true,
 	plugins: [tsconfigPathsPlugin({ tsconfigPath: path.resolve(rootDir, "tsconfig.json") })],
 	define: {
-		"process.env.KEEPSIDIAN_SERVER_URL": JSON.stringify(resolvedServerUrl),
+		"process.env.KEEPSIDIAN_ACCESS_V1": JSON.stringify(legacyE2E || process.env.KEEPSIDIAN_ACCESS_V1 === "false" ? "false" : "true"),
+		"process.env.KEEPSIDIAN_SERVER_URL": JSON.stringify(legacyE2E ? "http://127.0.0.1:1" : resolvedServerUrl),
 		"process.env.KEEPSIDIAN_RECOVERY_UAT": JSON.stringify(
 			process.env.KEEPSIDIAN_RECOVERY_UAT === "true" ? "true" : "false"
 		),

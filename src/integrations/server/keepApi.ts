@@ -6,6 +6,7 @@ import { GoogleKeepImportResponseSchema, PremiumFeatureFlagsSchema } from "@sche
 import type { KeepArchivedStatus, KeepPinnedStatus } from "../../types/subscription";
 import { recoveryUatHeaders, recoveryUatResponse } from "@services/recovery-uat";
 import { LocalEnrichmentResponseSchema, type EnrichmentSource } from "@schemas/keep";
+import { ACCESS_V1_ENABLED } from "@integrations/google/accessV1Auth";
 
 export interface GoogleKeepImportResponse {
 	notes: Array<PreNormalizedNote>;
@@ -230,7 +231,9 @@ export async function getReplayEpoch(email: string, token: string): Promise<stri
 			{ "X-User-Email": email, Authorization: `Bearer ${token}` }
 		);
 		return response.replay_version === 1 ? response.replay_epoch : undefined;
-	} catch {
+	} catch (error) {
+		// Enabled authentication failure cannot silently continue into another admission.
+		if (ACCESS_V1_ENABLED) throw error;
 		return undefined;
 	}
 }

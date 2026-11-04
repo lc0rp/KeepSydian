@@ -1,7 +1,9 @@
 import { NetworkError } from "@services/errors";
 
 export const isTransientDownloadError = (error: unknown): error is NetworkError =>
-	error instanceof NetworkError && ([429, 502, 503, 504].includes(error.status ?? 0) || error.transportFailure);
+	error instanceof NetworkError &&
+	error.retryAllowed !== false &&
+	([429, 502, 503, 504].includes(error.status ?? 0) || error.transportFailure);
 
 /** One retry owner, bounded per uncommitted page. Hooks keep timing deterministic. */
 export async function retryDownload<T>(
