@@ -20,7 +20,7 @@ import { getEnrichmentLedger } from "./enrichment/ledger";
 import { buildLocalDeletionPlan, type PreparedLocalDeletions } from "./local-deletions/plan";
 import type { SyncPlan, SyncPlanEntry } from "@types";
 import { safeSyncError } from "@app/sync-attempt";
-import { AppError } from "@services/errors";
+import { AppError, UploadPreparationError, type UploadPreparationCode } from "@services/errors";
 
 const SKIPPED_LOG_BATCH_SIZE = 50;
 const PUSH_PAYLOAD_BATCH_SIZE = 20;
@@ -51,21 +51,32 @@ function buildPushPlanEntry(note: ReviewedPushNote, index: number, allowPerNoteS
 	};
 }
 
+async function preparationStep<T>(code: UploadPreparationCode, work: () => Promise<T>): Promise<T> {
+	try { return await work(); }
+	catch (error) {
+		if (isSyncCancellationError(error) || error instanceof UploadPreparationError) throw error;
+		throw new UploadPreparationError(code, error);
+	}
+}
+
 export async function buildPushSyncPlan(plugin: KeepSidianPlugin, allowPerNoteSelection = true, selectionLockedReason?: string, options?: PushPlanOptions): Promise<BuiltPushSyncPlan> {
-	const collected = options?.forcePaths ? await collectNotesToPush(plugin, options.forcePaths) : await collectNotesToPush(plugin);
+	const collected = await preparationStep("upload_collection_failed", () => collectNotesToPush(plugin, options?.forcePaths, true));
 	if (options?.reviewMerges && collected.skippedNotes.some((note) => note.reason.startsWith("error:"))) {
-		throw new Error("Some local notes could not be read. Fix the vault errors before reviewing uploads.");
+		throw new UploadPreparationError("upload_collection_failed");
 	}
 	const protectedPaths = new Set((options?.protectedPaths ?? []).map(normalizePathSafe));
 	const protectedNotes = collected.notesToPush.filter((note) => protectedPaths.has(normalizePathSafe(note.fullPath)));
 	let notesToPush: ReviewedPushNote[] = collected.notesToPush.filter((note) => !protectedPaths.has(normalizePathSafe(note.fullPath)))
 		.map((note, index) => ({ ...note, planEntryId: `upload:${index}:${normalizePathSafe(note.fullPath)}` }));
-	if (options?.reviewMerges) notesToPush = await reviewPushNotes(plugin, notesToPush);
+	if (options?.reviewMerges) notesToPush = await preparationStep("upload_review_failed", () => reviewPushNotes(plugin, notesToPush));
+	const blockedNotes = notesToPush.filter((note) => note.blockedReason);
+	notesToPush = notesToPush.filter((note) => !note.blockedReason);
 	const skippedNotes = [...collected.skippedNotes, ...protectedNotes.map((note) => ({ path: note.fullPath, reason: "unresolved-conflict" }))];
-	const localDeletions = await buildLocalDeletionPlan(plugin, allowPerNoteSelection, selectionLockedReason);
+	const localDeletions = await preparationStep("upload_deletion_review_failed", () => buildLocalDeletionPlan(plugin, allowPerNoteSelection, selectionLockedReason));
 	const entries: SyncPlanEntry[] = [
 		...notesToPush.map((note, index) => buildPushPlanEntry(note, index, allowPerNoteSelection, selectionLockedReason)),
 		...localDeletions.entries,
+		...blockedNotes.map((note): SyncPlanEntry => ({ id: note.planEntryId!, mode: "push", stage: "upload", title: note.title, path: normalizePathSafe(note.fullPath), action: "skipped-conflict", label: "Blocked: Keep note not found", selectable: false, selected: false, selectionLocked: false, meta: { detail: note.blockedReason } })),
 		...skippedNotes.map((skipped, index): SyncPlanEntry => ({
 			id: `upload-skipped:${index}:${normalizePathSafe(skipped.path)}`, mode: "push", stage: "upload",
 			title: skipped.path.split("/").pop() || skipped.path, path: normalizePathSafe(skipped.path),
@@ -79,6 +90,7 @@ export async function buildPushSyncPlan(plugin: KeepSidianPlugin, allowPerNoteSe
 	const counts = entries.reduce<Record<string, number>>((acc, entry) => { acc[entry.label] = (acc[entry.label] ?? 0) + 1; return acc; }, {});
 	return {
 		plan: { id: `push-plan:${Date.now()}`, mode: "push", stage: "upload", generatedAt: Date.now(), title: "Review upload changes", entries, counts,
+			blockedUploads: blockedNotes.length,
 			selectedCount: entries.filter((entry) => entry.selectable && entry.selected).length,
 			actionableCount: entries.filter((entry) => entry.selectable).length },
 		notesToPush,
@@ -122,7 +134,14 @@ export async function pushGoogleKeepNotes(plugin: KeepSidianPlugin, callbacks?: 
 				if (note.localState && await localStateBaseline(plugin.app.vault.adapter, note.fullPath, note.mergeReview?.sourceContent ?? note.content) !== note.localState) throw new Error("Local media changed during upload. Refresh the plan.");
 			}
 			const payloadBatch: PushNotePayload[] = batch.map((note) => {
-				const frontmatter = stripSyncState(note.frontmatter);
+				let frontmatter = stripSyncState(note.frontmatter);
+				// Reviewed identity must reach the server even for legacy/kebab aliases.
+				// This changes only the outgoing payload; local bytes stay untouched until acknowledgement.
+				if (note.mergeReview?.remoteKey && !/^GoogleKeepUrl:/m.test(frontmatter)) {
+					const reviewedUrl = canonicalKeepUrl(`https://keep.google.com/#NOTE/${note.mergeReview.remoteKey}`);
+					if (!reviewedUrl) throw new Error("The reviewed Keep identity is invalid. Refresh the plan.");
+					frontmatter += `\nGoogleKeepUrl: ${reviewedUrl}`;
+				}
 				return { path: note.relativePath, title: note.title, content: frontmatter === note.frontmatter ? note.content : wrapMarkdown(frontmatter, note.body), attachments: note.attachments.length > 0 ? note.attachments : undefined, expected_revision: note.mergeReview?.remote?.remote_revision ?? storedRemoteRevision(note.frontmatter) };
 			});
 			// Persist uncertainty before the remote write. Lost acknowledgements
@@ -142,17 +161,14 @@ export async function pushGoogleKeepNotes(plugin: KeepSidianPlugin, callbacks?: 
 						firstFailure ??= new Error("The server did not confirm an upload");
 						await flushLogSync(plugin, { batchKey }); await logSync(plugin, `${noteLabel} - push failed: server rejected upload`); continue;
 					}
-					if (result?.keep_url) {
-						const normalizedKeepUrl = result.keep_url.trim();
-						if (normalizedKeepUrl) {
-							const keyPrefix = `${FRONTMATTER_GOOGLE_KEEP_URL_KEY}:`;
-							const match = note.frontmatter.match(new RegExp(`^${FRONTMATTER_GOOGLE_KEEP_URL_KEY}:\\s*(.*)$`, "m"));
-							if (match?.[1]?.trim() !== normalizedKeepUrl) {
-								if (match) note.frontmatter = note.frontmatter.replace(new RegExp(`^${FRONTMATTER_GOOGLE_KEEP_URL_KEY}:\\s*.*$`, "m"), `${keyPrefix} ${normalizedKeepUrl}`);
-								else note.frontmatter = note.frontmatter ? `${note.frontmatter}\n${keyPrefix} ${normalizedKeepUrl}` : `${keyPrefix} ${normalizedKeepUrl}`;
-							}
-						}
+					const acknowledgedUrl = canonicalKeepUrl(result.keep_url ?? (note.mergeReview?.remoteKey ? `https://keep.google.com/#NOTE/${note.mergeReview.remoteKey}` : undefined));
+					if (acknowledgedUrl) {
+						// Only acknowledged selected notes are canonicalized; blocked files remain byte-identical.
+						const identityLine = /^(?:GoogleKeepUrl|google-keep-url):[^\r\n]*(?:\r?\n|$)/gim;
+						note.frontmatter = note.frontmatter.replace(identityLine, "").trim();
+						note.frontmatter = `${note.frontmatter}\n${FRONTMATTER_GOOGLE_KEEP_URL_KEY}: ${acknowledgedUrl}`.trim();
 					}
+
 					// Hash the acknowledged body, not local completion time. If the
 					// server transforms it, the next remote read conservatively differs.
 					if (result?.remote_updated && Number.isFinite(Date.parse(result.remote_updated))) {

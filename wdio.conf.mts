@@ -1,3 +1,5 @@
+import { assertOfflineBundle } from "./test/support/legacy-e2e.mjs";
+assertOfflineBundle();
 import * as path from "path";
 
 // wdio-obsidian-service runs `xattr -cr` on extracted installers on macOS.

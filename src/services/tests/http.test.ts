@@ -1,7 +1,7 @@
 import { requestUrl } from "obsidian";
 import { httpGetJson } from "../http";
 import { NetworkError } from "../errors";
-import { getReplayEpoch } from "@integrations/server/keepApi";
+import { getReplayEpoch, fetchNotesWithPremiumFeatures } from "@integrations/server/keepApi";
 
 jest.mock("obsidian", () => ({
 	requestUrl: jest.fn(),
@@ -61,4 +61,9 @@ describe("httpRequest supporter key handling", () => {
 			})
 		);
 	});
+});
+
+it("carries the specific review entitlement code through the real HTTP layer", async () => {
+	(requestUrl as jest.Mock).mockResolvedValueOnce({ status: 403, json: { error: "denied", code: "sync_upload_review_requires_supporter" }, headers: {} });
+	await expect(fetchNotesWithPremiumFeatures("fixture@example.invalid", "synthetic", { keep_state_filter: { archived: "all" } }, 0, 100, undefined, undefined, "synthetic-supporter", undefined, true)).rejects.toMatchObject({ code: "sync_upload_review_requires_supporter", status: 403 });
 });
