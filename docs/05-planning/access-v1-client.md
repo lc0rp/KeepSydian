@@ -23,7 +23,7 @@ Authenticated requests use the configured HTTPS backend's `/keep/access-v1/`
 routes with `X-Keep-Auth-Protocol: access-v1`, `X-User-Email`, and access-only
 Bearer credentials. Public capability discovery sends no Google credential.
 The server independently verifies identity, scopes, expiry, and current
-entitlements. Subscription/customer paths retain their existing behavior.
+entitlements. Email-based subscription lookup now uses the same verified access-v1 boundary; independent supporter-key lookup retains its existing public route.
 
 No enabled request falls back to legacy registration or master-token backend
 authentication. Desktop transports explicitly verify TLS before sending the body.
@@ -86,8 +86,7 @@ bundle. The sync-attempt fixture separately pins legacy mode and permits only
 its exact loopback sync endpoint. Registration hooks return synthetic tokens.
 The default production build remains enabled and contains none of these test
 guards. Mobile legacy test success does not establish default-enabled mobile
-Keep registration or sync support. Subscription information retains its existing
-native transport behavior and does not carry a master token.
+Keep registration or sync support. Email-based subscription lookup is unavailable in this explicit legacy build; supporter-key lookup remains available without a Google token.
 
 Normal `npm test` and the CI `npm run coverage` lane run the three offline lane
 and I/O-guard regressions, then all 37 browser-mobile and 55 native-Google regressions,
@@ -135,3 +134,26 @@ It is not a race-proof no-logging guarantee or a defense against hostile plugins
 Synthetic tests cover false-to-true rejection, absent/unknown/enabled logging,
 helper absence, exact form/destination, returned status/URL/data validation and
 no retry/fallback. Run `node scripts/test-access-v1-native-google.mjs` independently.
+
+## Verified subscription identity
+
+The client requests email-based status through `GET /keep/access-v1/subscriber/info`,
+using the existing local Google exchange and access-only backend boundary. The
+master token is not sent to the subscription endpoint. This requires the paired
+server route; an older server response fails closed without an email-only fallback.
+Missing Google credentials return unavailable quietly. A supplied supporter key
+continues to use `/subscriber/info` independently of Google authentication or the
+payment email. Invalid keys never fall back to email.
+
+Email cache identities are versioned as `verified-email-v1:`. Earlier unverified
+email caches are discarded on settings load and cannot satisfy synchronous premium
+gates. Current account, credential presence, cache identity and freshness are
+checked before reuse; failed email refresh clears cached status. An explicit premium
+gate requires confirmed active status, with unknown verification distinguished from
+an inactive subscription. Unbound in-memory status cannot override the current
+identity and cache freshness; asynchronous checks retain unavailable status and
+reject identity or credential changes during verification. Free gates keep their existing behavior. No credential is
+written into the cache. These client checks do not replace server authorization.
+
+Validation for this change uses synthetic unit, client-boundary and cache-consumer
+tests. It does not authorize live Google calls, normal-vault installation or deployment.

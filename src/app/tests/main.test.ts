@@ -1,4 +1,8 @@
 jest.mock("obsidian");
+jest.mock("@integrations/google/accessV1Auth", () => ({
+	...jest.requireActual("@integrations/google/accessV1Auth"),
+	ACCESS_V1_ENABLED: true,
+}));
 
 import { Plugin, Notice } from "obsidian";
 import * as Obsidian from "obsidian";
@@ -69,6 +73,94 @@ describe("KeepSidianPlugin", () => {
 		} as unknown as SubscriptionService;
 
 		plugin.subscriptionService = mockSubscriptionService;
+	});
+
+	it("does not use a pre-verification email cache for synchronous premium gates", () => {
+		plugin.settings = {
+			...DEFAULT_SETTINGS,
+			email: "tester@example.com",
+			token: "test-token",
+			subscriptionCache: {
+				timestamp: Date.now(),
+				email: "tester@example.com",
+				identity: "email:tester@example.com",
+				info: {
+					subscription_status: "active",
+					plan_details: { plan_id: "synthetic", features: [] },
+					metering_info: { usage: 0, limit: 0 },
+					trial_or_promo: null,
+				},
+			},
+		};
+		const read = plugin as unknown as { getCachedSubscriptionActive(): boolean | null };
+		expect(read.getCachedSubscriptionActive()).toBeNull();
+	});
+
+	it.each(["other-account", "expired", "future", "logout"])(
+		"rejects a verified cache after %s in synchronous gates",
+		(kind) => {
+			plugin.settings = {
+				...DEFAULT_SETTINGS,
+				email: "tester@example.com",
+				token: "test-token",
+				subscriptionCache: {
+					timestamp: Date.now(),
+					identity: "verified-email-v1:tester@example.com",
+					info: {
+						subscription_status: "active",
+						plan_details: { plan_id: "synthetic", features: [] },
+						metering_info: { usage: 0, limit: 0 },
+						trial_or_promo: null,
+					},
+				},
+			};
+			if (kind === "other-account") plugin.settings.email = "other@example.com";
+			if (kind === "expired") plugin.settings.subscriptionCache!.timestamp -= 25 * 60 * 60 * 1000;
+			if (kind === "future") plugin.settings.subscriptionCache!.timestamp += 100000;
+			if (kind === "logout") plugin.settings.token = "";
+			expect(
+				(plugin as unknown as { getCachedSubscriptionActive(): boolean | null }).getCachedSubscriptionActive()
+			).toBeNull();
+		}
+	);
+	it("preserves a fresh verified cache for its current signed-in account", () => {
+		plugin.settings = {
+			...DEFAULT_SETTINGS,
+			email: "tester@example.com",
+			token: "test-token",
+			subscriptionCache: {
+				timestamp: Date.now(),
+				identity: "verified-email-v1:tester@example.com",
+				info: {
+					subscription_status: "active",
+					plan_details: { plan_id: "synthetic", features: [] },
+					metering_info: { usage: 0, limit: 0 },
+					trial_or_promo: null,
+				},
+			},
+		};
+		expect((plugin as unknown as { getCachedSubscriptionActive(): boolean | null }).getCachedSubscriptionActive()).toBe(
+			true
+		);
+	});
+	it("drops a persisted old email cache during settings load", async () => {
+		plugin.loadData = jest.fn().mockResolvedValue({
+			...DEFAULT_SETTINGS,
+			email: "tester@example.com",
+			token: "test-token",
+			subscriptionCache: {
+				timestamp: Date.now(),
+				identity: "email:tester@example.com",
+				info: {
+					subscription_status: "active",
+					plan_details: { plan_id: "synthetic", features: [] },
+					metering_info: { usage: 0, limit: 0 },
+					trial_or_promo: null,
+				},
+			},
+		});
+		await plugin.loadSettings();
+		expect(plugin.settings.subscriptionCache).toBeUndefined();
 	});
 
 	describe("onload", () => {
@@ -958,6 +1050,138 @@ describe("KeepSidianPlugin", () => {
 			expect(plugin.settings.twoWaySyncBackupAcknowledged).toBe(true);
 			expect(plugin.settings.twoWaySyncEnabled).toBe(false);
 			expect(plugin.settings.twoWaySyncAutoSyncEnabled).toBe(false);
+		});
+	});
+
+	describe("premium gate verification", () => {
+		const activeInfo = {
+			subscription_status: "active" as const,
+			plan_details: { plan_id: "synthetic", features: [] },
+			metering_info: { usage: 0, limit: 0 },
+			trial_or_promo: null,
+		};
+		it.each(["account", "logout", "expiry"])("rejects an unbound active snapshot after %s changes", (change) => {
+			plugin.settings = {
+				...DEFAULT_SETTINGS,
+				email: "tester@example.com",
+				token: "test-token",
+				twoWaySyncBackupAcknowledged: true,
+				twoWaySyncEnabled: true,
+				subscriptionCache: {
+					timestamp: Date.now(),
+					identity: "verified-email-v1:tester@example.com",
+					info: activeInfo,
+				},
+			};
+			(plugin as unknown as { subscriptionActive: boolean | null }).subscriptionActive = true;
+			if (change === "account") plugin.settings.email = "other@example.com";
+			if (change === "logout") plugin.settings.token = "";
+			if (change === "expiry") plugin.settings.subscriptionCache!.timestamp = 0;
+			expect(plugin.getTwoWayGateSnapshot({ requirePremium: true }).allowed).toBe(false);
+			expect(plugin.getTwoWayGateSnapshot({ requirePremium: false }).allowed).toBe(true);
+		});
+		it("keeps unavailable asynchronous verification distinct from inactive", async () => {
+			await plugin.onload();
+			plugin.settings.email = "tester@example.com";
+			plugin.settings.token = "test-token";
+			plugin.settings.twoWaySyncBackupAcknowledged = true;
+			plugin.settings.twoWaySyncEnabled = true;
+			jest.spyOn(plugin.subscriptionService, "checkSubscription").mockResolvedValue(null);
+			const gate = await plugin.requireTwoWaySafeguards({ requirePremium: true });
+			expect(gate.allowed).toBe(false);
+			expect(gate.reasons).toContain(
+				"Verify your subscription or enter a supporter key before using uploads & two-way sync."
+			);
+		});
+		it.each(["active", "inactive", "changed", "throw"])(
+			"binds asynchronous %s verification to the current identity",
+			async (outcome) => {
+				await plugin.onload();
+				plugin.settings.email = "tester@example.com";
+				plugin.settings.token = "test-token";
+				plugin.settings.twoWaySyncBackupAcknowledged = true;
+				plugin.settings.twoWaySyncEnabled = true;
+				(plugin as unknown as { subscriptionActive: boolean | null }).subscriptionActive = true;
+				jest.spyOn(plugin.subscriptionService, "checkSubscription").mockImplementation(async () => {
+					if (outcome === "throw") throw new Error("synthetic unavailable");
+					if (outcome === "changed") plugin.settings.token = "replacement-test-token";
+					return { ...activeInfo, subscription_status: outcome === "inactive" ? "inactive" : "active" };
+				});
+				const gate = await plugin.requireTwoWaySafeguards({ requirePremium: true });
+				expect(gate.allowed).toBe(outcome === "active");
+				if (outcome === "inactive")
+					expect(gate.reasons).toContain(
+						"To enable uploads & two-way sync, please consider becoming a KeepSidian supporter."
+					);
+				if (outcome === "changed" || outcome === "throw")
+					expect(gate.reasons).toContain(
+						"Verify your subscription or enter a supporter key before using uploads & two-way sync."
+					);
+			}
+		);
+		it.each([undefined, "email:tester@example.com"])(
+			"rejects unverified cache %s after startup when premium is explicitly required",
+			async (identity) => {
+				plugin.loadData = jest.fn().mockResolvedValue({
+					...DEFAULT_SETTINGS,
+					email: "tester@example.com",
+					token: "test-token",
+					twoWaySyncBackupAcknowledged: true,
+					twoWaySyncEnabled: true,
+					autoSyncEnabled: false,
+					subscriptionCache: { timestamp: Date.now(), email: "tester@example.com", identity, info: activeInfo },
+				});
+				await plugin.onload();
+				expect(plugin.settings.subscriptionCache).toBeUndefined();
+				const state = plugin as unknown as { subscriptionActive: boolean | null };
+				expect(state.subscriptionActive).toBeNull();
+				const gate = plugin.getTwoWayGateSnapshot({ requirePremium: true });
+				expect(gate.allowed).toBe(false);
+				expect(gate.reasons).toContain(
+					"Verify your subscription or enter a supporter key before using uploads & two-way sync."
+				);
+				expect(gate.reasons).not.toContain(
+					"To enable uploads & two-way sync, please consider becoming a KeepSidian supporter."
+				);
+				expect(plugin.getTwoWayGateSnapshot({ requirePremium: false }).allowed).toBe(true);
+			}
+		);
+		it.each(["verified-email", "supporter-key"])("permits an explicit premium gate with fresh %s proof", (kind) => {
+			plugin.settings = {
+				...DEFAULT_SETTINGS,
+				email: "tester@example.com",
+				token: "test-token",
+				twoWaySyncBackupAcknowledged: true,
+				twoWaySyncEnabled: true,
+			};
+			const identity =
+				kind === "verified-email" ? "verified-email-v1:tester@example.com" : "supporter-key:synthetic-key-id";
+			if (kind === "supporter-key") {
+				plugin.settings.supporterKeyConfigured = true;
+				plugin.settings.supporterKey = "ABCD-EFGH-IJKL-MN12";
+				plugin.settings.supporterKeyIdentity = "synthetic-key-id";
+			}
+			plugin.settings.subscriptionCache = { timestamp: Date.now(), identity, info: activeInfo };
+			expect(plugin.getTwoWayGateSnapshot({ requirePremium: true })).toEqual({ allowed: true, reasons: [] });
+		});
+		it("retains the supporter explanation for an explicitly inactive subscription", () => {
+			plugin.settings = {
+				...DEFAULT_SETTINGS,
+				email: "tester@example.com",
+				token: "test-token",
+				twoWaySyncBackupAcknowledged: true,
+				twoWaySyncEnabled: true,
+				subscriptionCache: {
+					timestamp: Date.now(),
+					identity: "verified-email-v1:tester@example.com",
+					info: { ...activeInfo, subscription_status: "inactive" },
+				},
+			};
+			const gate = plugin.getTwoWayGateSnapshot({ requirePremium: true });
+			expect(gate.allowed).toBe(false);
+			expect(gate.reasons).toContain(
+				"To enable uploads & two-way sync, please consider becoming a KeepSidian supporter."
+			);
 		});
 	});
 

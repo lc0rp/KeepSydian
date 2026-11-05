@@ -1,27 +1,17 @@
 import { SubscriptionService } from "../subscription";
 import { SubscriptionInfo, SubscriptionCache } from "../../types/subscription";
 import { jest, describe, it, expect, beforeEach } from "@jest/globals";
-import * as obsidian from "obsidian";
-import type { RequestUrlResponse } from "obsidian";
+import { httpGetJson } from "../http";
+import { NetworkError } from "../errors";
 
-// Mock Obsidian requestUrl + Notice
-jest.mock("obsidian", () => ({
-	Notice: class {
-		constructor(public message: string) {}
-	},
-	requestUrl: jest.fn(),
-}));
-
-type RequestUrlMock = jest.MockedFunction<(params: unknown) => Promise<RequestUrlResponse>>;
-const requestUrlMock = obsidian.requestUrl as unknown as RequestUrlMock;
-
-const buildResponse = (json: unknown, status = 200): RequestUrlResponse => ({
-	status,
-	headers: {},
-	arrayBuffer: new ArrayBuffer(0),
-	json,
-	text: JSON.stringify(json),
-});
+// Service tests isolate the HTTP boundary; accessV1Wiring exercises the real credential conversion.
+jest.mock("obsidian", () => ({ Notice: jest.fn() }));
+jest.mock("../http", () => ({ httpGetJson: jest.fn() }));
+jest.mock("@integrations/google/accessV1Auth", () => ({ ACCESS_V1_ENABLED: true }));
+const requestJsonMock = httpGetJson as jest.MockedFunction<
+	(url: string, headers?: Record<string, string>) => Promise<SubscriptionInfo>
+>;
+const buildResponse = (json: unknown): SubscriptionInfo => json as SubscriptionInfo;
 
 global.console.error = jest.fn();
 
@@ -32,6 +22,7 @@ describe("SubscriptionService", () => {
 	let mockSetCache: jest.MockedFunction<(cache: SubscriptionCache) => Promise<void>>;
 	let mockGetSupporterKey: jest.MockedFunction<() => string | null>;
 	let mockGetSupporterKeyIdentity: jest.MockedFunction<() => string | undefined>;
+	let mockGetToken: jest.MockedFunction<() => string>;
 	let mockClearCache: jest.MockedFunction<() => Promise<void>>;
 
 	const mockEmail = "test@example.com";
@@ -61,6 +52,8 @@ describe("SubscriptionService", () => {
 		mockGetSupporterKeyIdentity = jest.fn<() => string | undefined>().mockReturnValue(undefined);
 		mockClearCache = jest.fn<() => Promise<void>>().mockResolvedValue();
 
+		mockGetToken = jest.fn<() => string>().mockReturnValue("synthetic-master");
+
 		// Create service instance
 		service = new SubscriptionService(
 			mockGetEmail,
@@ -68,11 +61,12 @@ describe("SubscriptionService", () => {
 			mockSetCache,
 			mockGetSupporterKey,
 			mockGetSupporterKeyIdentity,
-			mockClearCache
+			mockClearCache,
+			mockGetToken
 		);
 
 		// Reset requestUrl mock
-		requestUrlMock.mockReset();
+		requestJsonMock.mockReset();
 	});
 
 	describe("checkSubscription", () => {
@@ -80,7 +74,7 @@ describe("SubscriptionService", () => {
 			mockGetEmail.mockReturnValue("");
 			const result = await service.checkSubscription();
 			expect(result).toBeNull();
-			expect(requestUrlMock).not.toHaveBeenCalled();
+			expect(requestJsonMock).not.toHaveBeenCalled();
 		});
 
 		it("should use cached data if available and not expired", async () => {
@@ -88,12 +82,13 @@ describe("SubscriptionService", () => {
 				info: mockSubscriptionInfo,
 				timestamp: Date.now() - 1000, // 1 second ago
 				email: mockEmail,
+				identity: `verified-email-v1:${mockEmail}`,
 			};
 			mockGetCache.mockReturnValue(cachedInfo);
 
 			const result = await service.checkSubscription();
 			expect(result).toEqual(mockSubscriptionInfo);
-			expect(requestUrlMock).not.toHaveBeenCalled();
+			expect(requestJsonMock).not.toHaveBeenCalled();
 		});
 
 		it("should fetch new data if cache is expired", async () => {
@@ -101,33 +96,32 @@ describe("SubscriptionService", () => {
 				info: mockSubscriptionInfo,
 				timestamp: Date.now() - 25 * 60 * 60 * 1000, // 25 hours ago
 				email: mockEmail,
+				identity: `verified-email-v1:${mockEmail}`,
 			};
 			mockGetCache.mockReturnValue(cachedInfo);
 
 			const mockResponse = buildResponse(mockSubscriptionInfo);
-			requestUrlMock.mockResolvedValueOnce(mockResponse);
+			requestJsonMock.mockResolvedValueOnce(mockResponse);
 
 			const result = await service.checkSubscription();
 			expect(result).toEqual(mockSubscriptionInfo);
-			expect(requestUrlMock).toHaveBeenCalledTimes(1);
+			expect(requestJsonMock).toHaveBeenCalledTimes(1);
 			expect(mockSetCache).toHaveBeenCalled();
 		});
 
-		it("keeps the existing email-based request when no supporter key is configured", async () => {
-			requestUrlMock.mockResolvedValueOnce(buildResponse(mockSubscriptionInfo));
+		it("authenticates the email-based request when no supporter key is configured", async () => {
+			requestJsonMock.mockResolvedValueOnce(buildResponse(mockSubscriptionInfo));
 
 			await service.checkSubscription();
 
-			expect(requestUrlMock).toHaveBeenCalledWith({
-				url: expect.stringContaining("/subscriber/info"),
-				method: "GET",
-				headers: { "X-User-Email": mockEmail },
-				throw: false,
+			expect(requestJsonMock).toHaveBeenCalledWith(expect.stringContaining("/subscriber/info"), {
+				"X-User-Email": mockEmail,
+				Authorization: "Bearer synthetic-master",
 			});
 			expect(mockSetCache).toHaveBeenCalledWith(
 				expect.objectContaining({
 					email: mockEmail,
-					identity: `email:${mockEmail}`,
+					identity: `verified-email-v1:${mockEmail}`,
 				})
 			);
 		});
@@ -136,16 +130,13 @@ describe("SubscriptionService", () => {
 			mockGetEmail.mockReturnValue("");
 			mockGetSupporterKey.mockReturnValue("ABCD-EFGH-IJKL-MN12");
 			mockGetSupporterKeyIdentity.mockReturnValue("opaque-key-id");
-			requestUrlMock.mockResolvedValueOnce(buildResponse(mockSubscriptionInfo));
+			requestJsonMock.mockResolvedValueOnce(buildResponse(mockSubscriptionInfo));
 
 			const result = await service.checkSubscription();
 
 			expect(result).toEqual(mockSubscriptionInfo);
-			expect(requestUrlMock).toHaveBeenCalledWith({
-				url: expect.stringContaining("/subscriber/info"),
-				method: "GET",
-				headers: { "X-Supporter-Key": "ABCD-EFGH-IJKL-MN12" },
-				throw: false,
+			expect(requestJsonMock).toHaveBeenCalledWith(expect.stringContaining("/subscriber/info"), {
+				"X-Supporter-Key": "ABCD-EFGH-IJKL-MN12",
 			});
 			expect(mockSetCache).toHaveBeenCalledWith(
 				expect.objectContaining({
@@ -164,14 +155,14 @@ describe("SubscriptionService", () => {
 				info: mockSubscriptionInfo,
 				timestamp: Date.now() - 1000,
 				email: mockEmail,
-				identity: `email:${mockEmail}`,
+				identity: `verified-email-v1:${mockEmail}`,
 			});
-			requestUrlMock.mockResolvedValueOnce(buildResponse(mockSubscriptionInfo));
+			requestJsonMock.mockResolvedValueOnce(buildResponse(mockSubscriptionInfo));
 
 			await service.checkSubscription();
 
-			expect(requestUrlMock).toHaveBeenCalledTimes(1);
-			expect((requestUrlMock.mock.calls[0]?.[0] as { headers: Record<string, string> }).headers).toEqual({
+			expect(requestJsonMock).toHaveBeenCalledTimes(1);
+			expect(requestJsonMock.mock.calls[0]?.[1]).toEqual({
 				"X-Supporter-Key": "ABCD-EFGH-IJKL-MN12",
 			});
 		});
@@ -183,7 +174,7 @@ describe("SubscriptionService", () => {
 			const result = await service.checkSubscription();
 
 			expect(result).toBeNull();
-			expect(requestUrlMock).not.toHaveBeenCalled();
+			expect(requestJsonMock).not.toHaveBeenCalled();
 			expect(mockSetCache).not.toHaveBeenCalled();
 		});
 
@@ -192,10 +183,10 @@ describe("SubscriptionService", () => {
 			let currentIdentity = "first-key-id";
 			mockGetSupporterKey.mockImplementation(() => currentKey);
 			mockGetSupporterKeyIdentity.mockImplementation(() => currentIdentity);
-			let resolveResponse: ((response: RequestUrlResponse) => void) | undefined;
-			requestUrlMock.mockImplementationOnce(
+			let resolveResponse: ((response: SubscriptionInfo) => void) | undefined;
+			requestJsonMock.mockImplementationOnce(
 				() =>
-					new Promise<RequestUrlResponse>((resolve) => {
+					new Promise<SubscriptionInfo>((resolve) => {
 						resolveResponse = resolve;
 					})
 			);
@@ -217,7 +208,7 @@ describe("SubscriptionService", () => {
 				timestamp: Date.now() - 1000,
 				identity: "supporter-key:key-id",
 			});
-			requestUrlMock.mockResolvedValueOnce(buildResponse({ error: "Invalid supporter key" }, 403));
+			requestJsonMock.mockRejectedValueOnce(new NetworkError("Invalid supporter key", 403));
 
 			const result = await service.checkSubscription(true);
 
@@ -227,14 +218,13 @@ describe("SubscriptionService", () => {
 		});
 
 		it("forces both plugin and server cache refresh", async () => {
-			requestUrlMock.mockResolvedValueOnce(buildResponse(mockSubscriptionInfo));
+			requestJsonMock.mockResolvedValueOnce(buildResponse(mockSubscriptionInfo));
 
 			await service.checkSubscription(true);
 
-			expect(requestUrlMock).toHaveBeenCalledWith(
-				expect.objectContaining({
-					url: expect.stringContaining("/subscriber/info?refresh=true"),
-				})
+			expect(requestJsonMock).toHaveBeenCalledWith(
+				expect.stringContaining("/keep/subscriber/info?refresh=true"),
+				expect.objectContaining({ Authorization: "Bearer synthetic-master" })
 			);
 		});
 
@@ -248,11 +238,11 @@ describe("SubscriptionService", () => {
 
 			// Create a proper Response mock
 			const mockResponse = buildResponse(mockSubscriptionInfo);
-			requestUrlMock.mockResolvedValueOnce(mockResponse);
+			requestJsonMock.mockResolvedValueOnce(mockResponse);
 
 			const result = await service.checkSubscription();
 			expect(result).toEqual(mockSubscriptionInfo);
-			expect(requestUrlMock).toHaveBeenCalledTimes(1);
+			expect(requestJsonMock).toHaveBeenCalledTimes(1);
 			expect(mockSetCache).toHaveBeenCalled();
 		});
 
@@ -261,23 +251,23 @@ describe("SubscriptionService", () => {
 				info: mockSubscriptionInfo,
 				timestamp: Date.now() - 1000, // 1 second ago
 				email: mockEmail,
+				identity: `verified-email-v1:${mockEmail}`,
 			};
 			mockGetCache.mockReturnValue(cachedInfo);
 
 			// Create a proper Response mock
 			const mockResponse = buildResponse(mockSubscriptionInfo);
-			requestUrlMock.mockResolvedValueOnce(mockResponse);
+			requestJsonMock.mockResolvedValueOnce(mockResponse);
 
 			const result = await service.checkSubscription(true);
 			expect(result).toEqual(mockSubscriptionInfo);
-			expect(requestUrlMock).toHaveBeenCalledTimes(1);
+			expect(requestJsonMock).toHaveBeenCalledTimes(1);
 			expect(mockSetCache).toHaveBeenCalled();
 		});
 
 		it("should handle API errors gracefully", async () => {
 			// Create a proper error Response mock
-			const mockResponse = buildResponse({ error: "API Error" }, 400);
-			requestUrlMock.mockResolvedValueOnce(mockResponse);
+			requestJsonMock.mockRejectedValueOnce(new NetworkError("API error", 400));
 
 			const result = await service.checkSubscription();
 			expect(result).toBeNull();
@@ -286,11 +276,65 @@ describe("SubscriptionService", () => {
 		});
 
 		it("should handle network errors gracefully", async () => {
-			requestUrlMock.mockRejectedValueOnce(new Error("Network error"));
+			requestJsonMock.mockRejectedValueOnce(new Error("Network error"));
 
 			const result = await service.checkSubscription();
 			expect(result).toBeNull();
 			expect(console.error).toHaveBeenCalled();
+			expect(mockSetCache).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("verified identity boundary", () => {
+		it.each([undefined, "email:test@example.com"])("refreshes pre-fix email cache %s", async (identity) => {
+			mockGetCache.mockReturnValue({ info: mockSubscriptionInfo, timestamp: Date.now(), email: mockEmail, identity });
+			requestJsonMock.mockResolvedValueOnce(mockSubscriptionInfo);
+			await service.checkSubscription();
+			expect(requestJsonMock).toHaveBeenCalledTimes(1);
+		});
+		it("does not make a request or reuse cache without a Google credential", async () => {
+			mockGetToken.mockReturnValue("");
+			mockGetCache.mockReturnValue({
+				info: mockSubscriptionInfo,
+				timestamp: Date.now(),
+				identity: `verified-email-v1:${mockEmail}`,
+			});
+			expect(await service.checkSubscription()).toBeNull();
+			expect(requestJsonMock).not.toHaveBeenCalled();
+			expect(mockClearCache).toHaveBeenCalled();
+		});
+		it.each([-1000, NaN])("refreshes invalid cache age %s", async (age) => {
+			mockGetCache.mockReturnValue({
+				info: mockSubscriptionInfo,
+				timestamp: Date.now() - age,
+				identity: `verified-email-v1:${mockEmail}`,
+			});
+			requestJsonMock.mockResolvedValueOnce(mockSubscriptionInfo);
+			await service.checkSubscription();
+			expect(requestJsonMock).toHaveBeenCalledTimes(1);
+		});
+		it.each([401, 403, 500])("clears email cache after failed refresh %s", async (status) => {
+			requestJsonMock.mockRejectedValueOnce(new NetworkError("synthetic failure", status));
+			expect(await service.checkSubscription(true)).toBeNull();
+			expect(mockClearCache).toHaveBeenCalled();
+			expect(mockSetCache).not.toHaveBeenCalled();
+		});
+		it.each(["email", "token"])("discards in-flight status when %s changes", async (field) => {
+			let finish!: (value: SubscriptionInfo) => void;
+			requestJsonMock.mockReturnValueOnce(
+				new Promise((resolve) => {
+					finish = resolve;
+				})
+			);
+			const pending = service.checkSubscription();
+			if (field === "email") mockGetEmail.mockReturnValue("other@example.invalid");
+			else mockGetToken.mockReturnValue("replacement-master");
+			finish(mockSubscriptionInfo);
+			expect(await pending).toBeNull();
+			expect(mockSetCache).not.toHaveBeenCalled();
+		});
+		it("does not prime verified-email cache from an arbitrary caller result", async () => {
+			await service.primeCurrentCache(mockSubscriptionInfo);
 			expect(mockSetCache).not.toHaveBeenCalled();
 		});
 	});
