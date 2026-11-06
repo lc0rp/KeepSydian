@@ -91,7 +91,7 @@ async function send(
 			else if (acceptHttpErrors) {
 				const failure = new AccessV1RequestError(res?.statusCode);
 				failure.responseRejected = !transient;
-				failure.transportFailure = transient && !res?.statusCode;
+				failure.transportFailure = transient && (!res?.statusCode || res.statusCode < 400);
 				reject(failure);
 			} else reject(new Error("Secure request failed; it was not retried."));
 		};
@@ -166,7 +166,7 @@ async function send(
 						if (done) return;
 						try {
 							if (!res?.complete) {
-								finish();
+								finish(undefined, true);
 								return;
 							}
 							const bytes = Buffer.concat(chunks, size);

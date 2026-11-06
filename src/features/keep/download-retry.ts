@@ -46,6 +46,8 @@ export async function retryDownload<T>(
 				options.checkCancelled();
 				await sleep(Math.min(100, remaining));
 			}
+			// Background timer throttling or a suspended device can outlast the planned delay.
+			if (now() - started >= 30_000) throw error;
 		}
 	}
 }

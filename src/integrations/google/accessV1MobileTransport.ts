@@ -73,6 +73,7 @@ export async function mobileAccessRequest(
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let status: number | undefined;
 	let timedOut = false;
+	let streamFailed = false;
 	try {
 		requireMobileFetch();
 		const encoder = new TextEncoder();
@@ -152,7 +153,10 @@ export async function mobileAccessRequest(
 		if (response.body) {
 			reader = response.body.getReader();
 			for (;;) {
-				const next = await reader.read();
+				const next = await reader.read().catch((error) => {
+					streamFailed = true;
+					throw error;
+				});
 				if (controller.signal.aborted) throw new Error();
 				if (next.done) break;
 				if (!(next.value instanceof Uint8Array)) throw new Error();
@@ -187,8 +191,8 @@ export async function mobileAccessRequest(
 	} catch {
 		if (acceptHttpErrors) {
 			const failure = new AccessV1RequestError(status);
-			failure.responseRejected = !timedOut;
-			failure.transportFailure = timedOut;
+			failure.responseRejected = !timedOut && !streamFailed;
+			failure.transportFailure = (timedOut || streamFailed) && (status === undefined || status < 400);
 			throw failure;
 		}
 		throw new Error("Google authentication failed; it was not retried.");

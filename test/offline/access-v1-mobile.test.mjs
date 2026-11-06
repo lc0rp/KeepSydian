@@ -374,3 +374,15 @@ test("binary success remains bytes, text is strict UTF8", async () => {
 	assert.equal(result.bytes[0], 255);
 	assert.throws(() => result.text);
 });
+
+test("a failed successful-response stream is transient, while opaque Fetch failures remain unclassified", async()=>{
+ const r=runtime(req=>{
+  const stream=new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode('{"notes":'));controller.error(new TypeError('stream interrupted'));}});
+  const value=new Response(stream,{status:200});Object.defineProperties(value,{url:{value:req.url},type:{value:'cors'}});return value;
+ });
+ await assert.rejects(r.api.accessBackendRequest(BACKEND,"GET",{}),error=>error.transportFailure===true&&error.responseRejected===false);
+ assert.equal(r.requests.length,1); // Retry ownership remains at the authenticated boundary.
+ const opaque=runtime(()=>{throw new TypeError('Failed to fetch');});
+ await assert.rejects(opaque.api.accessBackendRequest(BACKEND,"GET",{}),error=>error.transportFailure===false&&error.responseRejected===true);
+ assert.equal(opaque.requests.length,1);
+});
