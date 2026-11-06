@@ -241,14 +241,6 @@ export function persistLastSuccessfulSyncDate(plugin: KeepSidianPlugin, isoStrin
 	setVaultConfig(plugin, LAST_SUCCESSFUL_SYNC_DATE_KEY, isoString);
 }
 
-export function buildDownloadSyncFilters(
-	plugin: KeepSidianPlugin,
-	downloadScope?: DownloadScope,
-	startedAt = Date.now()
-): SyncFilters {
-	return resolveDownloadDateWindow(downloadScope, getLastSuccessfulSyncDate(plugin), startedAt).filters;
-}
-
 export interface SyncCallbacks {
 	archivedStatus?: KeepArchivedStatus;
 	attempt?: SyncAttempt;

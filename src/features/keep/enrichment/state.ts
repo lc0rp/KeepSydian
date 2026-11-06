@@ -56,7 +56,6 @@ export const ApplicationJournalSchema = z.object({
 });
 export type EnrichmentState = z.infer<typeof StateSchema>;
 export type EnrichmentRecord = z.infer<typeof RecordSchema>;
-export type Projection = z.infer<typeof ProjectionSchema>;
 export const emptyState = (): EnrichmentState => ({
 	version: 1,
 	namespaceVersion: 1,

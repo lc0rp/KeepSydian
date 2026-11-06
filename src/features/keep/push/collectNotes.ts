@@ -71,10 +71,6 @@ function guessMimeType(fileName: string): string {
 	return mapping[extension] || "application/octet-stream";
 }
 
-export function roundDateToSeconds(date: Date): Date {
-	return new Date(Math.floor(date.getTime() / 1000) * 1000);
-}
-
 async function collectAttachments(
 	adapter: VaultAdapter,
 	noteContent: string,

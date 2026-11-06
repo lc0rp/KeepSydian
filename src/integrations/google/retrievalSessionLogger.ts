@@ -81,10 +81,6 @@ async function writeLine(
 	}
 }
 
-export function getActiveRetrievalWizardLogPath(): string | undefined {
-	return activeSession?.logPath;
-}
-
 export async function startRetrievalWizardSession(
 	plugin: KeepSidianPlugin,
 	metadata: Record<string, unknown> = {}
@@ -141,8 +137,4 @@ export async function endRetrievalWizardSession(
 		...metadata,
 	});
 	activeSession = null;
-}
-
-export function isRetrievalWizardSessionActive(): boolean {
-	return Boolean(activeSession);
 }

@@ -468,10 +468,6 @@ export async function runPreparedSyncPlan(
 	});
 }
 
-export async function runImportWithOptions(plugin: KeepSidianPlugin, options: NoteImportOptions, getErrorMessage: ErrorMessageResolver): Promise<void> {
-	await runImportNotesFlow(plugin, false, getErrorMessage, options);
-}
-
 export async function runImportNotesFlow(
 	plugin: KeepSidianPlugin,
 	auto: boolean,
