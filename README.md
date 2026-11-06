@@ -2,8 +2,10 @@
 
 **Connect Obsidian to Google Keep & sync on demand or set and forget.**
 
+Google Keep is great for getting an idea down fast, especially on the go.
+
 If, like me, you use Google Keep alongside Obsidian, this plugin is for you. Obsidian's one-time Google Takeout import
-gets tedious for anything more than a once-off migration.
+gets tedious for anything more than a once-off migration. This plugin makes continuous syncing a breeze.
 
 [![License](https://img.shields.io/github/license/lc0rp/KeepSydian?style=flat-square)](LICENSE)
 [![Issues](https://img.shields.io/github/issues/lc0rp/KeepSydian?style=flat-square)](https://github.com/lc0rp/KeepSydian/issues)
@@ -12,92 +14,15 @@ gets tedious for anything more than a once-off migration.
 
 ![Google Keep to Obsidian note](assets/keepsydian-hero.png)
 
-Google Keep is great for getting an idea down fast, especially on the go.
-
-When you want that note incorporated into your knowledge workflow, KeepSydian copies it into Obsidian and keeps the two
-versions connected. For manual syncing, KeepSydian provides a review center, so you can see and approve any changes
-before the plugin writes to your vault. Or, you can set it and forget it, and let KeepSydian run in the background.
+KeepSydian copies your Google Keep notes into Obsidian and keeps the two versions connected. For manual syncing, 
+KeepSydian provides a review center, so you can see and approve any changes before the plugin alters your vault. 
+Or, you can set it and forget it, and let KeepSydian run in the background.
 
 [Install KeepSydian](https://obsidian.md/plugins?id=keepsidian) |
 [Unlock supporter features](https://keepsidianserver-v2-162887264002.us-central1.run.app/subscribe) |
 [See how it works](#how-it-works)
 
 ## Move quick captures into Obsidian
-
-### AI reuse in the local implementation branch
-
-AI title and tag suggestions are kept in a vault-local ledger. Repeated syncs,
-date-range changes, credential refreshes and releases reuse accepted results.
-Relevant content or prompt changes can request a new result. Prefix changes and
-lower tag limits use the same raw tags. Review preparation does no AI work; a
-missing suggestion is requested only when its note is selected for execution.
-
-Official versioned release routes share one stable service identity, so upgrading
-the plugin keeps cache entries, ownership and uncertain-attempt guards. Accounts
-and unrelated/custom backend endpoints remain isolated. Existing nonempty ledgers
-from unreleased URL-keyed builds are preserved and block new AI work until their
-history can be reviewed safely; the client never clears them to retry. Public
-beta.7 predates this ledger format.
-
-Existing titles and tags start as manual. Saved AI settings do not start tag
-generation for previously imported notes. A default-off choice in each download
-can admit selected notes to tag generation; those notes then reuse accepted
-results until relevant content changes. Existing titles stay manual.
-The plugin protects edited titles, keeps deliberately removed AI tags removed,
-and preserves manual tags. Competing
-Keep and Obsidian field edits hold uploads until those fields are resolved.
-Resolving a title conflict keeps unresolved tag conflicts. Title updates accept
-quoted keys and scalar blocks; unsafe title or tag YAML alias changes stop before
-a note write. Failed folder scans stop AI admission. A later manual import also
-clears admission granted only by an abandoned preview.
-Folder patterns search the fixed ancestor before the first variable, including
-older date/title folders. A variable in the first segment requires a vault-root
-scan. Admission and destination lookup read the same identity scope; a cold
-metadata cache cannot create another copy of a linked note.
-Duplicate identities, unreadable candidates and invalid frontmatter stop imports
-before generation or note writes, even with AI off. Repair the affected files and
-retry. A present `GoogleKeepUrl` must contain one supported Google Keep note URL;
-lists, objects, empty values, other types, invalid URLs and conflicting aliases
-stop the scan. A note with no identity property remains a legitimate unlinked
-note. Discovery, AI admission and destination lookup use the same validated URL.
-Identity validation also precedes the one-time frontmatter casing migration.
-That migration preserves equivalent aliases when the canonical key already
-exists. It only considers documents made of independently parseable single-line
-root properties, then verifies that parsed data changes only by the intended key
-renames. Original delimiter, newline and body bytes are retained. Multiline,
-ambiguous or unsupported structures remain byte-for-byte unchanged, keeping the
-supported legacy aliases without repeat migration scans.
-A cached suggestion still requires admission before it can be applied to
-an existing manual note; a fresh tag choice can reuse that result without a new
-provider call. Files beginning with a byte-order marker are held; save them as
-UTF-8 without BOM before retrying, because title/tag writers do not consistently
-support that format yet.
-The ledger also guards uncertain requests so losing a reply cannot cause an
-automatic repeat charge. A failed larger-tag request keeps its earlier result.
-Native transports can resend a POST internally. Each paid batch therefore first
-gets a server process capability, then saves its local guard and sends one bound
-operation. The matching server replays completed duplicates or holds uncertain
-ones. Failed capability preflight can be retried without a paid-attempt guard.
-After a paid POST, the client never refreshes the capability automatically.
-Server restarts or requests reaching a different worker fail closed; production
-routing availability must be validated before release. The bounded server replay
-memory is separate from durable reuse in the vault.
-
-This local branch needs the matching server contract. It has no automatic cache
-expiry or regeneration on model-default changes. It has no explicit retry/reset
-UI yet. Missing or damaged initialized metadata stops AI work.
-After an unconfirmed upload, AI work pauses until a reviewed upload produces a
-confirmed source receipt. This conservative recovery can require manual conflict
-resolution; it does not infer ownership from an ambiguous remote snapshot.
-The main ledger is limited to 8 MiB. A separate application journal is limited to
-256 KiB and holds at most 15 note receipts before a checked snapshot checkpoint.
-Both files must stay together when the vault is backed up or restored. Interrupted
-writes either recover a confirmed receipt or stop AI work; this does not promise
-power-loss atomicity from the vault adapter.
-Simultaneous apps or separate devices do not have a shared durable claim. These
-files contain private titles, labels and outputs; keep them under the vault's
-normal protection.
-Installed desktop/mobile UAT and any release remain separate approval steps.
 
 I built KeepSydian because I use Keep for quick capture and Obsidian for everything else.
 
@@ -110,7 +35,7 @@ KeepSydian manages the handoff seamlessly. With a few clicks, you can:
 - Run download syncs in the background every 24 hours (or at shorter intervals if you're a supporter).
 - Track each sync in a dated activity log inside your vault.
 
-A Google Takeout import is great for that one-time migration, but if both sides keep changing, KeepSydian can help you
+A Google Takeout import is great for that one-time migration, but if you actively use both apps, KeepSydian can help you
 stay in sync.
 
 ## How it works
