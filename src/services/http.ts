@@ -174,18 +174,6 @@ export async function httpPostJson<TRes = unknown, TReq = unknown>(
 	return httpRequest<TRes>(url, { method: "POST", headers, body });
 }
 
-// Returns the raw response without status checking. Useful for endpoints that
-// intentionally use 3xx or non-JSON payloads that the caller will handle.
-export async function httpGetRaw(url: string, headers?: Record<string, string>): Promise<RequestUrlResponse> {
-	if (usesAccessBoundary(url, headers)) {
-		requireAccessTransport();
-		const response = await requestAccessBackend(url, "GET", headers ?? {});
-		const arrayBuffer = new Uint8Array(response.bytes).buffer;
-		return { status: response.status, headers: {}, arrayBuffer, text: response.text, json: undefined };
-	}
-	return requestUrl({ url, method: "GET", headers });
-}
-
 // Fetch a binary payload as an ArrayBuffer with status checking.
 export async function httpGetArrayBuffer(url: string, headers?: Record<string, string>): Promise<ArrayBuffer> {
 	if (usesAccessBoundary(url, headers)) {

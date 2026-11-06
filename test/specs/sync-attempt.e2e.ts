@@ -5,6 +5,7 @@ import { build } from "esbuild";
 import { browser, expect } from "@wdio/globals";
 import type KeepSidianPlugin from "../../src/app/main";
 import type { LastSyncAttempt } from "../../src/types/sync-attempt";
+import { createTranslator } from "../../src/lang/index";
 
 describe("Sync attempt observability in installed Obsidian", function () {
 	let server: Server | undefined;
@@ -178,7 +179,9 @@ describe("Sync attempt observability in installed Obsidian", function () {
 				plugin.progressModal?.close();
 				plugin.openSyncCenter({ mode: "import" });
 			});
-			expect(await browser.$(".keepsidian-modal").getText()).toContain(`Last attempt ${result.attempt.id}: failed`);
+			expect(await browser.$(".keepsidian-modal").getText()).toContain(
+				`Last attempt ${result.attempt.id}: ${createTranslator("en").t("attempt.failed")}`
+			);
 			await browser.saveScreenshot(`.tmp/test-results/sync-attempt-${scenario}-reopened.png`);
 		});
 	}

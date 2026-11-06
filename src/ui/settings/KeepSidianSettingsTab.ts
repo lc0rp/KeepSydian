@@ -19,7 +19,6 @@ import {
 	addSupportSection as addSupportSectionSection,
 } from "./KeepSidianSettingsTab/commonSettings";
 import {
-	addAdvancedSettings as addAdvancedSettingsSection,
 	addSyncTokenSetting as addSyncTokenSettingSection,
 } from "./KeepSidianSettingsTab/tokenSettings";
 
@@ -54,9 +53,9 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 		void this.renderSettings();
 	}
 
-	private async renderSettings(): Promise<void> {
-		const focusedRole = this.containerEl.contains(document.activeElement)
-			? document.activeElement?.closest("[data-keepsidian-role]")?.getAttribute("data-keepsidian-role") : null;
+	private async renderSettings(focusRole?: "language" | "draft-translations"): Promise<void> {
+		const focusedRole = focusRole ?? (this.containerEl.contains(document.activeElement)
+			? document.activeElement?.closest("[data-keepsidian-role]")?.getAttribute("data-keepsidian-role") : null);
 		this.containerEl.empty();
 		this.containerEl.classList.add("keepsidian-settings-tab");
 		// Each async render owns a child. A superseded render can only finish in its detached child.
@@ -70,13 +69,14 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 			.addDropdown((dropdown) => {
 				dropdown.selectEl.setAttribute("data-keepsidian-role", "language");
 				dropdown.selectEl.setAttribute("aria-label", t("language.name"));
+				dropdown.selectEl.closest(".setting-item")?.addEventListener("focus", () => dropdown.selectEl.focus());
 				dropdown.addOptions({ system: t("language.system"), en: "English", zh: "简体中文 (草稿)", ru: "Русский (черновик)", de: "Deutsch (Entwurf)" })
 					.setValue(this.plugin.settings.language ?? "system")
 					.onChange(async (value) => {
 						this.plugin.settings.language = normalizeLanguagePreference(value);
 						await this.plugin.saveSettings();
 						refreshUiLanguage();
-						this.display();
+						await this.renderSettings("language");
 					});
 			});
 		new Setting(containerEl)
@@ -88,7 +88,7 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 					this.plugin.settings.useDraftTranslations = value;
 					await this.plugin.saveSettings();
 					refreshUiLanguage();
-					this.display();
+					await this.renderSettings("draft-translations");
 				});
 			});
 		const draftControl = containerEl.querySelector<HTMLElement>(".keepsidian-draft-translations .checkbox-container, .keepsidian-draft-translations input");
@@ -101,7 +101,14 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 			input?.setAttribute("aria-hidden", "true");
 			input?.setAttribute("tabindex", "-1");
 			input?.addEventListener("focus", () => draftControl.focus());
+			draftControl.closest(".setting-item")?.addEventListener("focus", () => draftControl.focus());
 			draftControl.addEventListener("keydown", (event) => {
+				if (event.key === "Tab" && event.shiftKey) {
+					event.preventDefault();
+					event.stopImmediatePropagation();
+					containerEl.querySelector<HTMLSelectElement>('[data-keepsidian-role="language"]')?.focus();
+					return;
+				}
 				if (event.key !== " " && event.key !== "Enter") return;
 				event.preventDefault();
 				event.stopImmediatePropagation();
@@ -116,10 +123,6 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 				control?.setAttribute("aria-describedby", description.id);
 			}
 		}
-		if (focusedRole === "language" || focusedRole === "draft-translations") {
-			containerEl.querySelector<HTMLElement>(`[data-keepsidian-role="${focusedRole}"]`)?.focus();
-		}
-
 		this.addSupportSection(containerEl);
 		new Setting(containerEl).setName(t("settings.retrieve")).setHeading();
 		this.addEmailSetting(containerEl);
@@ -133,6 +136,9 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 		await this.addSubscriptionSettings(containerEl);
 		containerEl.createEl("hr", { cls: "keepsidian-settings-hr" });
 		this.addSupportSection(containerEl);
+		if (focusedRole === "language" || focusedRole === "draft-translations") {
+			containerEl.querySelector<HTMLElement>(`[data-keepsidian-role="${focusedRole}"]`)?.focus();
+		}
 	}
 
 	private addSupportSection(containerEl: HTMLElement): void {
@@ -173,10 +179,6 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 
 	private addGithubInstructionsLink(setting: Setting): void {
 		addGithubInstructionsLinkSection(setting);
-	}
-
-	private addAdvancedSettings(containerEl: HTMLElement): void {
-		addAdvancedSettingsSection(this.plugin, containerEl);
 	}
 
 	private async handleTokenPaste(event: ClipboardEvent): Promise<void> {

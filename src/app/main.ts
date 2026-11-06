@@ -640,8 +640,4 @@ export default class KeepSidianPlugin extends Plugin {
 			this.autoSyncInterval = undefined;
 		}
 	}
-
-	private async logSync(message: string) {
-		/* moved to app/logging.ts */
-	}
 }

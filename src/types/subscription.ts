@@ -20,12 +20,6 @@ export interface SubscriptionCache {
 	identity?: string;
 }
 
-export interface SubscriptionStatus {
-	isActive: boolean;
-	expiresAt?: Date;
-	plan?: "basic" | "premium";
-}
-
 export type KeepPinnedStatus = "all" | "pinned" | "unpinned";
 export type KeepArchivedStatus = "active-only" | "archived-only" | "all";
 
