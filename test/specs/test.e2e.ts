@@ -4,12 +4,16 @@ import { resolve } from "node:path";
 import { createPreparedSyncPlanFixture, createSyncPlanEntryFixture } from "../utils/fixtures/sync-plan";
 import type { SyncMode } from "../../src/types/index";
 import { focusVaultWindow, routeAppCommandsToVault } from "../helpers/vault-window";
+import { createTranslator } from "../../src/lang/index";
 
 describe("KeepSidian", function () {
 	const buttonByText = (label: string): string =>
 		`//*[self::button or @role="button"][contains(normalize-space(.),"${label}")]`;
 	const exactButtonByText = (label: string): string =>
 		`//*[self::button or @role="button"][normalize-space(.)="${label}"]`;
+	const english = createTranslator("en");
+	const progressChip = (label: string, processed: number, total: number) =>
+		browser.$(exactButtonByText(english.t("sync.countProgress", { label, processed, total })));
 
 	const triggerSyncCenterBackdropClick = async (): Promise<void> => {
 		await browser.executeObsidian(({ app }) => {
@@ -478,7 +482,7 @@ describe("KeepSidian", function () {
 		await openKeepSidianSettingsTab();
 		await stubTokenExchange("e2e-keep-token");
 
-		const tokenInput = browser.$('//input[@placeholder="Google Keep sync token."]');
+		const tokenInput = browser.$(`input[placeholder="${english.t("settings.token.placeholder")}"]`);
 		await tokenInput.waitForExist({ timeout: 20000 });
 		await tokenInput.setValue("oauth2_4/e2e-token");
 
@@ -523,7 +527,7 @@ describe("KeepSidian", function () {
 		await openKeepSidianSettingsTab();
 		await stubTokenExchange("e2e-keep-token-mobile");
 
-		const tokenInput = browser.$('//input[@placeholder="Google Keep sync token."]');
+		const tokenInput = browser.$(`input[placeholder="${english.t("settings.token.placeholder")}"]`);
 		await tokenInput.waitForExist({ timeout: 20000 });
 		await tokenInput.setValue("oauth2_4/e2e-token-mobile");
 
@@ -614,11 +618,11 @@ describe("KeepSidian", function () {
 
 		const runningTitle = browser.$('//*[normalize-space(.)="Running download plan"]');
 		await runningTitle.waitForExist({ timeout: 20000 });
-		expect(await browser.$('//*[contains(normalize-space(.),"Created 0/1")]').isExisting()).toBe(true);
+		expect(await progressChip(english.t("sync.created"), 0, 1).isExisting()).toBe(true);
 
 		const completeTitle = browser.$('//*[normalize-space(.)="Download complete"]');
 		await completeTitle.waitForExist({ timeout: 20000 });
-		expect(await browser.$('//*[contains(normalize-space(.),"Created 1/1")]').isExisting()).toBe(true);
+		expect(await progressChip(english.t("sync.created"), 1, 1).isExisting()).toBe(true);
 		expect(await browser.$(buttonByText("Open sync log")).isExisting()).toBe(true);
 		expect(await browser.$(buttonByText("Close sync center")).isExisting()).toBe(true);
 	});
@@ -846,7 +850,10 @@ describe("KeepSidian", function () {
 
 		const warningTitle = browser.$('//*[normalize-space(.)="Download complete with warnings"]');
 		await warningTitle.waitForExist({ timeout: 20000 });
-		expect(await browser.$('//*[contains(normalize-space(.),"2 attachment warnings")]').isExisting()).toBe(true);
+		const warningStatus = await browser.$(".keepsidian-modal-status").getText();
+		expect(warningStatus).toContain(english.t("sync.last.warning"));
+		expect(warningStatus).toContain(english.t("sync.noteRatio", { processed: 1, total: 1 }));
+		expect(warningStatus).toContain(english.t("sync.attachmentWarnings", { count: 2 }));
 		await browser.saveScreenshot("/tmp/keepsidian-attachment-warning.png");
 	});
 
@@ -961,8 +968,12 @@ describe("KeepSidian", function () {
 
 		// The disabled canceling state is covered by modal unit tests and may complete
 		// before WebDriver's next poll when a seeded run observes cancellation quickly.
-		const canceledSummary = browser.$('//*[contains(normalize-space(.),"was canceled after")]');
-		await canceledSummary.waitForExist({ timeout: 20000 });
+		await expect(browser.$(".keepsidian-modal-status")).toHaveText(
+			expect.stringContaining(english.t("sync.canceled"))
+		);
+		expect(await browser.$(".keepsidian-modal-status").getText()).toContain(
+			english.t("sync.noteRatio", { processed: 0, total: 1 })
+		);
 		expect(await browser.$('//*[normalize-space(.)="Sync center"]').isExisting()).toBe(true);
 		expect(await browser.$(buttonByText("Start sync")).isExisting()).toBe(true);
 		expect(await browser.$('//*[contains(normalize-space(.),"failed after")]').isExisting()).toBe(false);
@@ -1008,12 +1019,12 @@ describe("KeepSidian", function () {
 
 		const runningTitle = browser.$('//*[normalize-space(.)="Running upload plan"]');
 		await runningTitle.waitForExist({ timeout: 20000 });
-		expect(await browser.$('//*[contains(normalize-space(.),"Uploaded 0/1")]').isExisting()).toBe(true);
+		expect(await progressChip(english.t("sync.uploaded"), 0, 1).isExisting()).toBe(true);
 
 		const completeTitle = browser.$('//*[normalize-space(.)="Upload complete"]');
 		await completeTitle.waitForExist({ timeout: 20000 });
-		expect(await browser.$('//*[contains(normalize-space(.),"Uploaded 1/1")]').isExisting()).toBe(true);
-		expect(await browser.$('//*[contains(normalize-space(.),"Already up to date 1/1")]').isExisting()).toBe(true);
+		expect(await progressChip(english.t("sync.uploaded"), 1, 1).isExisting()).toBe(true);
+		expect(await progressChip(english.t("sync.action.upToDate"), 1, 1).isExisting()).toBe(true);
 	});
 
 	it("applies, rejects a replacement, and removes a supporter key in settings (desktop)", async function () {

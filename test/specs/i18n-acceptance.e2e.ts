@@ -70,11 +70,14 @@ describe("Multilingual responsive and accessibility acceptance (synthetic servic
 		await browser.executeObsidian(({ app }) => {
 			const p = app.plugins.getPlugin("keepsidian") as any;
 			if (!p || p.settings.email || p.settings.token) throw new Error("Expected blank synthetic vault");
-			document.querySelectorAll(".modal-close-button").forEach((el: HTMLElement) => el.click());
 			p.subscriptionService.isSubscriptionActive = async () => false;
 			p.subscriptionService.checkSubscription = async () => null;
 			p.settings.autoSyncEnabled = false;
 		});
+		const feedback = browser.$(".keepsidian-feedback-modal");
+		await feedback.waitForDisplayed();
+		await feedback.$("button").click();
+		await feedback.waitForExist({ reverse: true });
 		const width = await browser.execute(() => innerWidth);
 		evidenceDir = resolve(`.tmp/output/i18n-acceptance/${mobile ? "mobile-emulation" : "desktop"}-${width}`);
 		mkdirSync(evidenceDir, { recursive: true });
@@ -205,9 +208,10 @@ describe("Multilingual responsive and accessibility acceptance (synthetic servic
 			}
 			// Exercise both exact boundaries, rather than a reverse Tab from an arbitrary control.
 			await browser.execute(() => {
+				const dialog = document.querySelector(".keepsidian-modal")!.closest(".modal")!;
 				const controls = Array.from(
-					document.querySelectorAll<HTMLElement>(
-						".modal button, .modal input, .modal select, .modal textarea, .modal a[href], .modal [tabindex]"
+					dialog.querySelectorAll<HTMLElement>(
+						"button, input, select, textarea, a[href], [tabindex]"
 					)
 				).filter(
 					(element) =>
