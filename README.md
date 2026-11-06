@@ -18,8 +18,8 @@ KeepSydian copies your Google Keep notes into Obsidian and keeps the two version
 KeepSydian provides a review center, so you can see and approve any changes before the plugin alters your vault. 
 Or, you can set it and forget it, and let KeepSydian run in the background.
 
-[Install KeepSydian](https://obsidian.md/plugins?id=keepsidian) |
-[Unlock supporter features](https://keepsidianserver-v2-162887264002.us-central1.run.app/subscribe) |
+[Install KeepSydian ↗](https://obsidian.md/plugins?id=keepsidian) |
+[Unlock supporter features ↗](https://keepsidianserver-v2-162887264002.us-central1.run.app/subscribe) |
 [See how it works](#how-it-works)
 
 ## Move quick captures into Obsidian
@@ -72,11 +72,11 @@ Active supporters can manage billing from **Settings > KeepSydian > Exclusive fe
 
 ### 1. Install the plugin
 
-Install KeepSydian from the [Obsidian community plugin store](https://obsidian.md/plugins?id=keepsidian).
+Install KeepSydian from the [Obsidian community plugin store ↗](https://obsidian.md/plugins?id=keepsidian).
 
 You can also:
 
-- Install through [BRAT](https://github.com/TfTHacker/obsidian42-brat).
+- Install through [BRAT ↗](https://github.com/TfTHacker/obsidian42-brat).
 - Clone this repository into `{vault}/.obsidian/plugins/keepsidian`.
 
 After installation, enable KeepSydian under **Settings > Community plugins**, then open its settings.
@@ -85,7 +85,7 @@ After installation, enable KeepSydian under **Settings > Community plugins**, th
 
 On desktop, choose **Retrieve token with helper**. KeepSydian asks before downloading the open-source token helper from
 GitHub Releases, then reuses the installed helper until an update is needed. If you prefer, you can follow the manual
-[Keep-It-Markdown](https://github.com/djsudduth/keep-it-markdown) instructions and paste the token yourself.
+[Keep-It-Markdown ↗](https://github.com/djsudduth/keep-it-markdown) instructions and paste the token yourself.
 
 On mobile, the retrieval helper is not available. Retrieve a token on desktop and transfer it to your phone using a
 method you trust. You can also paste a short-lived `oauth2_4...` token and let the KeepSydian server exchange it.
@@ -120,14 +120,14 @@ They open the same sync center flow, and will be removed in future versions.
 Your Google Keep token is stored on your device. When your Obsidian version supports Secret Storage, KeepSydian uses it.
 
 KeepSydian sends your email, token, and the note data needed for the requested sync to its server. The server uses
-[Keep-It-Markdown](https://github.com/djsudduth/keep-it-markdown) to connect to Google Keep, discards the credentials
+[Keep-It-Markdown ↗](https://github.com/djsudduth/keep-it-markdown) to connect to Google Keep, discards the credentials
 after the request, and does not log or store your credentials or notes.
 
 This server lets you use KeepSydian without installing and maintaining a local Python environment.
 
 After installation or an upgrade, KeepSydian may show one local feedback invitation for that plugin version. The
 survey is not loaded and no survey event is sent unless you select **Give feedback**. That action opens the external
-[KeepSydian user feedback survey](https://forms.gle/pVs8GtohFWmqs5F4A) in Google Forms. Survey responses and any
+[KeepSydian user feedback survey ↗](https://forms.gle/pVs8GtohFWmqs5F4A) in Google Forms. Survey responses and any
 optional email address are handled by the form, not stored in your vault or returned to the plugin.
 
 ## Sync details
@@ -201,7 +201,7 @@ plugin could remain in the official directory. Only the spelling changed.
 
 Found a bug or have an idea? [Open an issue](https://github.com/lc0rp/KeepSydian/issues).
 
-You can also complete the [KeepSydian user feedback survey](https://forms.gle/pVs8GtohFWmqs5F4A).
+You can also complete the [KeepSydian user feedback survey ↗](https://forms.gle/pVs8GtohFWmqs5F4A).
 
 ## License
 
