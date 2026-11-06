@@ -65,7 +65,7 @@ hands-on support.
 |Two-way background sync||Yes|
 |Priority support and early access||Yes|
 
-[Support KeepSydian monthly or annually](https://keepsidianserver-v2-162887264002.us-central1.run.app/subscribe).
+[Support KeepSydian monthly or annually ↗](https://keepsidianserver-v2-162887264002.us-central1.run.app/subscribe).
 Active supporters can manage billing from **Settings > KeepSydian > Exclusive features for project supporters**.
 
 ## Install and sync
