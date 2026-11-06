@@ -937,3 +937,60 @@ it("does not rewrite receipts for an identical applied image", async () => {
 	await f.ledger.finish(incoming);
 	expect(f.adapter.write).not.toHaveBeenCalled();
 });
+
+it("persists the operation before dispatch and recovers a lost result after reopening the ledger", async()=>{
+ const f=fixture(), current=await note();
+ const prep=jest.spyOn(keepApi,"prepareLocalEnrichment").mockResolvedValue("recover-operation");
+ const paid=jest.spyOn(keepApi,"enrichLocalNotes").mockImplementation(async()=>{
+  expect(JSON.parse(f.stored.get(METADATA)!).state.operations["recover-operation"].rows[0].request.source.id).toBe("note-0");
+  throw Error("response lost");
+ });
+ const lookup=jest.spyOn(keepApi,"lookupLocalEnrichment").mockImplementation(async(_e,_t,rows)=>f.provider(_e,_t,rows));
+ try {
+  await enrichImportNotes(f.plugin,[current],FLAGS,f.ledger);
+  const reopened=new EnrichmentLedger(f.plugin);
+  const [recovered]=await enrichImportNotes(f.plugin,[current],FLAGS,reopened,undefined,false);
+  expect(recovered.title).toBe("AI Proposed");expect(paid).toHaveBeenCalledTimes(1);
+  expect(lookup).toHaveBeenCalledWith("synthetic@example.test","fake-token",expect.any(Array),undefined,"recover-operation");
+ } finally {prep.mockRestore();paid.mockRestore();lookup.mockRestore();}
+});
+
+it.each(["enrichment_replay_pending","enrichment_replay_held","enrichment_replay_expired"])("requires an explicit selection and completed window for %s",async code=>{
+ const f=fixture(), current=await note();
+ const prep=jest.spyOn(keepApi,"prepareLocalEnrichment").mockImplementation(async (_e,_t,_s,window)=>{window?.(45_000);return "old-operation";});
+ const paid=jest.spyOn(keepApi,"enrichLocalNotes").mockRejectedValueOnce(Error("response lost")).mockImplementation(f.provider);
+ const {AccessV1RequestError}=await import("@services/errors");
+ const lookup=jest.spyOn(keepApi,"lookupLocalEnrichment").mockRejectedValue(new AccessV1RequestError(code.includes("expired")?410:409,code));
+ const {chooseUncertainRetry}=await import("../../../../../src/features/keep/enrichment/retry-consent");
+ const clock=jest.spyOn(Date,"now"); const now=Date.now();clock.mockReturnValue(now);
+ try {
+  await enrichImportNotes(f.plugin,[current],FLAGS,f.ledger);
+  chooseUncertainRetry(current,true);
+  await enrichImportNotes(f.plugin,[current],FLAGS,f.ledger); // Too soon, no paid retry.
+  expect(paid).toHaveBeenCalledTimes(1);
+  clock.mockReturnValue(now+60_000);
+  await enrichImportNotes(f.plugin,[current],FLAGS,f.ledger); // Choice consumed; no silent later execution.
+  expect(paid).toHaveBeenCalledTimes(1);
+  chooseUncertainRetry(current,true);prep.mockResolvedValue("new-operation");
+  await enrichImportNotes(f.plugin,[current],FLAGS,f.ledger);
+  expect(paid).toHaveBeenCalledTimes(code.includes("pending")?1:2);
+ } finally {prep.mockRestore();paid.mockRestore();lookup.mockRestore();clock.mockRestore();}
+});
+
+it("rejects a saved result for changed current source and preserves edits made after the response was lost",async()=>{
+ const f=fixture(), current=await note();
+ const prep=jest.spyOn(keepApi,"prepareLocalEnrichment").mockImplementation(async (_e,_t,_s,window)=>{window?.(45_000);return "old-operation";});
+ const paid=jest.spyOn(keepApi,"enrichLocalNotes").mockRejectedValue(Error("response lost"));
+ const lookup=jest.spyOn(keepApi,"lookupLocalEnrichment").mockImplementation(async(_e,_t,rows)=>f.provider(_e,_t,rows));
+ try {
+  const [uncertain]=await enrichImportNotes(f.plugin,[current],FLAGS,f.ledger);
+  await f.apply(uncertain,"Keep/Human 0.md");
+  const manual=f.stored.get("Keep/Human 0.md")!.replace("Decision: pause.","My edited body.");
+  f.stored.set("Keep/Human 0.md",manual);
+  const [recovered]=await enrichImportNotes(f.plugin,[current],FLAGS,f.ledger,undefined,false);
+  expect(recovered.title).not.toBe("AI Proposed");
+  expect(f.stored.get("Keep/Human 0.md")).toBe(manual);
+  const [different]=await enrichImportNotes(f.plugin,[await note(0,"Remote edit")],FLAGS,f.ledger,undefined,false);
+  expect(different.title).not.toBe("AI Proposed");expect(paid).toHaveBeenCalledTimes(1);
+ } finally {prep.mockRestore();paid.mockRestore();lookup.mockRestore();}
+});

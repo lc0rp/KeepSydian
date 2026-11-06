@@ -210,7 +210,7 @@ describe("archive download planning and execution", () => {
 				{ changed_gt: LAST_SYNC, created_lt: new Date(startedAt).toISOString(), updated_lt: new Date(startedAt).toISOString() },
 				undefined,
 				undefined,
-				undefined
+				undefined, false, expect.objectContaining({checkCancelled: expect.any(Function),onRetry:expect.any(Function)})
 			);
 			expect(files.get(NOTE_PATH)).toBe(ORIGINAL);
 			expect(await run(plan!)).toEqual({});

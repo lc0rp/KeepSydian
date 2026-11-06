@@ -354,7 +354,7 @@ describe("premium recovery through the manual sync caller", () => {
 		assertNoImport();
 	});
 
-	it.each([400, 401, 403, 410, 413])(
+	it.each([400, 401, 403, 413])(
 		"does not retry permanent HTTP %s and discards retained preparation",
 		async (status) => {
 			const server = replayServer(8);
@@ -369,6 +369,23 @@ describe("premium recovery through the manual sync caller", () => {
 			);
 		}
 	);
+
+    it("restarts a lost session once without mixing staged pages or advancing the checkpoint",async()=>{
+        const server=replayServer(8); server.fail(2,1,410,false,"sync_session_expired");
+        const plan=await prepare();
+        expect(plan?.importNotes).toHaveLength(8);
+        expect(new Set(plan?.importNotes?.map(note=>note.id)).size).toBe(8);
+        expect(server.requests).toHaveLength(4);
+        expect(new URL(server.requests[2].url).searchParams.get("offset")).toBe("0");
+        const bounds=server.requests.map(req=>{const q=new URL(req.url).searchParams;return [q.get("changed_gt"),q.get("created_lt"),q.get("updated_lt")];});
+        expect(bounds.every(value=>JSON.stringify(value)===JSON.stringify(bounds[0]))).toBe(true);
+        assertNoImport();
+    });
+    it("surfaces a second session loss and never loops or imports partial pages",async()=>{
+        const server=replayServer(8);server.fail(2,2,410,false,"sync_session_expired");
+        await expect(prepare()).rejects.toMatchObject({status:410,code:"sync_session_expired"});
+        expect(server.requests).toHaveLength(4);assertNoImport();
+    });
 
 	it("cancels during real policy backoff and restarts without retained pages", async () => {
 		const server = replayServer(8);
@@ -398,7 +415,9 @@ describe("premium recovery through the manual sync caller", () => {
 			if (change === "flags") plugin.settings.premiumFeatures.suggestTags = true;
 			if (change === "restart") plugin = { ...plugin } as KeepSidianPlugin;
 			if (change === "epoch-change") {
-				await expect(prepare()).rejects.toMatchObject({ status: 410, code: "sync_session_expired" });
+				const recovered = await prepare();
+                expect(recovered?.importNotes).toHaveLength(8);
+                expect(new Set(recovered?.importNotes?.map(note=>note.id)).size).toBe(8);
 				expect(server.requests[4].headers?.["X-Sync-Operation"]).toBe(operation);
 			}
 			const requestIndex = server.requests.length;

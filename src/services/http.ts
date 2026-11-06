@@ -1,3 +1,5 @@
+import { isSyncCancellationError } from "@app/sync-cancel";
+import type { ReadRetryHooks } from "@features/keep/download-retry";
 import { requestUrl, type RequestUrlParam, type RequestUrlResponse } from "obsidian";
 import { NetworkError, ParseError, AccessV1RequestError } from "@services/errors";
 import { usesAccessBoundary, requestAccessBackend } from "@integrations/google/accessV1Backend";
@@ -5,6 +7,7 @@ import { requireAccessTransport } from "@integrations/google/accessV1Transport";
 
 export interface HttpOptions {
 	headers?: Record<string, string>;
+	readRetry?: ReadRetryHooks;
 }
 
 export interface HttpRequestOptions extends HttpOptions {
@@ -18,6 +21,7 @@ type ArrayBufferCallable = (this: ResponseLike) => ArrayBuffer | Promise<ArrayBu
 interface ResponseLike {
 	status?: number;
 	headers?: Record<string, string>;
+	readRetry?: ReadRetryHooks;
 	text?: string;
 	json?: unknown;
 	arrayBuffer?: ArrayBuffer | ArrayBufferCallable;
@@ -83,10 +87,10 @@ export async function httpRequest<T = unknown>(url: string, options: HttpRequest
 	if (usesAccessBoundary(url, headers)) {
 		requireAccessTransport();
 		try {
-			const response = await requestAccessBackend(url, method, headers, body);
+			const response = await requestAccessBackend(url, method, headers, body, options.readRetry);
 			return (response.text ? JSON.parse(response.text) : undefined) as T;
 		} catch (error) {
-			if (error instanceof AccessV1RequestError) throw error;
+			if (error instanceof AccessV1RequestError || isSyncCancellationError(error)) throw error;
 			throw new AccessV1RequestError();
 		}
 	}
@@ -162,16 +166,21 @@ export async function httpRequest<T = unknown>(url: string, options: HttpRequest
 	return await parseJsonDefensively<T>(asResponseLike(response));
 }
 
-export async function httpGetJson<T = unknown>(url: string, headers?: Record<string, string>): Promise<T> {
-	return httpRequest<T>(url, { method: "GET", headers });
+export async function httpGetJson<T = unknown>(
+	url: string,
+	headers?: Record<string, string>,
+	readRetry?: ReadRetryHooks
+): Promise<T> {
+	return httpRequest<T>(url, { method: "GET", headers, readRetry });
 }
 
 export async function httpPostJson<TRes = unknown, TReq = unknown>(
 	url: string,
 	body: TReq,
-	headers?: Record<string, string>
+	headers?: Record<string, string>,
+	readRetry?: ReadRetryHooks
 ): Promise<TRes> {
-	return httpRequest<TRes>(url, { method: "POST", headers, body });
+	return httpRequest<TRes>(url, { method: "POST", headers, body, readRetry });
 }
 
 // Fetch a binary payload as an ArrayBuffer with status checking.

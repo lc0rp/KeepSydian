@@ -1,3 +1,4 @@
+import { chooseUncertainRetry, hasUncertainRetry } from "@features/keep/enrichment/retry-consent";
 import { localizePluginLabel, planEntryDetail } from "../../lang/display";
 import { t, getUiTranslator } from "../../lang/ui";
 import { App, Modal } from "obsidian";
@@ -1013,6 +1014,16 @@ export class SyncProgressModal extends Modal {
 			void this.refreshUI();
 		});
 		const body = createChild(row, "div"); body.classList.add("keepsidian-sync-plan-row-body"); this.renderEntryBody(body, entry, getReviewEntryLabel(entry));
+        const index = this.preparedPlan?.importEntryIds?.indexOf(entry.id) ?? -1;
+        const note = index >= 0 ? this.preparedPlan?.importNotes?.[index] : undefined;
+        if (note?.enrichment_uncertain && entry.selectable) {
+            const label = createChild(body, "label");
+            const retry = createChild(label, "input"); retry.type = "checkbox";
+            retry.checked = hasUncertainRetry(note); retry.disabled = !entry.selected || this.isGeneratingReview;
+            retry.setAttribute("aria-label", `Retry missing AI suggestions for ${entryDisplayTitle(entry)}`);
+            createChild(label, "span", {text: " Retry missing AI suggestions for this note. The earlier request may already have used AI allowance."});
+            retry.addEventListener("change", () => chooseUncertainRetry(note, retry.checked));
+        }
 	}
 	private renderExecutionRow(row: HTMLDivElement, entry: SyncPlanEntry) {
 		if (!this.executionSnapshot) return;

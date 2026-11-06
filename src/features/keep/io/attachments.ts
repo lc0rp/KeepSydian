@@ -1,6 +1,6 @@
 import { digest, type MediaBaseline } from "../domain/local-state";
 import { KEEPSIDIAN_SERVER_URL } from "../../../config";
-import { NetworkError } from "../../../services/errors";
+import { NetworkError, AccessV1RequestError } from "../../../services/errors";
 import { httpGetArrayBuffer } from "../../../services/http";
 import { buildMediaPath } from "../../../services/paths";
 import { assertRelativePath, equivalentPath, portableFile, withPathLock } from "@services/portable-path";
@@ -156,11 +156,11 @@ function deriveFileName(url: URL, index: number, blobNames?: string[]): string |
 
 function isRetryableAttachmentFetchError(error: unknown): boolean {
 	if (error instanceof NetworkError) {
-		if (error.retryAllowed === false) return false;
+		if (error.retryAllowed === false || (error instanceof AccessV1RequestError && error.retryHandled)) return false;
 		if (typeof error.status === "number") {
 			return ATTACHMENT_FETCH_RETRYABLE_STATUSES.has(error.status);
 		}
-		return true;
+		return error.transportFailure;
 	}
 	if (!(error instanceof Error)) {
 		return false;

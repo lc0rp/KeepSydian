@@ -1,3 +1,4 @@
+import {hasUncertainRetry} from "@features/keep/enrichment/retry-consent";
 jest.mock("obsidian");
 
 import { App } from "obsidian";
@@ -58,6 +59,19 @@ describe("SyncProgressModal", () => {
 			preparedPlan,
 		};
 	}
+
+    it("makes an uncertain paid retry an unchecked per-note choice",async()=>{
+        const note={title:"Create note",enrichment_uncertain:true};
+        modalOptions.preparedPlan.importNotes=[note];modalOptions.preparedPlan.importEntryIds=["create-note"];
+        const modal=new SyncProgressModal(app,modalOptions);modal.onOpen();await flushUI();
+        getTopStartButton(modal).click();await flushUI();
+        const retry=modal.contentEl.querySelector<HTMLInputElement>('input[aria-label="Retry missing AI suggestions for Create note"]')!;
+        expect(retry).toBeTruthy();expect(retry.checked).toBe(false);
+        expect(modal.contentEl.textContent).toContain("earlier request may already have used AI allowance");
+        retry.checked=true;retry.dispatchEvent(new Event("change"));expect(hasUncertainRetry(note)).toBe(true);
+        retry.checked=false;retry.dispatchEvent(new Event("change"));expect(hasUncertainRetry(note)).toBe(false);
+        modal.close();
+    });
 
 	it("preserves specific review labels and their accessible names", async () => {
 		const labels = ["Archive", "Add tags", "Update suggestions", "Removal not verified", "Deletion conflict", "Skipped: conflict copy"];

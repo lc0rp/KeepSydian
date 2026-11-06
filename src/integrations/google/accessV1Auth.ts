@@ -94,6 +94,11 @@ interface CachedAccess {
 let cached: CachedAccess | undefined;
 let pending: { email: string; master: string; promise: Promise<CachedAccess> } | undefined;
 
+/** Do not clear a newer credential installed by a concurrent request. */
+export function invalidateAccessCredential(email: string, master: string, rejected: string): void {
+	if (cached?.email === email && cached.master === master && cached.access === rejected) cached = undefined;
+}
+
 /** Access credentials stay in module memory; only this result may enter the access-v1 backend header. */
 export async function getAccessCredential(email: string, master: string): Promise<string> {
 	validate(email, master);

@@ -48,6 +48,7 @@ import {
 import { appendPerfTrace } from "@app/perf-trace";
 import { withManagedImageEmbeds } from "./domain/attachmentEmbeds";
 import { safeSyncError, type SyncAttempt } from "@app/sync-attempt";
+import { ACCESS_V1_ENABLED } from "@integrations/google/accessV1Auth";
 import { retryDownload, isTransientDownloadError } from "./download-retry";
 import { resolveDownloadDateWindow } from "./download-date-window";
 import { KEEPSIDIAN_SERVER_URL } from "../../config";
@@ -79,6 +80,7 @@ interface Preparation {
 	total?: number;
 	seenCursors: Set<string>;
 	active: boolean;
+	restarts?: number;
 }
 const preparations = new WeakMap<KeepSidianPlugin, Preparation>();
 const preparingPlugins = new WeakSet<KeepSidianPlugin>();
@@ -302,7 +304,7 @@ async function fetchImportPageWithRetry(
 	enabled = true
 ): Promise<GoogleKeepImportResponse> {
 	return retryDownload(() => fetchFunction(offset, limit, filters, cursor), {
-		enabled,
+		enabled: enabled && !ACCESS_V1_ENABLED,
 		checkCancelled,
 		onRetry: async (retryCount) => {
 			await attemptContext?.pageEvent("retry", { retryCount });
@@ -541,6 +543,7 @@ function buildImportPlanEntry(
 		}
 		if (note.enrichment_pending) detail = `${detail ? `${detail} ` : ""}New AI suggestions are requested only for selected notes.`;
 		if (note.enrichment_pending) downloadDetails.push("request-suggestions");
+        if (note.enrichment_uncertain) detail = `${detail ?? ""} We will first check for a saved AI result. Retrying missing suggestions needs your choice and may use AI allowance again.`;
 		if (note.enrichment_legacy_held) detail = `${detail ? `${detail} ` : ""}Previously imported titles and tags are kept. New AI tags require the choice in Customize sync.`;
 		if (note.enrichment_legacy_held) downloadDetails.push("legacy-tags");
 
@@ -654,7 +657,10 @@ async function buildImportSyncPlanBase(
 	}
 	preparation.active = true;
 	const featureFlags = preparation.featureFlags;
-	const operationId = preparation.operationId;
+	const readRetry = {
+        checkCancelled: () => plugin.throwIfSyncCancelled(),
+        onRetry: async (retryCount: number) => { await callbacks?.attempt?.pageEvent("retry", {retryCount}); }
+    };
 	const fetchFunction =
 		featureFlags !== undefined
 			? (offset: number, limit: number, filters?: SyncFilters, cursor?: string) =>
@@ -667,23 +673,28 @@ async function buildImportSyncPlanBase(
 						filters,
 						cursor,
 						supporterKey,
-						operationId
+						preparation.operationId, false, readRetry
 					)
 			: (offset: number, limit: number, filters?: SyncFilters, cursor?: string) =>
-					apiFetchNotes(email, token, offset, limit, filters, cursor, operationId);
+					apiFetchNotes(email, token, offset, limit, filters, cursor, preparation.operationId, readRetry);
 	let fetched: FetchImportNotesResult;
 	try {
-		fetched = await fetchImportNotesBase(
-			plugin,
-			fetchFunction,
-			callbacks,
-			downloadScope,
-			preparation,
-			options === undefined || !!operationId
-		);
+        for (;;) {
+            try {
+                fetched = await fetchImportNotesBase(plugin, fetchFunction, callbacks, downloadScope, preparation, options === undefined || !!preparation.operationId);
+                break;
+            } catch (error) {
+                if (!(error instanceof NetworkError) || error.status !== 410 || error.code !== "sync_session_expired" || preparation.restarts) throw error;
+                plugin.throwIfSyncCancelled();
+                const epoch = featureFlags === undefined ? undefined : await getReplayEpoch(email, token);
+                Object.assign(preparation, { restarts: 1, notes: [], offset: 0, page: 1, cursor: undefined, total: undefined, usingCursor: false, seenCursors: new Set<string>(), operationId: epoch ? `${epoch}:${Date.now()}:${Math.random().toString(36).slice(2)}` : undefined });
+                await callbacks?.attempt?.pageEvent("retry", {retryCount: 1});
+                new Notice("The download session expired. Restarting once with the same date range. No notes have been written.");
+            }
+        }
 		preparations.delete(plugin);
 	} catch (error) {
-		if (isTransientDownloadError(error) && (options === undefined || !!operationId)) {
+		if (isTransientDownloadError(error) && (options === undefined || !!preparation.operationId)) {
 			throw new RecoverablePreparationError(error);
 		}
 		preparations.delete(plugin);

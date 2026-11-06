@@ -72,6 +72,7 @@ export async function mobileAccessRequest(
 	let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let status: number | undefined;
+	let timedOut = false;
 	try {
 		requireMobileFetch();
 		const encoder = new TextEncoder();
@@ -117,7 +118,11 @@ export async function mobileAccessRequest(
 		if (request.url !== url.href || request.method !== method) throw new Error();
 		for (const [name, value] of Object.entries(mobileHeaders))
 			if (request.headers.get(name) !== value) throw new Error();
-		if (deadlineMs !== undefined) timer = setTimeout(() => controller?.abort(), deadlineMs);
+		if (deadlineMs !== undefined)
+			timer = setTimeout(() => {
+				timedOut = true;
+				controller?.abort();
+			}, deadlineMs);
 		// A simple form POST can already have reached Google when CORS rejects its response.
 		// A rejection has unknown outcome and must never cause a second attempt.
 		const response = await globalThis.fetch(request);
@@ -180,7 +185,12 @@ export async function mobileAccessRequest(
 			},
 		};
 	} catch {
-		if (acceptHttpErrors) throw new AccessV1RequestError(status);
+		if (acceptHttpErrors) {
+			const failure = new AccessV1RequestError(status);
+			failure.responseRejected = !timedOut;
+			failure.transportFailure = timedOut;
+			throw failure;
+		}
 		throw new Error("Google authentication failed; it was not retried.");
 	} finally {
 		clearTimeout(timer);

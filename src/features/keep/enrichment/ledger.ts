@@ -13,6 +13,7 @@ import {
 	RecordSchema,
 	emptyState,
 	hash,
+ localEnrichmentSnapshot,
 	bodyHash,
 	effectiveTitle,
 	tags,
@@ -312,6 +313,7 @@ export class EnrichmentLedger {
 			}
 			if (before !== undefined) observeLocal(record, path, before);
 			const plan = { ...note.local_enrichment! };
+            if (plan.observedLocalHash !== undefined && (path !== plan.observedLocalPath || before === undefined || await localEnrichmentSnapshot(path, before) !== plan.observedLocalHash)) throw new Error("This note changed while AI suggestions were prepared. Review it before applying suggestions.");
 			if (newlyObservedManual) {
 				plan.title = undefined;
 				plan.titleSource = false;

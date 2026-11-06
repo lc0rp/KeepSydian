@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { EnrichmentSourceSchema, EnrichmentProvenanceSchema } from "@schemas/keep";
+import { EnrichmentSourceSchema, EnrichmentProvenanceSchema, PremiumFeatureFlagsSchema } from "@schemas/keep";
 import { extractFrontmatter, getFrontmatterStringValue } from "../domain/note";
 import { sha256, isSafeVaultPath } from "../local-deletions/state";
 
@@ -47,6 +47,30 @@ export const StateSchema = z.object({
 			provenance: EnrichmentProvenanceSchema.optional(),
 		})
 	),
+	operations: z
+		.record(
+			z.string(),
+			z.object({
+				namespace: z.string(),
+				startedAt: z.number(),
+				executionWindowMs: z.number().positive().max(300_000).optional(),
+				rows: z
+					.array(
+						z.object({
+							request: z.object({
+								source: EnrichmentSourceSchema,
+								features: PremiumFeatureFlagsSchema.pick({ suggest_title: true, suggest_tags: true }),
+								title_context: z.string().optional(),
+							}),
+							keys: z.record(z.string(), z.string()),
+							localPath: z.string().optional(),
+							localHash: z.string().optional(),
+						})
+					)
+					.max(16),
+			})
+		)
+		.optional(),
 	vocabulary: z.record(z.string(), z.array(z.string()).max(256)),
 });
 export const ApplicationJournalSchema = z.object({
@@ -146,4 +170,8 @@ export function replaceTags(markdown: string, values: string[]): string {
 	if (!Array.isArray(parsedTags) || JSON.stringify(parsedTags) !== JSON.stringify(values))
 		throw new Error("Tag frontmatter cannot be updated safely.");
 	return candidate;
+}
+
+export async function localEnrichmentSnapshot(path: string, content: string): Promise<string> {
+	return hash([await bodyHash(content), effectiveTitle(path, content), tags(content)]);
 }
