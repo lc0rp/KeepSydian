@@ -21,6 +21,13 @@ dist/
 # test
 coverage/
 output/
+test-results/
+screenshots/
+playwright-report/
+blob-report/
+test/artifacts/
+/test/vaults/**/.obsidian/
+/test/vaults/**/.trash/
 
 # Exclude sourcemaps
 *.map

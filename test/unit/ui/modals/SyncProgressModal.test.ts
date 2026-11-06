@@ -1,0 +1,1197 @@
+jest.mock("obsidian");
+
+import { App } from "obsidian";
+import { SyncProgressModal } from "../../../../src/ui/modals/SyncProgressModal";
+import { bindUiLanguage } from "../../../../src/lang/ui";
+import type { LastSyncSummary, SyncMode } from "../../../../src/types/index";
+import type { PreparedSyncPlan, RunPreparedSyncPlanResult } from "@app/main-sync-flows";
+import { createPreparedSyncPlanFixture, createSyncPlanEntryFixture } from "../../../utils/fixtures/sync-plan";
+
+describe("SyncProgressModal", () => {
+	let app: App;
+	let gateState: { allowed: boolean; reasons: string[] };
+	let currentMode: SyncMode | null;
+	let currentPhaseLabel: string | null;
+	let lastSuccessfulDownloadDate: string | undefined;
+	let modalOptions: ReturnType<typeof createOptions>;
+
+	function createOptions() {
+		const preparedPlan = createPreparedSyncPlanFixture("import", "import", [
+			createSyncPlanEntryFixture("create", "Create", {
+				id: "create-note",
+				title: "Create note",
+				path: "Keep/Create note.md",
+			}),
+			createSyncPlanEntryFixture("skipped-identical", "Skipped: identical", {
+				id: "identical-note",
+				title: "Identical note",
+				path: "Keep/Identical note.md",
+				selectable: false,
+				selected: false,
+			}),
+		]);
+		const buildSyncPlan = jest.fn().mockResolvedValue(preparedPlan);
+		const runSyncPlan = jest.fn().mockResolvedValue({});
+		const requestCancelSync = jest.fn();
+		const onOpenSyncLog = jest.fn().mockResolvedValue(undefined);
+		const openTwoWaySettings = jest.fn();
+		const isSupporterActive = jest.fn().mockResolvedValue(true);
+		const renderImportOptions = jest.fn(async (containerEl: HTMLElement, isActive: boolean) => {
+			containerEl.createEl("div", {
+				text: `Premium options active: ${String(isActive)}`,
+			});
+		});
+
+		return {
+			buildSyncPlan,
+			runSyncPlan,
+			requestCancelSync,
+			onOpenSyncLog,
+			onClose: jest.fn(),
+			getTwoWayGate: () => gateState,
+			getLastSuccessfulDownloadDate: () => lastSuccessfulDownloadDate,
+			openTwoWaySettings,
+			getCurrentMode: () => currentMode,
+			getCurrentPhaseLabel: () => currentPhaseLabel,
+			isSupporterActive,
+			renderImportOptions,
+			preparedPlan,
+		};
+	}
+
+	it("preserves specific review labels and their accessible names", async () => {
+		const labels = ["Archive", "Add tags", "Update suggestions", "Removal not verified", "Deletion conflict", "Skipped: conflict copy"];
+		modalOptions.buildSyncPlan.mockResolvedValue(createPreparedSyncPlanFixture("import", "import", labels.map((label, index) => createSyncPlanEntryFixture(index < 3 ? "overwrite" : index === 5 ? "skipped-conflict-copy" : "skipped-conflict", label, { id: `specific-${index}` }))));
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen(); await flushUI();
+		getTopStartButton(modal).click(); await flushUI();
+		expect(Array.from(modal.contentEl.querySelectorAll(".keepsidian-sync-plan-row-badge")).map(el => el.textContent)).toEqual(labels);
+		for (const label of labels) expect(Array.from(modal.contentEl.querySelectorAll("input[type=checkbox]")).some(el => el.getAttribute("aria-label")?.includes(label))).toBe(true);
+		modal.close();
+	});
+
+	it("retranslates an existing error when drafts are disabled without retrying", async () => {
+		const settings = { language: "ru" as const, useDraftTranslations: true };
+		const unbind = bindUiLanguage(() => settings);
+		const modal = new SyncProgressModal(app, modalOptions);
+		try {
+			modalOptions.buildSyncPlan.mockRejectedValue(new Error("Synthetic network error"));
+			modal.onOpen(); await flushUI(); getTopStartButton(modal).click(); await flushUI();
+			expect(modal.contentEl.querySelector(".keepsidian-modal-alert")?.textContent).toContain("Не удалось");
+			settings.useDraftTranslations = false; modal.refreshLanguage(); await flushUI();
+			expect(modal.contentEl.querySelector(".keepsidian-modal-alert")?.textContent).toContain("Could not connect");
+			expect(modal.contentEl.querySelector(".keepsidian-modal-alert")?.textContent).not.toContain("Не удалось");
+			expect(modalOptions.buildSyncPlan).toHaveBeenCalledTimes(1);
+		} finally { modal.close(); unbind(); }
+	});
+
+	function getButton(modal: SyncProgressModal, label: string): HTMLButtonElement {
+		const buttons = Array.from(modal.contentEl.querySelectorAll("button"));
+		const button =
+			buttons.find((candidate) => (candidate.textContent?.replace(/\s+/g, " ").trim() ?? "") === label) ??
+			buttons.find((candidate) => (candidate.textContent?.replace(/\s+/g, " ").trim() ?? "").includes(label));
+		expect(button).toBeTruthy();
+		return button as HTMLButtonElement;
+	}
+
+	it("keeps focus inside setup while a supporter check is pending without stealing later focus", async () => {
+		let resolveSupporter!: (value: boolean) => void;
+		modalOptions.isSupporterActive.mockReturnValue(new Promise<boolean>((resolve) => { resolveSupporter = resolve; }));
+		const modal = new SyncProgressModal(app, modalOptions);
+		document.body.appendChild(modal.containerEl);
+		try {
+			modal.onOpen(); await flushUI();
+			const customize = getButton(modal, "Customize sync");
+			customize.focus(); customize.click();
+			expect(document.activeElement).toBe(modal.contentEl.querySelector("h2"));
+			const openLog = getButton(modal, "Open sync log");
+			openLog.focus();
+			resolveSupporter(false); await flushUI();
+			expect(document.activeElement).toBe(openLog);
+		} finally { modal.onClose(); modal.containerEl.remove(); }
+	});
+
+	function findButton(modal: SyncProgressModal, label: string): HTMLButtonElement | null {
+		const buttons = Array.from(modal.contentEl.querySelectorAll("button"));
+		return (buttons.find((candidate) => (candidate.textContent?.replace(/\s+/g, " ").trim() ?? "") === label) ??
+			buttons.find((candidate) => (candidate.textContent?.replace(/\s+/g, " ").trim() ?? "").includes(label)) ??
+			null) as HTMLButtonElement | null;
+	}
+
+	function getSetupPrimaryButtons(modal: SyncProgressModal): HTMLButtonElement[] {
+		return Array.from(modal.contentEl.querySelectorAll<HTMLButtonElement>(".keepsidian-modal-action--primary"));
+	}
+
+	function getSetupStartButtons(modal: SyncProgressModal): HTMLButtonElement[] {
+		return getSetupPrimaryButtons(modal).filter(
+			(button) => button.textContent?.replace(/\s+/g, " ").trim() === "Start sync"
+		);
+	}
+
+	function getTopStartButton(modal: SyncProgressModal): HTMLButtonElement {
+		const button = modal.contentEl.querySelector<HTMLButtonElement>(
+			".keepsidian-modal-actions .keepsidian-modal-action--primary"
+		);
+		expect(button).toBeTruthy();
+		return button as HTMLButtonElement;
+	}
+
+	function getFooterStartButton(modal: SyncProgressModal): HTMLButtonElement | null {
+		return modal.contentEl.querySelector<HTMLButtonElement>(
+			".keepsidian-sync-center-footer .keepsidian-modal-action--sync-footer-primary"
+		);
+	}
+
+	function getRowTitles(modal: SyncProgressModal): string[] {
+		return Array.from(modal.contentEl.querySelectorAll(".keepsidian-sync-plan-row-title")).map(
+			(element) => element.textContent?.trim() ?? ""
+		);
+	}
+
+	async function flushUI() {
+		await Promise.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+		await Promise.resolve();
+	}
+
+	function getCustomSinceInput(modal: SyncProgressModal): HTMLInputElement | null {
+		return modal.contentEl.querySelector('input[data-keepsidian-role="custom-since-input"]') as HTMLInputElement | null;
+	}
+
+	function createDeferredResult() {
+		let resolvePromise: (value: RunPreparedSyncPlanResult) => void = () => undefined;
+		const promise = new Promise<RunPreparedSyncPlanResult>((resolve) => {
+			resolvePromise = resolve;
+		});
+		return {
+			promise,
+			resolve: resolvePromise,
+		};
+	}
+
+	beforeEach(() => {
+		app = new App();
+		gateState = { allowed: false, reasons: ["Confirm backups"] };
+		currentMode = null;
+		currentPhaseLabel = null;
+		lastSuccessfulDownloadDate = "2024-03-01T09:15:00.000Z";
+		modalOptions = createOptions();
+	});
+
+	test("starts in compact setup mode with Start sync and a three-step header", async () => {
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		await flushUI();
+
+		expect(modal.contentEl.textContent).toContain("Sync center");
+		expect(modal.contentEl.textContent).toContain("Start or customize sync.");
+		expect(modal.contentEl.textContent).toContain("Start");
+		expect(modal.contentEl.textContent).toContain("Review");
+		expect(modal.contentEl.textContent).toContain("Done");
+		expect(getButton(modal, "Start sync")).toBeTruthy();
+		expect(getButton(modal, "Open sync log")).toBeTruthy();
+		expect(getButton(modal, "Customize sync")).toBeTruthy();
+		expect(findButton(modal, "Run sync")).toBeNull();
+	});
+
+	test("Start sync opens review mode with Back, Refresh, and Run sync", async () => {
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Start sync").click();
+		await flushUI();
+
+		expect(modalOptions.buildSyncPlan).toHaveBeenCalledWith(
+			"import",
+			expect.objectContaining({
+				setTotalNotes: expect.any(Function),
+				reportPlanProgress: expect.any(Function),
+			}),
+			{ kind: "last-sync" }
+		);
+		expect(modal.contentEl.textContent).toContain("Review download plan");
+		expect(modal.contentEl.textContent).not.toContain("Download step");
+		expect(getButton(modal, "Back")).toBeTruthy();
+		expect(getButton(modal, "Refresh")).toBeTruthy();
+		expect(getButton(modal, "Execute")).toBeTruthy();
+		expect(findButton(modal, "Customize sync")).toBeNull();
+		expect(findButton(modal, "Open sync log")).toBeNull();
+	});
+
+	test("shows 'Downloaded, please wait ...' once review fetch reaches the known total", async () => {
+		let buildCallbacks:
+			| {
+					setTotalNotes?: (total: number) => void;
+					reportPlanProgress?: (processed: number, total?: number) => void;
+			  }
+			| undefined;
+		modalOptions.buildSyncPlan.mockImplementationOnce(async (_mode, callbacks) => {
+			buildCallbacks = callbacks;
+			return await new Promise<PreparedSyncPlan | null>(() => undefined);
+		});
+
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Start sync").click();
+		await flushUI();
+
+		buildCallbacks?.setTotalNotes?.(3);
+		buildCallbacks?.reportPlanProgress?.(3, 3);
+		await flushUI();
+
+		expect(getButton(modal, "Download complete. Please wait…")).toBeTruthy();
+	});
+
+	test("customize sync renders start and end controls for download-capable modes only", async () => {
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+
+		expect(getButton(modal, "Customize sync").getAttribute("aria-expanded")).toBe("false");
+
+		getButton(modal, "Customize sync").click();
+		await flushUI();
+
+		expect(getButton(modal, "Customize sync").getAttribute("aria-expanded")).toBe("true");
+		expect(modal.contentEl.textContent).toContain("Mode");
+		expect(modal.contentEl.textContent).toContain("Start & end date");
+		expect(modal.contentEl.textContent).toContain("Last sync → Now");
+		expect(modal.contentEl.textContent).toContain("Last sync:");
+		expect(modal.contentEl.textContent).toContain("2024");
+		expect(modalOptions.isSupporterActive).toHaveBeenCalled();
+		expect(modal.contentEl.textContent).toContain("Download options");
+		expect(modal.contentEl.textContent).toContain("Premium options active: true");
+		expect(getCustomSinceInput(modal)).toBeNull();
+
+		getButton(modal, "Custom").click();
+		await flushUI();
+
+		const input = getCustomSinceInput(modal) as HTMLInputElement;
+		expect(input).toBeTruthy();
+		expect(input.value).toContain("2024-03-01");
+		expect(input.placeholder).toBe("YYYY-MM-DD HH:MM");
+		expect(input.closest("label")?.textContent).toBe("Start:");
+		const end = modal.contentEl.querySelector<HTMLInputElement>('[data-keepsidian-role="custom-until-input"]')!;
+		expect(end.value).toBe("");
+		expect(end.closest("label")?.textContent).toBe("End:");
+		expect(modal.contentEl.textContent).toContain("Use YYYY-MM-DD HH:MM.");
+		expect(modal.contentEl.textContent).toContain("Notes changed before this date will be included.");
+
+		getButton(modal, "Upload").click();
+		await flushUI();
+
+		expect(modal.contentEl.textContent).not.toContain("Start & end date");
+		expect(modal.contentEl.textContent).not.toContain("Premium options active: true");
+		expect(modal.contentEl.querySelector('[data-keepsidian-role="custom-until-input"]')).toBeNull();
+	});
+
+	test("shows the footer Start sync action only while sync customization is expanded", async () => {
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		await flushUI();
+
+		expect(findButton(modal, "Close sync center")).toBeTruthy();
+		expect(getSetupStartButtons(modal)).toHaveLength(1);
+
+		getButton(modal, "Customize sync").click();
+		await flushUI();
+
+		expect(getSetupStartButtons(modal)).toHaveLength(2);
+		const footerStartButton = getFooterStartButton(modal);
+		expect(footerStartButton).toBeTruthy();
+		expect(footerStartButton).toHaveClass("mod-cta", "keepsidian-modal-action--primary");
+
+		getButton(modal, "Customize sync").click();
+		await flushUI();
+
+		expect(getSetupStartButtons(modal)).toHaveLength(1);
+		expect(getFooterStartButton(modal)).toBeNull();
+
+		getButton(modal, "Customize sync").click();
+		await flushUI();
+		const expandedFooterStartButton = getFooterStartButton(modal) as HTMLButtonElement;
+		expandedFooterStartButton.click();
+		await flushUI();
+
+		expect(modalOptions.buildSyncPlan).toHaveBeenCalledWith(
+			"import",
+			expect.objectContaining({
+				setTotalNotes: expect.any(Function),
+				reportPlanProgress: expect.any(Function),
+			}),
+			{ kind: "last-sync" }
+		);
+		expect(modal.contentEl.textContent).toContain("Review download plan");
+		expect(getFooterStartButton(modal)).toBeNull();
+	});
+
+	test("keeps top and footer Start sync controls in lockstep while preparing", async () => {
+		let resolvePlan: (plan: PreparedSyncPlan) => void = () => undefined;
+		let buildCallbacks:
+			| {
+					setTotalNotes?: (total: number) => void;
+					reportPlanProgress?: (processed: number, total?: number) => void;
+			  }
+			| undefined;
+		const buildPromise = new Promise<PreparedSyncPlan>((resolve) => {
+			resolvePlan = resolve;
+		});
+		modalOptions.buildSyncPlan.mockImplementationOnce(async (_mode, callbacks) => {
+			buildCallbacks = callbacks;
+			return await buildPromise;
+		});
+
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Customize sync").click();
+		await flushUI();
+
+		let startButtons = getSetupStartButtons(modal);
+		expect(startButtons).toHaveLength(2);
+		expect(startButtons.map((button) => button.textContent?.trim())).toEqual(["Start sync", "Start sync"]);
+		expect(startButtons.every((button) => !button.disabled)).toBe(true);
+
+		const footerStartButton = getFooterStartButton(modal) as HTMLButtonElement;
+		getTopStartButton(modal).click();
+		footerStartButton.click();
+		await flushUI();
+
+		expect(modalOptions.buildSyncPlan).toHaveBeenCalledTimes(1);
+		startButtons = getSetupPrimaryButtons(modal);
+		expect(startButtons.map((button) => button.textContent?.trim())).toEqual([
+			"Preparing sync plan…",
+			"Preparing sync plan…",
+		]);
+		expect(startButtons.every((button) => button.disabled)).toBe(true);
+
+		buildCallbacks?.setTotalNotes?.(2);
+		buildCallbacks?.reportPlanProgress?.(2, 2);
+		await flushUI();
+		startButtons = getSetupPrimaryButtons(modal);
+		expect(startButtons.map((button) => button.textContent?.trim())).toEqual([
+			"Download complete. Please wait…",
+			"Download complete. Please wait…",
+		]);
+		expect(startButtons.every((button) => button.disabled)).toBe(true);
+
+		resolvePlan(modalOptions.preparedPlan);
+		await flushUI();
+
+		expect(modal.contentEl.textContent).toContain("Review download plan");
+		expect(getFooterStartButton(modal)).toBeNull();
+	});
+
+	test("uses the footer Start sync action for the selected mode and download scope", async () => {
+		for (const location of ["top", "footer"] as const) {
+			modalOptions.buildSyncPlan.mockClear();
+			const modal = new SyncProgressModal(app, modalOptions);
+			modal.onOpen();
+			getButton(modal, "Customize sync").click();
+			await flushUI();
+			getButton(modal, "All dates").click();
+			await flushUI();
+			getButton(modal, "Two-way sync").click();
+			await flushUI();
+
+			const startButton =
+				location === "footer" ? (getFooterStartButton(modal) as HTMLButtonElement) : getTopStartButton(modal);
+			startButton.click();
+			await flushUI();
+
+			expect(modalOptions.buildSyncPlan).toHaveBeenCalledTimes(1);
+			expect(modalOptions.buildSyncPlan).toHaveBeenCalledWith(
+				"two-way",
+				expect.objectContaining({
+					setTotalNotes: expect.any(Function),
+					reportPlanProgress: expect.any(Function),
+				}),
+				{ kind: "all" }
+			);
+		}
+	});
+
+	test("Close sync center closes from expanded setup", async () => {
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Customize sync").click();
+		await flushUI();
+
+		const closeButton = findButton(modal, "Close sync center");
+		expect(closeButton).toBeTruthy();
+		const closeSpy = jest.spyOn(modal, "close");
+		closeButton?.click();
+		await flushUI();
+
+		expect(closeSpy).toHaveBeenCalledTimes(1);
+	});
+
+	test("removes the footer action through review, running, and result surfaces", async () => {
+		const deferred = createDeferredResult();
+		modalOptions.runSyncPlan.mockImplementationOnce(async () => await deferred.promise);
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Customize sync").click();
+		await flushUI();
+
+		(getFooterStartButton(modal) as HTMLButtonElement).click();
+		await flushUI();
+		expect(modal.contentEl.textContent).toContain("Review download plan");
+		expect(getFooterStartButton(modal)).toBeNull();
+
+		getButton(modal, "Execute").click();
+		await flushUI();
+		expect(modal.contentEl.textContent).toContain("Running download plan");
+		expect(getFooterStartButton(modal)).toBeNull();
+
+		deferred.resolve({});
+		await flushUI();
+		expect(modal.contentEl.textContent).toContain("Download complete");
+		expect(getFooterStartButton(modal)).toBeNull();
+	});
+
+	test("restores Resume download on both setup actions after a paused preparation", async () => {
+		modalOptions.buildSyncPlan.mockRejectedValueOnce(new Error("Download paused. Try again."));
+		modalOptions.isSupporterActive.mockResolvedValue(false);
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		await flushUI();
+		getButton(modal, "Customize sync").click();
+		await flushUI();
+
+		(getFooterStartButton(modal) as HTMLButtonElement).click();
+		await flushUI();
+
+		const startButtons = getSetupPrimaryButtons(modal).filter(
+			(button) => button.textContent?.replace(/\s+/g, " ").trim() === "Resume download"
+		);
+		expect(startButtons).toHaveLength(2);
+		expect(startButtons.every((button) => !button.disabled)).toBe(true);
+		expect(modal.contentEl.textContent).toContain("Download paused");
+	});
+
+	test.each([
+		["custom-since-input", "2999-01-01 00:00", "Custom date must be in the past."],
+		["custom-until-input", "2999-01-01 00:00", "Custom end date must be in the past."],
+		["custom-until-input", "2023-01-01 00:00", "End date must be after the start date."],
+		["custom-until-input", "invalid", "Choose a valid custom end date."],
+	])("invalid custom range blocks review: %s = %s", async (role, value, message) => {
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+
+		getButton(modal, "Customize sync").click();
+		await flushUI();
+		getButton(modal, "Custom").click();
+		await flushUI();
+
+		const input = modal.contentEl.querySelector<HTMLInputElement>(`input[data-keepsidian-role="${role}"]`)!;
+		expect(input).toBeTruthy();
+		input.value = value;
+		input.dispatchEvent(new Event("change"));
+		await flushUI();
+
+		getButton(modal, "Start sync").click();
+		await flushUI();
+
+		expect(modalOptions.buildSyncPlan).not.toHaveBeenCalled();
+		expect(modal.contentEl.textContent).toContain("Couldn’t prepare the sync review");
+		expect(modal.contentEl.textContent).toContain(message);
+	});
+
+	test.each(["", "2025-04-13 10:30"])("builds local start and optional end timestamps (end=%s)", async (until) => {
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+
+		getButton(modal, "Customize sync").click();
+		await flushUI();
+		getButton(modal, "Custom").click();
+		await flushUI();
+
+		const input = getCustomSinceInput(modal) as HTMLInputElement;
+		const end = modal.contentEl.querySelector<HTMLInputElement>('[data-keepsidian-role="custom-until-input"]')!;
+		expect(input).toBeTruthy();
+		input.value = "2025-04-12 09:17";
+		input.dispatchEvent(new Event("input"));
+		expect(modal.contentEl.textContent).toContain("Use YYYY-MM-DD HH:MM.");
+		expect(modal.contentEl.textContent).not.toContain("Choose a custom date.");
+		input.dispatchEvent(new Event("change"));
+		await flushUI();
+		expect(getCustomSinceInput(modal)).toBe(input);
+		expect(modal.contentEl.querySelector('[data-keepsidian-role="custom-until-input"]')).toBe(end);
+		end.value = until;
+		end.dispatchEvent(new Event("input"));
+		end.dispatchEvent(new Event("change"));
+		await flushUI();
+
+		getButton(modal, "Start sync").click();
+		await flushUI();
+
+		expect(modalOptions.buildSyncPlan).toHaveBeenLastCalledWith("import", expect.any(Object), {
+			kind: "custom-since",
+			since: new Date(2025, 3, 12, 9, 17, 0, 0).toISOString(),
+			...(until ? { until: new Date(2025, 3, 13, 10, 30, 0, 0).toISOString() } : {}),
+		});
+	});
+
+	test("reopening the modal resets download scope to the default", async () => {
+		const firstModal = new SyncProgressModal(app, modalOptions);
+		firstModal.onOpen();
+		getButton(firstModal, "Customize sync").click();
+		await flushUI();
+		getButton(firstModal, "All dates").click();
+		await flushUI();
+		getButton(firstModal, "Start sync").click();
+		await flushUI();
+
+		expect(modalOptions.buildSyncPlan).toHaveBeenLastCalledWith("import", expect.any(Object), { kind: "all" });
+
+		const secondModal = new SyncProgressModal(app, modalOptions);
+		secondModal.onOpen();
+		getButton(secondModal, "Customize sync").click();
+		await flushUI();
+		getButton(secondModal, "Start sync").click();
+		await flushUI();
+
+		expect(modalOptions.buildSyncPlan).toHaveBeenLastCalledWith("import", expect.any(Object), { kind: "last-sync" });
+	});
+
+	test("legacy AI choice defaults off and grants only the next download review", async () => {
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Customize sync").click();
+		await flushUI();
+		const input = modal.contentEl.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+		expect(input.checked).toBe(false);
+		input.checked = true;
+		input.dispatchEvent(new Event("change"));
+		await modal.beginReview();
+		expect(modalOptions.buildSyncPlan.mock.calls.at(-1)?.[1].legacyTagConsent).toBeDefined();
+		await modal.beginReview();
+		expect(modalOptions.buildSyncPlan.mock.calls.at(-1)?.[1].legacyTagConsent).toBeUndefined();
+	});
+
+	test("customize sync two-way mode surfaces gate guidance and deep-links to settings", async () => {
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+
+		getButton(modal, "Customize sync").click();
+		await flushUI();
+		getButton(modal, "Two-way sync").click();
+		await flushUI();
+
+		expect(modal.contentEl.textContent).toContain("Confirm backups");
+
+		getButton(modal, "Open beta settings").click();
+		expect(modalOptions.openTwoWaySettings).toHaveBeenCalled();
+	});
+
+	test("shows a friendly sync-center alert when review generation cannot reach the server", async () => {
+		modalOptions.buildSyncPlan.mockRejectedValueOnce(new Error("net::ERR_CONNECTION_REFUSED"));
+
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Start sync").click();
+		await flushUI();
+
+		expect(modal.contentEl.textContent).toContain("Couldn’t prepare the sync review");
+		expect(modal.contentEl.textContent).toContain(
+			"Could not connect to the KeepSidian server. Check your connection or check that the sync server is running, then try again."
+		);
+		expect(modal.contentEl.textContent).toContain("Start or customize sync.");
+	});
+
+	test("shows a friendly sync-center alert when execution cannot reach the server", async () => {
+		modalOptions.runSyncPlan.mockRejectedValueOnce(new Error("Failed to fetch"));
+
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Start sync").click();
+		await flushUI();
+		getButton(modal, "Execute").click();
+		await flushUI();
+
+		expect(modal.contentEl.textContent).toContain("Couldn’t finish the sync");
+		expect(modal.contentEl.textContent).toContain(
+			"Could not connect to the KeepSidian server. Check your connection or check that the sync server is running, then try again."
+		);
+		expect(modal.contentEl.textContent).toContain("Review download plan");
+	});
+
+	test("outside clicks on review show a close confirmation instead of dismissing the modal", async () => {
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Start sync").click();
+		await flushUI();
+
+		modal.containerEl.dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true }));
+		await flushUI();
+
+		expect(modal.contentEl.textContent).toContain("Close sync center?");
+		expect(getButton(modal, "Close")).toBeTruthy();
+		expect(getButton(modal, "Back")).toBeTruthy();
+		expect(findButton(modal, "Cancel sync")).toBeNull();
+		expect(findButton(modal, "Run in background")).toBeNull();
+	});
+
+	test("chips filter the review list by category", async () => {
+		modalOptions.buildSyncPlan.mockResolvedValueOnce(
+			createPreparedSyncPlanFixture("import", "import", [
+				createSyncPlanEntryFixture("create", "Create", {
+					id: "create-1",
+					title: "Create row",
+				}),
+				createSyncPlanEntryFixture("merge", "Merge", {
+					id: "merge-1",
+					title: "Merge row",
+				}),
+			])
+		);
+
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Start sync").click();
+		await flushUI();
+
+		expect(getRowTitles(modal)).toEqual(["Create row", "Merge row"]);
+
+		getButton(modal, "Merge 1").click();
+		await flushUI();
+		expect(getRowTitles(modal)).toEqual(["Merge row"]);
+
+		getButton(modal, "Notes 2").click();
+		await flushUI();
+
+		expect(getRowTitles(modal)).toEqual(["Create row", "Merge row"]);
+	});
+
+	test("supporters get select-all while non-supporters see locked controls", async () => {
+		const supporterPlan = createPreparedSyncPlanFixture("import", "import", [
+			createSyncPlanEntryFixture("create", "Create", {
+				id: "create-1",
+				title: "Create row",
+			}),
+			createSyncPlanEntryFixture("merge", "Merge", {
+				id: "merge-1",
+				title: "Merge row",
+			}),
+		]);
+		modalOptions.buildSyncPlan.mockResolvedValueOnce(supporterPlan);
+
+		const supporterModal = new SyncProgressModal(app, modalOptions);
+		supporterModal.onOpen();
+		getButton(supporterModal, "Start sync").click();
+		await flushUI();
+		expect(supporterModal.contentEl.textContent).toContain("Select all");
+
+		const lockedPlan = createPreparedSyncPlanFixture("import", "import", [
+			createSyncPlanEntryFixture("create", "Create", {
+				id: "locked-1",
+				title: "Locked row",
+				selectionLocked: true,
+				selectionLockedReason: "Available to project supporters",
+			}),
+		]);
+		modalOptions.buildSyncPlan.mockResolvedValueOnce(lockedPlan);
+
+		const nonSupporterModal = new SyncProgressModal(app, modalOptions);
+		nonSupporterModal.onOpen();
+		getButton(nonSupporterModal, "Start sync").click();
+		await flushUI();
+
+		expect(nonSupporterModal.contentEl.textContent).not.toContain("Select all");
+		expect(nonSupporterModal.contentEl.textContent).toContain("Per-note selection is available to project supporters.");
+		const checkbox = nonSupporterModal.contentEl.querySelector('input[type="checkbox"]') as HTMLInputElement;
+		expect(checkbox.disabled).toBe(true);
+		expect(checkbox.title).toBe("Available to project supporters");
+	});
+
+	test("execution chips keep semantic categories and use X/Y counts", async () => {
+		const plan = createPreparedSyncPlanFixture("import", "import", [
+			createSyncPlanEntryFixture("create", "Create", {
+				id: "create-1",
+				title: "Create row",
+			}),
+			createSyncPlanEntryFixture("conflict-copy", "Conflict copy", {
+				id: "conflict-1",
+				title: "Conflict row",
+			}),
+			createSyncPlanEntryFixture("skipped-identical", "Skipped: identical", {
+				id: "identical-1",
+				title: "Identical row",
+				selectable: false,
+				selected: false,
+			}),
+			createSyncPlanEntryFixture("merge", "Merge", {
+				id: "unchecked-1",
+				title: "Unchecked row",
+				selected: false,
+			}),
+		]);
+		const deferred = createDeferredResult();
+		modalOptions.buildSyncPlan.mockResolvedValueOnce(plan);
+		modalOptions.runSyncPlan.mockImplementationOnce(async (_preparedPlan, callbacks) => {
+			void callbacks?.onEntrySettled;
+			return await deferred.promise;
+		});
+
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Start sync").click();
+		await flushUI();
+
+		getButton(modal, "Execute").click();
+		await flushUI();
+
+		expect(modal.contentEl.textContent).toContain("Running download plan");
+		expect(modal.contentEl.textContent).toContain("Selected: 2. Pending: 2.");
+		expect(modal.contentEl.textContent).toContain("Selected notes handled: 0 / 2");
+		expect(modal.contentEl.textContent).toContain("Notes 0 / 2");
+		expect(modal.contentEl.textContent).toContain("Created 0 / 1");
+		expect(modal.contentEl.textContent).toContain("Conflict copy 0 / 1");
+		expect(modal.contentEl.textContent).toContain("Already up to date 1 / 1");
+		expect(modal.contentEl.textContent).toContain("Not selected 1 / 1");
+
+		const runCallback = modalOptions.runSyncPlan.mock.calls[0]?.[1];
+		expect(runCallback).toEqual(
+			expect.objectContaining({
+				onEntrySettled: expect.any(Function),
+			})
+		);
+		runCallback.onEntrySettled("create-1", true);
+		await flushUI();
+		expect(modal.contentEl.textContent).toContain("Selected: 2. Pending: 1.");
+		expect(modal.contentEl.textContent).toContain("Notes 1 / 2");
+		expect(modal.contentEl.textContent).toContain("Conflict copy 0 / 1");
+
+		// Conflict copies perform I/O and only count after that write is acknowledged.
+		runCallback.onEntrySettled("conflict-1", true, "conflict-copy");
+		await flushUI();
+
+		expect(modal.contentEl.textContent).toContain("Selected: 2. Pending: 0.");
+		expect(modal.contentEl.textContent).toContain("Selected notes handled: 2 / 2");
+		expect(modal.contentEl.textContent).toContain("Notes 2 / 2");
+		expect(modal.contentEl.textContent).toContain("Created 1 / 1");
+		expect(modal.contentEl.textContent).toContain("Conflict copy 1 / 1");
+
+		deferred.resolve({});
+		await flushUI();
+
+		expect(modal.contentEl.textContent).toContain("Download complete");
+		expect(modal.contentEl.textContent).toContain("Open sync log");
+	});
+
+	test("running updates keep the plan container stable instead of rebuilding the modal", async () => {
+		const plan = createPreparedSyncPlanFixture("import", "import", [
+			createSyncPlanEntryFixture("create", "Create", {
+				id: "create-1",
+				title: "Create row",
+			}),
+			createSyncPlanEntryFixture("merge", "Merge", {
+				id: "merge-1",
+				title: "Merge row",
+			}),
+		]);
+		const deferred = createDeferredResult();
+		modalOptions.buildSyncPlan.mockResolvedValueOnce(plan);
+		modalOptions.runSyncPlan.mockImplementationOnce(async (_preparedPlan, callbacks) => {
+			void callbacks?.onEntrySettled;
+			return await deferred.promise;
+		});
+
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Start sync").click();
+		await flushUI();
+		getButton(modal, "Execute").click();
+		await flushUI();
+
+		const planEl = modal.contentEl.querySelector(".keepsidian-sync-plan");
+		const listEl = modal.contentEl.querySelector(".keepsidian-sync-plan-list");
+		expect(planEl).toBeTruthy();
+		expect(listEl).toBeTruthy();
+
+		const runCallback = modalOptions.runSyncPlan.mock.calls[0]?.[1];
+		runCallback.onEntrySettled("create-1", true);
+		await flushUI();
+
+		expect(modal.contentEl.querySelector(".keepsidian-sync-plan")).toBe(planEl);
+		expect(modal.contentEl.querySelector(".keepsidian-sync-plan-list")).toBe(listEl);
+
+		deferred.resolve({});
+		await flushUI();
+	});
+
+	test("running progress updates mutate existing execution rows instead of recreating them", async () => {
+		const plan = createPreparedSyncPlanFixture("import", "import", [
+			createSyncPlanEntryFixture("create", "Create", {
+				id: "create-1",
+				title: "Create row",
+			}),
+			createSyncPlanEntryFixture("merge", "Merge", {
+				id: "merge-1",
+				title: "Merge row",
+			}),
+		]);
+		const deferred = createDeferredResult();
+		modalOptions.buildSyncPlan.mockResolvedValueOnce(plan);
+		modalOptions.runSyncPlan.mockImplementationOnce(async (_preparedPlan, callbacks) => {
+			void callbacks?.onEntrySettled;
+			return await deferred.promise;
+		});
+
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Start sync").click();
+		await flushUI();
+		getButton(modal, "Execute").click();
+		await flushUI();
+
+		const firstRowBefore = modal.contentEl.querySelector(".keepsidian-sync-plan-row") as HTMLDivElement;
+		const firstBadgeBefore = firstRowBefore.querySelector(".keepsidian-sync-plan-row-badge") as HTMLSpanElement;
+		expect(firstBadgeBefore.textContent).toBe("Pending");
+
+		modal.setProgress(1, 2);
+		await flushUI();
+
+		const firstRowAfterProgress = modal.contentEl.querySelector(".keepsidian-sync-plan-row") as HTMLDivElement;
+		expect(firstRowAfterProgress).toBe(firstRowBefore);
+
+		const runCallback = modalOptions.runSyncPlan.mock.calls[0]?.[1];
+		runCallback.onEntrySettled("create-1", true);
+		await flushUI();
+
+		const firstRowAfterSettled = modal.contentEl.querySelector(".keepsidian-sync-plan-row") as HTMLDivElement;
+		const firstBadgeAfterSettled = firstRowAfterSettled.querySelector(
+			".keepsidian-sync-plan-row-badge"
+		) as HTMLSpanElement;
+		expect(firstRowAfterSettled).toBe(firstRowBefore);
+		expect(firstBadgeAfterSettled.textContent).toBe("Created");
+		expect(firstRowAfterSettled.classList.contains("is-done")).toBe(true);
+
+		deferred.resolve({});
+		await flushUI();
+	});
+
+	test("closing during a running sync requests cancellation and preserves the modal instance state", async () => {
+		const deferred = createDeferredResult();
+		modalOptions.runSyncPlan.mockImplementationOnce(async (_preparedPlan, callbacks) => {
+			void callbacks?.onEntrySettled;
+			return await deferred.promise;
+		});
+
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Start sync").click();
+		await flushUI();
+		getButton(modal, "Execute").click();
+		await flushUI();
+
+		modal.onClose();
+		await flushUI();
+
+		expect(modalOptions.requestCancelSync).toHaveBeenCalledTimes(1);
+		expect(modalOptions.onClose).toHaveBeenCalledWith({ activeRun: true });
+		expect(getButton(modal, "Canceling ...").disabled).toBe(true);
+
+		modal.onOpen();
+		await flushUI();
+		expect(modal.contentEl.textContent).toContain("Running download plan");
+
+		deferred.resolve({});
+		await flushUI();
+	});
+
+	test("outside clicks during a running sync show cancel and background options", async () => {
+		const deferred = createDeferredResult();
+		modalOptions.runSyncPlan.mockImplementationOnce(async (_preparedPlan, callbacks) => {
+			void callbacks?.onEntrySettled;
+			return await deferred.promise;
+		});
+
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Start sync").click();
+		await flushUI();
+		getButton(modal, "Execute").click();
+		await flushUI();
+
+		modal.containerEl.dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true }));
+		await flushUI();
+
+		expect(modal.contentEl.textContent).toContain("Leave this sync running?");
+		expect(getButton(modal, "Cancel sync")).toBeTruthy();
+		expect(getButton(modal, "Run in background")).toBeTruthy();
+		expect(getButton(modal, "Back")).toBeTruthy();
+
+		deferred.resolve({});
+		await flushUI();
+	});
+
+	test("cancel button keeps the running dialog open until the sync aborts, then returns to sync center", async () => {
+		const deferred = createDeferredResult();
+		const canceledSummary: LastSyncSummary = {
+			timestamp: Date.now(),
+			processedNotes: 1,
+			totalNotes: 1,
+			success: false,
+			status: "canceled",
+			mode: "import",
+		};
+		const modal = new SyncProgressModal(app, modalOptions);
+		modalOptions.runSyncPlan.mockImplementationOnce(async () => {
+			const result = await deferred.promise;
+			return result;
+		});
+		modal.onOpen();
+		getButton(modal, "Start sync").click();
+		await flushUI();
+		getButton(modal, "Execute").click();
+		await flushUI();
+
+		getButton(modal, "Cancel").click();
+		await flushUI();
+
+		expect(modalOptions.requestCancelSync).toHaveBeenCalledTimes(1);
+		expect(getButton(modal, "Canceling ...").disabled).toBe(true);
+		expect(modal.contentEl.textContent).toContain("Running download plan");
+
+		modal.setComplete("canceled", 1);
+		modal.setIdleSummary(canceledSummary);
+		deferred.resolve({ canceled: true });
+		await flushUI();
+
+		expect(modal.contentEl.textContent).toContain("Sync center");
+		expect(modal.contentEl.textContent).toContain("Sync canceled.");
+		expect(modal.contentEl.textContent).toContain("Notes: 1 / 1");
+		expect(modal.contentEl.textContent).not.toContain("Download failed");
+	});
+
+	test("two-way review advances to upload review and refreshes the upload stage in place", async () => {
+		const importPlan = createPreparedSyncPlanFixture("two-way", "import", [
+			createSyncPlanEntryFixture("merge", "Merge", {
+				id: "merge-1",
+				mode: "two-way",
+				stage: "import",
+			}),
+		]);
+		const uploadPlan = createPreparedSyncPlanFixture("two-way", "upload", [
+			createSyncPlanEntryFixture("upload", "Upload", {
+				id: "upload-1",
+				mode: "two-way",
+				stage: "upload",
+				path: "Keep/Upload.md",
+			}),
+		]);
+		const refreshedUploadPlan = createPreparedSyncPlanFixture("push", "upload", [
+			createSyncPlanEntryFixture("upload", "Upload", {
+				id: "upload-2",
+				mode: "push",
+				stage: "upload",
+				title: "Refreshed upload row",
+				path: "Keep/Refreshed Upload.md",
+			}),
+		]);
+		modalOptions.buildSyncPlan.mockResolvedValueOnce(importPlan).mockResolvedValueOnce(refreshedUploadPlan);
+		modalOptions.runSyncPlan.mockResolvedValueOnce({ nextPlan: uploadPlan });
+
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Customize sync").click();
+		await flushUI();
+		getButton(modal, "All dates").click();
+		await flushUI();
+		modal.setSelectedMode("two-way");
+		getButton(modal, "Start sync").click();
+		await flushUI();
+
+		expect(modal.contentEl.textContent).toContain("Review download plan");
+		expect(modalOptions.buildSyncPlan).toHaveBeenNthCalledWith(1, "two-way", expect.any(Object), { kind: "all" });
+
+		getButton(modal, "Execute").click();
+		await flushUI();
+
+		expect(modal.contentEl.textContent).toContain("Review upload plan");
+		expect(modal.contentEl.textContent).not.toContain("Upload step");
+
+		getButton(modal, "Refresh").click();
+		await flushUI();
+
+		expect(modalOptions.buildSyncPlan).toHaveBeenLastCalledWith("push");
+		expect(modal.contentEl.textContent).toContain("Refreshed upload row");
+	});
+
+	test.each(["push", "two-way"] as const)("completes a %s upload review after deselecting every upload and deletion", async (mode) => {
+		const uploadPlan = createPreparedSyncPlanFixture(mode, "upload", [
+			createSyncPlanEntryFixture("upload", "Upload", { id: "upload-1", mode, stage: "upload" }),
+			createSyncPlanEntryFixture("delete", "Delete", { id: "delete-1", mode, stage: "upload" }),
+		]);
+		modalOptions.buildSyncPlan.mockResolvedValueOnce(uploadPlan);
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		modal.setSelectedMode(mode);
+		getButton(modal, "Start sync").click();
+		await flushUI();
+		expect(getButton(modal, "Execute").disabled).toBe(false);
+
+		const selectAll = modal.contentEl.querySelector<HTMLInputElement>(".keepsidian-sync-plan-select-all input")!;
+		expect(selectAll).toBeTruthy();
+		selectAll.checked = false;
+		selectAll.dispatchEvent(new Event("change", { bubbles: true }));
+		await flushUI();
+
+		const complete = getButton(modal, "Complete review");
+		expect(complete.disabled).toBe(false);
+		complete.click();
+		await flushUI();
+		expect(modalOptions.runSyncPlan).toHaveBeenCalledTimes(1);
+		const executed = modalOptions.runSyncPlan.mock.calls[0][0] as PreparedSyncPlan;
+		expect(executed.plan.entries.every((entry) => !entry.selected)).toBe(true);
+		expect(modal.contentEl.textContent).toContain("Upload complete");
+	});
+
+    test.each([true, false])("blocked upload review requires explicit consent, eligible=%s", async eligible => {
+        const entries = [createSyncPlanEntryFixture("skipped-conflict", "Blocked: Keep note not found", { stage: "upload", selectable: false, selected: false })];
+        if (eligible) entries.push(createSyncPlanEntryFixture("upload", "Upload", { id: "eligible", stage: "upload" }));
+        const plan = createPreparedSyncPlanFixture("push", "upload", entries);
+        plan.plan.blockedUploads = 1;
+        modalOptions.buildSyncPlan.mockResolvedValueOnce(plan);
+        const modal = new SyncProgressModal(app, modalOptions); modal.onOpen(); modal.setSelectedMode("push");
+        getButton(modal, "Start sync").click(); await flushUI();
+        expect(modal.contentEl.textContent).toContain("canceling does not roll them back");
+        expect(modal.contentEl.textContent).toContain("1 note cannot");
+        expect(modal.contentEl.textContent).not.toContain("1 notes");
+        expect(getButton(modal, "Blocked 1")).toBeTruthy();
+        if (!eligible) expect(modal.contentEl.textContent).toContain("No eligible notes are available");
+        expect(modalOptions.runSyncPlan).not.toHaveBeenCalled();
+        const go = getButton(modal, "Sync selected eligible notes; skip blocked");
+        expect(go.disabled).toBe(!eligible);
+        if (eligible) { go.click(); await flushUI(); expect(modalOptions.runSyncPlan.mock.calls[0][0].plan.skipBlockedUploadsConfirmed).toBe(true); }
+        else { getButton(modal, "Cancel upload").click(); await flushUI(); expect(modalOptions.runSyncPlan).not.toHaveBeenCalled(); }
+    });
+    test("mixed locked uploads remain eligible and untitled execution keeps filename", async () => {
+        const plan = createPreparedSyncPlanFixture("push", "upload", [
+            createSyncPlanEntryFixture("skipped-conflict", "Blocked: Keep note not found", {id:"blocked",stage:"upload",selectable:false,selected:false}),
+            createSyncPlanEntryFixture("upload", "Upload", {id:"eligible",title:"",path:"Keep/Untitled.md",stage:"upload",selectionLocked:true})
+        ]);
+        plan.plan.blockedUploads=1;
+        modalOptions.buildSyncPlan.mockResolvedValueOnce(plan);
+        const modal=new SyncProgressModal(app,modalOptions); modal.onOpen(); modal.setSelectedMode("push");
+        getButton(modal,"Start sync").click(); await flushUI();
+        expect(modal.contentEl.textContent).not.toContain("No eligible notes");
+        expect(getRowTitles(modal)).toContain("Untitled.md");
+        getButton(modal,"Blocked 1").click(); await flushUI();
+        expect(getRowTitles(modal)).toHaveLength(1);
+        getButton(modal,"Notes 2").click(); await flushUI();
+        modalOptions.runSyncPlan.mockImplementationOnce(async (_plan, callbacks) => {
+            callbacks.onEntrySettled("eligible",true,"upload");
+            expect(getRowTitles(modal)).toContain("Untitled.md");
+            return {};
+        });
+        getButton(modal,"Sync selected eligible notes; skip blocked").click(); await flushUI();
+        expect(modal.contentEl.textContent).toContain("Blocked: kept unchanged");
+        const blocked = modal.contentEl.querySelector(".is-group-blocked");
+        expect(blocked?.querySelector(".keepsidian-sync-plan-row-status")?.textContent).toBe("–");
+    });
+
+    test("canceling a mixed upload review sends no uploads", async () => {
+        const plan = createPreparedSyncPlanFixture("push", "upload", [createSyncPlanEntryFixture("upload", "Upload", {stage: "upload"})]);
+        plan.plan.blockedUploads = 1;
+        modalOptions.buildSyncPlan.mockResolvedValueOnce(plan);
+        const modal = new SyncProgressModal(app, modalOptions); modal.onOpen(); modal.setSelectedMode("push");
+        getButton(modal, "Start sync").click(); await flushUI();
+        getButton(modal, "Cancel upload").click(); await flushUI();
+        expect(modalOptions.runSyncPlan).not.toHaveBeenCalled();
+        expect(plan.plan.skipBlockedUploadsConfirmed).not.toBe(true);
+    });
+
+    test("refresh retains unchecked uploads and clears partial-upload consent", async () => {
+        const original = createPreparedSyncPlanFixture("push", "upload", [createSyncPlanEntryFixture("upload", "Upload", {id: "old-index", path: "Keep/A.md", stage: "upload", selected: false})]);
+        original.plan.blockedUploads = 1;
+        const refreshed = createPreparedSyncPlanFixture("push", "upload", [createSyncPlanEntryFixture("upload", "Upload", {id: "new-index", path: "Keep/A.md", stage: "upload"})]);
+        refreshed.plan.blockedUploads = 1;
+        modalOptions.buildSyncPlan.mockResolvedValueOnce(original).mockResolvedValueOnce(refreshed);
+        const modal = new SyncProgressModal(app, modalOptions); modal.onOpen(); modal.setSelectedMode("push");
+        getButton(modal, "Start sync").click(); await flushUI();
+        original.plan.skipBlockedUploadsConfirmed = true;
+        getButton(modal, "Refresh").click(); await flushUI();
+        expect(getButton(modal, "Sync selected eligible notes; skip blocked").disabled).toBe(true);
+        expect(modalOptions.runSyncPlan).not.toHaveBeenCalled();
+    });
+
+	test("setup mode still shows live sync status for background sync monitoring", async () => {
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+
+		currentMode = "two-way";
+		currentPhaseLabel = "Download step";
+		(modal as unknown as { isSyncing: boolean }).isSyncing = true;
+		modal.setProgress(3, 10);
+		await flushUI();
+
+		expect(modal.contentEl.textContent).toContain("Sync center");
+		expect(modal.contentEl.textContent).toContain("Download step 3 / 10");
+
+		(modal as unknown as { isSyncing: boolean }).isSyncing = false;
+		const summary: LastSyncSummary = {
+			timestamp: Date.now(),
+			processedNotes: 4,
+			totalNotes: 4,
+			success: true,
+			status: "success",
+			mode: "two-way",
+		};
+		modal.setComplete(true, 4);
+		modal.setIdleSummary(summary);
+		await flushUI();
+
+		expect(modal.contentEl.textContent).toContain("Two-way sync · Sync complete.");
+		expect(modal.contentEl.textContent).toContain("Notes: 4 / 4");
+	});
+
+	test("labels an upload preparation failure without discarding the completed download rows", async () => {
+		const modal = new SyncProgressModal(app, { ...modalOptions, getLastAttempt: () => ({
+			id: "synthetic", mode: "two-way", phase: "upload-plan", startedAt: 0, updatedAt: 1,
+			fetchedCount: 623, elapsedMs: 1, logUnavailable: false, outcome: "failed",
+		}) });
+		modal.onOpen();
+		getButton(modal, "Start sync").click();
+		await flushUI();
+		getButton(modal, "Execute").click();
+		await flushUI();
+		modal.setComplete("failed", 18);
+		await flushUI();
+		expect(modal.contentEl.textContent).toContain("Upload preparation failed");
+		expect(modal.contentEl.textContent).not.toContain("Download failed");
+	});
+
+	test("shows attachment warnings as a completed download result", async () => {
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Start sync").click();
+		await flushUI();
+		getButton(modal, "Execute").click();
+		await flushUI();
+
+		modal.setComplete("warning", 3, 2);
+		await flushUI();
+
+		expect(modal.contentEl.textContent).toContain("Download complete with warnings");
+		expect(modal.contentEl.textContent).toContain("3 notes · 2 warnings");
+	});
+
+	test("shows the saved filename after enrichment without changing the reviewed plan", async () => {
+		modalOptions.runSyncPlan.mockImplementation(async (_plan, callbacks) => {
+			callbacks.onEntrySaved?.("create-note", "Keep/Suggested title.md");
+			callbacks.onEntrySettled?.("create-note", true, "create");
+			return {};
+		});
+		const modal = new SyncProgressModal(app, modalOptions);
+		modal.onOpen();
+		getButton(modal, "Start sync").click();
+		await flushUI();
+		getButton(modal, "Execute").click();
+		await flushUI();
+		expect(getRowTitles(modal)).toContain("Suggested title");
+		expect(modal.contentEl.textContent).toContain("Keep/Suggested title.md");
+		expect(modal.contentEl.textContent).not.toContain("Keep/Create note.md");
+		expect(modalOptions.preparedPlan.plan.entries[0].path).toBe("Keep/Create note.md");
+	});
+});

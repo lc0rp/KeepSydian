@@ -17,7 +17,21 @@
 		"lint:md:fix": "markdownlint-cli2 --fix '**/*.md'",
 		"lint:fix": "node scripts/lint-wrapper.mjs --fix",
 		"verify:bundles": "node scripts/verify-bundles.mjs",
-		"preversion": "npm run lint"
+		"preversion": "npm run lint",
+		"test": "npm run test:offline && npm run test:unit",
+		"test:unit": "jest --config test/config/jest.config.cjs --runInBand",
+		"test:offline": "node --test test/offline/*.test.mjs test/system/*.test.mjs",
+		"coverage": "npm run test:offline && npm run test:unit -- --coverage",
+		"build:e2e:legacy": "node test/helpers/build-offline.mjs production",
+		"wdio": "wdio run test/config/wdio.conf.mts",
+		"wdio:mobile": "wdio run test/config/wdio.mobile.conf.mts",
+		"e2e:desktop": "npm run build:e2e:legacy && npm run wdio",
+		"e2e:android": "npm run build:e2e:legacy && npm run wdio:mobile",
+		"e2e:i18n": "npm run build:e2e:legacy && wdio run test/config/wdio.i18n.conf.mts",
+		"e2e:i18n:acceptance": "npm run build:e2e:legacy && wdio run test/config/wdio.i18n-acceptance.conf.mts",
+		"e2e:i18n:settings": "npm run build:e2e:legacy && wdio run test/config/wdio.i18n-settings-boundary.conf.mts",
+		"e2e:archive": "npm run build:e2e:legacy && wdio run test/config/wdio.archive-validation.conf.mts",
+		"appium:android": "ANDROID_SDK_ROOT=\"$HOME/Library/Android/sdk\" ANDROID_HOME=\"$HOME/Library/Android/sdk\" PATH=\"$HOME/Library/Android/sdk/platform-tools:$HOME/Library/Android/sdk/emulator:$HOME/Library/Android/sdk/cmdline-tools/latest/bin:$PATH\" appium server --address 127.0.0.1 --port 4723 --allow-insecure \"*:chromedriver_autodownload,*:adb_shell\""
 	},
 	"keywords": [
 		"obsidian",

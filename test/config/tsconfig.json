@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "../..",
+    "paths": {
+      "@app/*": ["src/app/*"],
+      "@ui/*": ["src/ui/*"],
+      "@features/*": ["src/features/*"],
+      "@integrations/*": ["src/integrations/*"],
+      "@services/*": ["src/services/*"],
+      "@types": ["src/types/index.ts"],
+      "@types/*": ["src/types/*"],
+      "@schemas/*": ["src/schemas/*"],
+      "@test-utils/*": ["test/utils/*"]
+    }
+  },
+  "include": ["../../src/**/*.ts", "../**/*.ts"]
+}
