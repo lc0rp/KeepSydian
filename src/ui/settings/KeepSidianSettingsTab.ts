@@ -19,7 +19,6 @@ import {
 	addSupportSection as addSupportSectionSection,
 } from "./KeepSidianSettingsTab/commonSettings";
 import {
-	addAdvancedSettings as addAdvancedSettingsSection,
 	addSyncTokenSetting as addSyncTokenSettingSection,
 } from "./KeepSidianSettingsTab/tokenSettings";
 
@@ -180,10 +179,6 @@ export class KeepSidianSettingsTab extends PluginSettingTab {
 
 	private addGithubInstructionsLink(setting: Setting): void {
 		addGithubInstructionsLinkSection(setting);
-	}
-
-	private addAdvancedSettings(containerEl: HTMLElement): void {
-		addAdvancedSettingsSection(this.plugin, containerEl);
 	}
 
 	private async handleTokenPaste(event: ClipboardEvent): Promise<void> {

@@ -274,18 +274,6 @@ export interface BuiltImportSyncPlan {
 	completionDate?: string;
 }
 
-function logErrorIfNotTest(...args: unknown[]) {
-	try {
-		const isTest =
-			typeof process !== "undefined" && (process.env?.NODE_ENV === "test" || !!process.env?.JEST_WORKER_ID);
-		if (!isTest) {
-			console.error(...args);
-		}
-	} catch {
-		// no-op
-	}
-}
-
 function logInfoIfNotTest(...args: unknown[]) {
 	try {
 		const isTest =

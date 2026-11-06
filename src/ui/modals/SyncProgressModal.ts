@@ -388,13 +388,6 @@ export class SyncProgressModal extends Modal {
 		}
 		return { kind: "last-sync" };
 	}
-	private getCustomScopeError(): string | null {
-		if (this.downloadScopeKind !== "custom-since") {
-			return null;
-		}
-		const parsed = parseCustomScopeRange(this.customSinceInput, this.customUntilInput);
-		return parsed.startError ?? parsed.endError ?? null;
-	}
 	async beginReview(mode = this.selectedMode, retainedMergeAction?: MergeAction) {
 		if (this.isSyncing || this.isGeneratingReview) return;
 		this.selectedMode = mode; this.isGeneratingReview = true;

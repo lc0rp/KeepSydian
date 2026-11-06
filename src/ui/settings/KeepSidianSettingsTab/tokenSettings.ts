@@ -133,31 +133,3 @@ export function addSyncTokenSetting(containerEl: HTMLElement, options: TokenSett
 		options.addGithubInstructionsLink(retrievalSetting);
 	}
 }
-
-export function addAdvancedSettings(plugin: KeepSidianPlugin, containerEl: HTMLElement): void {
-	new Setting(containerEl).setName("Advanced & debug").setHeading();
-
-	const oauthFlowSetting = new Setting(containerEl)
-		.setName(t("settings.oauth.name"))
-		.setDesc(t("settings.oauth.description"))
-		.addDropdown((dropdown) => {
-			dropdown.addOption("desktop", t("settings.oauth.embedded")).addOption("webviewer", t("settings.oauth.webViewer"));
-			dropdown.setValue(plugin.settings.oauthFlow ?? "desktop");
-			dropdown.onChange(async (value) => {
-				plugin.settings.oauthFlow = value as "desktop" | "webviewer";
-				await plugin.saveSettings();
-			});
-			if (!Platform.isDesktopApp) {
-				dropdown.setDisabled(true);
-			}
-		});
-
-	if (!Platform.isDesktopApp) {
-		oauthFlowSetting.setDesc(t("settings.oauth.mobileDescription"));
-	}
-
-	if (plugin.settings.oauthPlaywrightUseSystemBrowser !== true) {
-		plugin.settings.oauthPlaywrightUseSystemBrowser = true;
-		void plugin.saveSettings();
-	}
-}
