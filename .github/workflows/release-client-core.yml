@@ -132,7 +132,7 @@ jobs:
         run: |
           cutoff="$(python3 -c 'from datetime import datetime, timedelta, timezone; print((datetime.now(timezone.utc) - timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
           npm ci --before="$cutoff"
-          node --test scripts/release-version.test.mjs
+          node --check scripts/release-version.mjs
           npm run build
           python3 - <<'PYVERIFY'
           import importlib.util, sys

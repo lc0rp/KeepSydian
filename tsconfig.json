@@ -25,9 +25,6 @@
       ],
       "@schemas/*": [
         "schemas/*"
-      ],
-      "@test-utils/*": [
-        "test-utils/*"
       ]
     },
     "inlineSourceMap": true,
@@ -50,9 +47,7 @@
   },
   "include": [
     "./src/**/*.ts",
-    "./src/types/**/*.d.ts",
-    "./__mocks__/electron.ts",
-    "./__mocks__/obsidian.ts"
+    "./src/types/**/*.d.ts"
   ],
   "exclude": [
     "./dist/**/*"

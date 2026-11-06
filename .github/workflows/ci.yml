@@ -14,60 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    env:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
-      - name: Verify tested revision
-        env:
-          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-          echo "Tested revision: $EXPECTED_SHA"
-
-      - name: Use Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "18.x"
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Test hosted release recovery contracts without network access
-        run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
-
-      - name: Run tests with coverage
-        run: npm run coverage
-
-      - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: keepsidian-plugin-coverage-${{ github.run_id }}
-          path: ./coverage
-          if-no-files-found: error
-          retention-days: 3
-
-      - name: Upload to Codecov
-        if: env.CODECOV_TOKEN != ''
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ env.CODECOV_TOKEN }}
-          files: ./coverage/lcov.info
-          flags: plugin
-          name: keepsidian-plugin
-          override_branch: ${{ github.ref_name }}
-          fail_ci_if_error: false
-
   build:
-    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read

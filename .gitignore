@@ -1,5 +1,5 @@
 # vscode
-.vscode 
+.vscode
 
 # Intellij
 *.iml
@@ -35,8 +35,7 @@ data.json
 .env.development
 .env.production
 
-# Local settings shared with other repos
-# Use ln -s /path/to/shared/file file to include here
+# Local workspace files
 AGENTS.md
 logs/
 
@@ -59,3 +58,17 @@ bmad-custom-src
 .agents
 docs
 .scratch/
+
+# Disposable artifacts, caches, and local configuration
+/.tmp
+.venv
+__pycache__
+*.py[cod]
+build
+.next
+.cache
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.env
+*.tmp
