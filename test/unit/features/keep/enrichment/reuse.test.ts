@@ -994,3 +994,26 @@ it("rejects a saved result for changed current source and preserves edits made a
   expect(different.title).not.toBe("AI Proposed");expect(paid).toHaveBeenCalledTimes(1);
  } finally {prep.mockRestore();paid.mockRestore();lookup.mockRestore();}
 });
+
+it("does not let an older expired operation authorize another retry while the latest attempt is pending",async()=>{
+ const f=fixture(), current=await note();
+ let handle="A";
+ const prep=jest.spyOn(keepApi,"prepareLocalEnrichment").mockImplementation(async(_e,_t,_s,window)=>{window?.(45_000);return handle;});
+ const paid=jest.spyOn(keepApi,"enrichLocalNotes").mockRejectedValue(Error("response lost"));
+ const {AccessV1RequestError}=await import("@services/errors");
+ const lookup=jest.spyOn(keepApi,"lookupLocalEnrichment").mockImplementation(async(_e,_t,_n,_s,operation)=>{throw new AccessV1RequestError(operation==="A"?410:409,operation==="A"?"enrichment_replay_expired":"enrichment_replay_pending");});
+ const {chooseUncertainRetry}=await import("../../../../../src/features/keep/enrichment/retry-consent");
+ const initial=Date.now();const clock=jest.spyOn(Date,"now").mockReturnValue(initial);
+ try {
+  await enrichImportNotes(f.plugin,[current],FLAGS,f.ledger);
+  clock.mockReturnValue(initial+60_000);handle="B";chooseUncertainRetry(current,true);
+  await enrichImportNotes(f.plugin,[current],FLAGS,f.ledger);
+  expect(paid).toHaveBeenCalledTimes(2);
+  clock.mockReturnValue(initial+61_000);handle="C";chooseUncertainRetry(current,true);
+  await enrichImportNotes(f.plugin,[current],FLAGS,f.ledger);
+  expect(paid).toHaveBeenCalledTimes(2);
+  clock.mockReturnValue(initial+120_000);chooseUncertainRetry(current,true);
+  await enrichImportNotes(f.plugin,[current],FLAGS,f.ledger);
+  expect(paid).toHaveBeenCalledTimes(2);
+ } finally {prep.mockRestore();paid.mockRestore();lookup.mockRestore();clock.mockRestore();}
+});

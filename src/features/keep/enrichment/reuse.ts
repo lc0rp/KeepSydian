@@ -147,10 +147,12 @@ export async function enrichImportNotes(
 							Date.now() - saved.startedAt >= saved.executionWindowMs &&
 							retryChosen.has(row.request.source.id)
 						)
-							Object.values(row.keys).forEach((key) => retryKeys.add(key));
+							Object.values(row.keys)
+								.filter((key) => state.cache[key]?.operation === operation)
+								.forEach((key) => retryKeys.add(key));
 						continue;
 					}
-					await acceptResult(row.request, row.keys, result);
+					await acceptResult(row.request, row.keys, result, operation);
 				}
 			} catch (error) {
 				// A failed lookup is not proof that the previous paid operation ended.
@@ -165,14 +167,17 @@ export async function enrichImportNotes(
 							retryChosen.has(row.request.source.id) &&
 							notes.some((note) => note.enrichment_source?.source_hash === row.request.source.source_hash)
 						)
-							Object.values(row.keys).forEach((key) => retryKeys.add(key));
+							Object.values(row.keys)
+								.filter((key) => state.cache[key]?.operation === operation)
+								.forEach((key) => retryKeys.add(key));
 				}
 			}
 		}
 		async function acceptResult(
 			request: LocalEnrichmentRequest,
 			keys: Record<string, string>,
-			result: Awaited<ReturnType<Provider>>["results"][number] | undefined
+			result: Awaited<ReturnType<Provider>>["results"][number] | undefined,
+			operation?: string
 		): Promise<void> {
 			if (
 				!result ||
@@ -196,6 +201,7 @@ export async function enrichImportNotes(
 				return;
 			for (const feature of ["title", "tags"] as const) {
 				if (!request.features[feature === "title" ? "suggest_title" : "suggest_tags"]) continue;
+				if (operation && state.cache[keys[feature]]?.operation !== operation) continue;
 				const output = result.outputs[feature];
 				if (feature === "title" ? typeof output !== "string" : !Array.isArray(output)) return;
 				state.cache[keys[feature]] = {
@@ -424,9 +430,10 @@ export async function enrichImportNotes(
 						const attemptedCoverage = feature === "tags" ? (item.request!.features.suggest_tags?.max_tags ?? 0) : 0;
 						state.cache[item.keys[feature]] =
 							prior?.status === "ready"
-								? { ...prior, attemptedCoverage }
+								? { ...prior, attemptedCoverage, operation }
 								: {
 										status: "uncertain",
+										operation,
 										coverage: 0,
 										attemptedCoverage,
 										recipe: await hash(item.request!.features),
@@ -475,7 +482,8 @@ export async function enrichImportNotes(
 					await acceptResult(
 						item.request!,
 						item.keys,
-						response.results.find((row) => row.source.id === item.request!.source.id)
+						response.results.find((row) => row.source.id === item.request!.source.id),
+						operation
 					);
 				}
 			} catch {

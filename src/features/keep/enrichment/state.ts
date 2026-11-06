@@ -40,6 +40,7 @@ export const StateSchema = z.object({
 		z.string(),
 		z.object({
 			status: z.enum(["ready", "uncertain"]),
+			operation: z.string().optional(),
 			output: z.union([z.string(), z.array(z.string())]).optional(),
 			coverage: z.number(),
 			attemptedCoverage: z.number().optional(),
