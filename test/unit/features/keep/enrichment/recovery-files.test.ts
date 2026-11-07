@@ -1,5 +1,7 @@
+jest.mock("@app/sync-ui");
 jest.mock("@app/logging", () => ({
 	logSync: jest.fn().mockResolvedValue(undefined),
+	prepareSyncLog: jest.fn().mockResolvedValue(true),
 	flushLogSync: jest.fn().mockResolvedValue(undefined),
 }));
 jest.mock("../../../../../src/services/http", () => {
@@ -19,13 +21,21 @@ import { join } from "node:path";
 import type KeepSidianPlugin from "@app/main";
 import type { PreNormalizedNote } from "../../../../../src/features/keep/domain/note";
 import { buildExistingKeepNoteIndex } from "../../../../../src/features/keep/domain/noteLookup";
-import { commitLastSuccessfulSyncDate, processAndSaveNote } from "../../../../../src/features/keep/sync";
+import {
+	buildImportSyncPlan,
+	importSelectedGoogleKeepNotes,
+	commitLastSuccessfulSyncDate,
+	processAndSaveNote,
+} from "../../../../../src/features/keep/sync";
 import { EnrichmentLedger, getEnrichmentLedger } from "../../../../../src/features/keep/enrichment/ledger";
 import { enrichImportNotes } from "../../../../../src/features/keep/enrichment/reuse";
 import { ENRICHMENT_RECOVERY_RETENTION_MS, hash } from "../../../../../src/features/keep/enrichment/state";
 import { KEEPSIDIAN_SERVER_URL } from "../../../../../src/config";
 import { httpGetArrayBuffer } from "@services/http";
 import { AccessV1RequestError } from "@services/errors";
+import { DEFAULT_SETTINGS } from "../../../../../src/types/keepsidian-plugin-settings";
+import { runImportNotesFlow } from "@app/main-sync-flows";
+import { logSync } from "@app/logging";
 import * as keepApi from "@integrations/server/keepApi";
 
 beforeAll(() => {
@@ -266,3 +276,140 @@ it.each(["expired", "terminal", "other-account"])(
 		}
 	}
 );
+
+it("makes recovered title-only output selectable, applies it and releases the checkpoint", async () => {
+	const { plugin, adapter, directory } = await harness();
+	const prep = jest.spyOn(keepApi, "prepareLocalEnrichment").mockImplementation(async (_e, _t, _s, window) => {
+		window?.(45_000);
+		return "title-operation";
+	});
+	const paid = jest.spyOn(keepApi, "enrichLocalNotes").mockRejectedValue(new Error("lost"));
+	const lookup = jest
+		.spyOn(keepApi, "lookupLocalEnrichment")
+		.mockImplementation(async (e, t, rows) => provider(e, t, rows));
+	const fetch = jest.spyOn(keepApi, "fetchNotesWithPremiumFeatures");
+	const epoch = jest.spyOn(keepApi, "getReplayEpoch").mockResolvedValue(undefined);
+	try {
+		const current = await keep("Body", false),
+			ledger = getEnrichmentLedger(plugin);
+		const [uncertain] = await enrichImportNotes(plugin, [current], { suggest_title: {} }, ledger);
+		await processAndSaveNote(
+			plugin,
+			uncertain,
+			"Keep",
+			undefined,
+			await buildExistingKeepNoteIndex(plugin.app, "Keep")
+		);
+		expect(await ledger.hasRecoverableOperations()).toBe(true);
+		fetch.mockResolvedValue({ notes: [current], total_notes: 1 });
+		const built = await buildImportSyncPlan(plugin, {
+			...DEFAULT_SETTINGS.premiumFeatures,
+			updateTitle: true,
+			suggestTags: false,
+		});
+		expect(built.plan.entries[0].selectable).toBe(true);
+		expect(built.notes[0].enrichment_uncertain).toBe(false);
+		await importSelectedGoogleKeepNotes(plugin, built.notes, undefined, "2099-01-02T00:00:00.000Z");
+		expect(await adapter.read("Keep/Human.md")).toContain('Title: "Suggested"');
+		expect(await ledger.hasRecoverableOperations()).toBe(false);
+		expect(paid).toHaveBeenCalledTimes(1);
+	} finally {
+		prep.mockRestore();
+		paid.mockRestore();
+		lookup.mockRestore();
+		fetch.mockRestore();
+		epoch.mockRestore();
+		await fs.rm(directory, { recursive: true, force: true });
+	}
+});
+
+it.each(["changed", "missing"])("completes a no-AI background import when its AI ledger is %s", async (kind) => {
+	const { plugin, adapter, directory } = await harness();
+	const fetch = jest.spyOn(keepApi, "fetchNotes");
+	try {
+		const ledger = getEnrichmentLedger(plugin);
+		await enrichImportNotes(plugin, [await keep("Body", false)], FLAGS, ledger, provider);
+		const path = ".obsidian/plugins/keepsidian/enrichment-v1.json";
+		if (kind === "changed") await adapter.write(path, (await adapter.read(path)) + " ");
+		else await fs.rm(join(directory, path));
+		plugin.settings = { ...DEFAULT_SETTINGS, ...plugin.settings, frontmatterPascalCaseFixApplied: true };
+		Object.assign(plugin, { subscriptionService: { isSubscriptionActive: jest.fn(async () => false) } });
+		fetch.mockResolvedValue({ notes: [await keep("New incoming body", false)], total_notes: 1 });
+		await runImportNotesFlow(plugin, true, String);
+		expect(plugin.settings.lastSyncAttempt?.outcome).toBe("success");
+		expect(plugin.settings.keepSidianLastSuccessfulSyncDate).not.toBe("2026-11-01T00:00:00.000Z");
+		expect(await adapter.read("Keep/Human.md")).toContain("New incoming body");
+		expect(logSync).toHaveBeenCalledWith(plugin, expect.stringContaining("AI recovery metadata is unavailable"));
+		const fresh = { ...plugin, settings: { ...plugin.settings } } as KeepSidianPlugin;
+		await expect(commitLastSuccessfulSyncDate(fresh, "2099-01-03T00:00:00.000Z")).resolves.toBeUndefined();
+	} finally {
+		fetch.mockRestore();
+		await fs.rm(directory, { recursive: true, force: true });
+	}
+});
+
+it("prunes completed operations when later incremental runs contain different notes", async () => {
+	const { plugin, adapter, directory } = await harness();
+	let handle = 0;
+	const prep = jest.spyOn(keepApi, "prepareLocalEnrichment").mockImplementation(async (_e, _t, _s, window) => {
+		window?.(45_000);
+		return `operation-${++handle}`;
+	});
+	const paid = jest.spyOn(keepApi, "enrichLocalNotes").mockImplementation(provider);
+	try {
+		const ledger = getEnrichmentLedger(plugin);
+		for (let i = 0; i < 10; i++) {
+			const current = await keep(`Body ${i}`, false);
+			current.id = `note-${i}`;
+			current.text = current.text!.replace("#NOTE/n1", `#NOTE/note-${i}`);
+			current.enrichment_source = { ...current.enrichment_source!, id: current.id, incarnation: await hash([i]) };
+			const [out] = await enrichImportNotes(plugin, [current], FLAGS, ledger);
+			await processAndSaveNote(plugin, out, "Keep", undefined, await buildExistingKeepNoteIndex(plugin.app, "Keep"));
+		}
+		await enrichImportNotes(plugin, [await keep("Another unrelated note", false)], FLAGS, ledger, undefined, false);
+		const state = JSON.parse(await adapter.read(".obsidian/plugins/keepsidian/enrichment-v1.json")).state;
+		expect(Object.keys(state.operations ?? {})).toHaveLength(0);
+		expect(paid).toHaveBeenCalledTimes(10);
+	} finally {
+		prep.mockRestore();
+		paid.mockRestore();
+		await fs.rm(directory, { recursive: true, force: true });
+	}
+});
+
+it("creates a conflict copy and still archives the unchanged original safely", async () => {
+	const { plugin, adapter, directory } = await harness();
+	try {
+		const ledger = getEnrichmentLedger(plugin);
+		const [first] = await enrichImportNotes(plugin, [await keep("Body one", false)], FLAGS, ledger, provider);
+		await processAndSaveNote(plugin, first, "Keep", undefined, await buildExistingKeepNoteIndex(plugin.app, "Keep"));
+		await adapter.write(
+			"Keep/Suggested.md",
+			((await adapter.read("Keep/Suggested.md")) + "\nLocal paragraph").replace(/^KeepSidianLocalBaseline:.*\n/m, "")
+		);
+		const archived = {
+			...(await keep("Different Keep body", false)),
+			archived: true,
+			frontmatterDict: { GoogleKeepArchived: true },
+		};
+		const [second] = await enrichImportNotes(plugin, [archived], FLAGS, ledger, provider);
+		const result = await processAndSaveNote(
+			plugin,
+			second,
+			"Keep",
+			undefined,
+			await buildExistingKeepNoteIndex(plugin.app, "Keep"),
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			"all"
+		);
+		expect(result.action).toBe("conflict");
+		const original = await adapter.read("Keep/Suggested.md");
+		expect(original).toContain("Local paragraph");
+		expect(original).toContain("GoogleKeepArchived: true");
+	} finally {
+		await fs.rm(directory, { recursive: true, force: true });
+	}
+});

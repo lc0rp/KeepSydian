@@ -97,11 +97,7 @@ export async function enrichImportNotes(
 		const readRetry = { checkCancelled: () => plugin.throwIfSyncCancelled?.(), onRetry: async () => {} };
 		// Operations are bound to this backend/account namespace. Never probe other accounts.
 		for (const [operation, saved] of Object.entries(state.operations ?? {})) {
-			if (
-				saved.namespace !== namespace ||
-				!saved.rows.some((row) => notes.some((note) => note.enrichment_source?.id === row.request.source.id))
-			)
-				continue;
+			if (saved.namespace !== namespace) continue;
 			for (const row of saved.rows) {
 				if (state.records[await activeLedger.key(row.request.source)]?.local?.settledOperations?.includes(operation))
 					row.checkpointSettled = true;
@@ -123,6 +119,8 @@ export async function enrichImportNotes(
 				delete state.operations![operation];
 				continue;
 			}
+			if (!saved.rows.some((row) => notes.some((note) => note.enrichment_source?.id === row.request.source.id)))
+				continue;
 			if (saved.terminal) {
 				for (const row of saved.rows)
 					if (
@@ -583,6 +581,7 @@ export async function enrichImportNotes(
 			if (title?.status === "ready" && typeof title.output === "string" && !record.manualTitle) {
 				note.title = title.output;
 				note.local_enrichment!.title ??= title.output;
+				if (record.local && record.local.title !== note.local_enrichment!.title) note.enrichment_pending = true;
 			}
 			const tagResult = state.cache[keys.tags];
 			if (!note.enrichment_legacy_held && tagResult?.status === "ready" && Array.isArray(tagResult.output)) {

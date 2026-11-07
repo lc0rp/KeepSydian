@@ -1,3 +1,4 @@
+import { CONFLICT_FILE_SUFFIX } from "./constants";
 import { localEnrichmentSnapshot } from "./enrichment/state";
 import { t } from "../../lang/ui";
 import { Notice, getAllTags } from "obsidian";
@@ -246,7 +247,14 @@ export function persistLastSuccessfulSyncDate(plugin: KeepSidianPlugin, isoStrin
 
 /** Content can finish while a lost AI result keeps the incremental recovery window open. */
 export async function commitLastSuccessfulSyncDate(plugin: KeepSidianPlugin, isoString: string): Promise<void> {
-	if (await hasRecoverableEnrichment(plugin)) return;
+	try {
+		if (await hasRecoverableEnrichment(plugin)) return;
+	} catch {
+		// Recovery metadata must not turn an already completed content sync into
+		// failure. The ledger remains blocked for AI; this grants no paid retry.
+		await logSync(plugin, "AI recovery metadata is unavailable. Content sync completed; AI remains blocked until its saved state is repaired.")
+			.catch(() => console.warn("KeepSydian: unable to record the AI recovery metadata warning."));
+	}
 	persistLastSuccessfulSyncDate(plugin, isoString);
 }
 
@@ -1180,7 +1188,7 @@ export async function processAndSaveNote(
 			if (expected === undefined && await equivalentPath(plugin.app.vault.adapter, path)) throw new Error("A local file appeared at the download destination. It was preserved.");
 			if (expected === undefined || stamped !== expected) await plugin.app.vault.adapter.write(path, stamped);
 		});
-		if (note.local_enrichment) {
+		if (note.local_enrichment && !path.includes(CONFLICT_FILE_SUFFIX)) {
 			await getEnrichmentLedger(plugin).finish(note);
 			note.local_enrichment.observedLocalPath = path;
 			note.local_enrichment.observedLocalHash = await localEnrichmentSnapshot(path, stamped);
@@ -1197,7 +1205,7 @@ export async function processAndSaveNote(
 		const updated = note.local_enrichment ? await getEnrichmentLedger(plugin).stage(note, path, expected, content, finalize) : await finalize(content);
 		if ((await plugin.app.vault.adapter.read(path) ?? "") !== expected) throw new Error("A local note changed during metadata update. Local edits were preserved.");
 		if (updated !== expected) await plugin.app.vault.adapter.write(path, updated, options);
-		if (note.local_enrichment) {
+		if (note.local_enrichment && !path.includes(CONFLICT_FILE_SUFFIX)) {
 			await getEnrichmentLedger(plugin).finish(note);
 			note.local_enrichment.observedLocalPath = path;
 			note.local_enrichment.observedLocalHash = await localEnrichmentSnapshot(path, updated);
