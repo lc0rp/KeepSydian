@@ -32,6 +32,9 @@ const ACCESS_V1_ERROR_CODES = new Set([
 	"sync_upload_review_requires_supporter",
 	"sync_operation_held",
 	"enrichment_replay_held",
+	"enrichment_replay_pending",
+	"enrichment_replay_expired",
+	"enrichment_replay_conflict",
 	"enrichment_source_changed",
 	"access_expired",
 	"access_v1_disabled",
@@ -44,12 +47,14 @@ const ACCESS_V1_ERROR_CODES = new Set([
 	"invalid_access",
 ]);
 
-/** Safe HTTP metadata only. Never retain raw bodies, headers, credential causes or retry authority. */
+/** Safe HTTP metadata only. Never retain raw bodies, headers or credential causes. Retry eligibility is assigned only by the request boundary. */
 export class AccessV1RequestError extends NetworkError {
-	readonly retryAllowed = false;
+	retryAllowed = false;
+	retryHandled = false;
+	responseRejected = false;
 	constructor(status?: number, code?: unknown, retryAfterMs?: number) {
 		super(
-			"Short-lived request failed; no automatic retry was attempted.",
+			"Short-lived request failed. Safe reads can be resumed; paid work and writes need review.",
 			typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599 ? status : undefined
 		);
 		if (typeof code === "string" && ACCESS_V1_ERROR_CODES.has(code)) this.code = code;

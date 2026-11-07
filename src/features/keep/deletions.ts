@@ -70,7 +70,7 @@ export async function buildDeletionPlan(plugin: KeepSidianPlugin): Promise<Prepa
 	}
 	if (!byUrl.size) return prepared;
 
-	const deletedUrls = await fetchDeletedKeepUrls(plugin.settings.email, plugin.settings.token);
+	const deletedUrls = await fetchDeletedKeepUrls(plugin.settings.email, plugin.settings.token, {checkCancelled: () => plugin.throwIfSyncCancelled?.(), onRetry: async () => {}});
 	plugin.throwIfSyncCancelled?.();
 	if (accountEmail(plugin) !== prepared.accountEmail || rootFolder(plugin) !== prepared.rootFolder) {
 		throw new Error("Download account or folder changed. Prepare the sync plan again.");
@@ -114,7 +114,7 @@ export async function executeReviewedDeletions(
 		}
 	};
 	checkContext();
-	const deletedUrls = await fetchDeletedKeepUrls(plugin.settings.email, plugin.settings.token);
+	const deletedUrls = await fetchDeletedKeepUrls(plugin.settings.email, plugin.settings.token, {checkCancelled: () => plugin.throwIfSyncCancelled?.(), onRetry: async () => {}});
 	const checkCandidate = async (candidate: DeletionCandidate): Promise<TFile> => {
 		checkContext();
 		if (!deletedUrls.has(candidate.keepUrl)) {

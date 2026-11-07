@@ -1,6 +1,10 @@
+import { isSyncCancellationError } from "@app/sync-cancel";
+import { AccessV1RequestError } from "@services/errors";
+import { consumeUncertainRetry } from "./retry-consent";
 import type KeepSidianPlugin from "@app/main";
 import {
 	enrichLocalNotes,
+	lookupLocalEnrichment,
 	prepareLocalEnrichment,
 	type LocalEnrichmentRequest,
 	type PremiumFeatureFlags,
@@ -10,7 +14,15 @@ import { CONFLICT_FILE_SUFFIX } from "../constants";
 import { buildExistingKeepNoteIndex, readKeepNoteIdentity } from "../domain/noteLookup";
 import { extractFrontmatter, normalizeNote, type PreNormalizedNote } from "../domain/note";
 import { getEnrichmentLedger, type EnrichmentLedger } from "./ledger";
-import { hash, bodyHash, observeLocal, effectiveTitle, tags, type EnrichmentRecord } from "./state";
+import {
+	hash,
+	bodyHash,
+	localEnrichmentSnapshot,
+	observeLocal,
+	effectiveTitle,
+	tags,
+	type EnrichmentRecord,
+} from "./state";
 import { bindLegacyTagConsent, permitsLegacyTags } from "./consent";
 
 export function fetchFirstFlags(flags: PremiumFeatureFlags): PremiumFeatureFlags {
@@ -77,6 +89,163 @@ export async function enrichImportNotes(
 		if (Array.isArray(requested.suggest_tags?.restrict_tags)) {
 			state.vocabulary[namespace] ??= [...new Set(requested.suggest_tags.restrict_tags)].sort();
 			flags = { ...requested, suggest_tags: { ...requested.suggest_tags, restrict_tags: state.vocabulary[namespace] } };
+		}
+		const retryChosen = new Set(
+			generate ? notes.filter(consumeUncertainRetry).map((note) => note.enrichment_source?.id) : []
+		);
+		const retryKeys = new Set<string>();
+		const readRetry = { checkCancelled: () => plugin.throwIfSyncCancelled?.(), onRetry: async () => {} };
+		// Operations are bound to this backend/account namespace. Never probe other accounts.
+		for (const [operation, saved] of Object.entries(state.operations ?? {})) {
+			if (saved.namespace !== namespace) continue;
+			for (const row of saved.rows) {
+				if (state.records[await activeLedger.key(row.request.source)]?.local?.settledOperations?.includes(operation))
+					row.checkpointSettled = true;
+			}
+			if (
+				saved.rows.every((row) => row.checkpointSettled) &&
+				saved.rows.every((row) =>
+					Object.entries(row.keys)
+						.filter(
+							([feature]) => row.request.features[feature === "title" ? "suggest_title" : "suggest_tags"] !== undefined
+						)
+						.every(
+							([, key]) =>
+								state.cache[key]?.status === "ready" &&
+								(state.cache[key]?.attemptedCoverage ?? 0) <= state.cache[key].coverage
+						)
+				)
+			) {
+				delete state.operations![operation];
+				continue;
+			}
+			if (!saved.rows.some((row) => notes.some((note) => note.enrichment_source?.id === row.request.source.id)))
+				continue;
+			if (saved.terminal) {
+				for (const row of saved.rows)
+					if (
+						retryChosen.has(row.request.source.id) &&
+						notes.some((note) => note.enrichment_source?.source_hash === row.request.source.source_hash)
+					)
+						Object.values(row.keys)
+							.filter((key) => state.cache[key]?.operation === operation)
+							.forEach((key) => retryKeys.add(key));
+				continue;
+			}
+			assertContext();
+			plugin.throwIfSyncCancelled?.();
+			try {
+				const response = await lookupLocalEnrichment(
+					credentials.email,
+					credentials.token,
+					saved.rows.map((row) => row.request),
+					credentials.supporterKey,
+					operation,
+					readRetry
+				);
+				if (
+					response.results.length !== saved.rows.length ||
+					new Set(response.results.map((row) => row.source.id)).size !== saved.rows.length
+				)
+					throw new Error("Incomplete saved result.");
+				for (const row of saved.rows) {
+					const current = notes.find((note) => note.enrichment_source?.id === row.request.source.id);
+					if (!current || current.enrichment_source?.source_hash !== row.request.source.source_hash) continue;
+					const record = state.records[await activeLedger.key(row.request.source)];
+					const paths = identities.get(`https://keep.google.com/#NOTE/${row.request.source.id}`) ?? [];
+					if (paths.length > 1) continue;
+					if (paths.length) {
+						const content = await plugin.app.vault.adapter.read(paths[0]);
+						const originalUnchanged = paths[0] === row.localPath && (await hash(content)) === row.localHash;
+						// Our original-content import can replace the pre-dispatch file.
+						// Accept only its exact confirmed receipt, never a later manual edit.
+						const ownImport =
+							record?.local?.path === paths[0] &&
+							record.local.source.source_hash === row.request.source.source_hash &&
+							(record.local.imageHash !== undefined
+								? (await hash(content)) === record.local.imageHash
+								: (await bodyHash(content)) === record.local.body &&
+									effectiveTitle(paths[0], content) === record.local.title &&
+									JSON.stringify(tags(content)) === JSON.stringify(record.local.tags));
+						if (!originalUnchanged && !ownImport) continue;
+					} else if (row.localPath) continue;
+
+					const result = response.results.find((value) => value.source.id === row.request.source.id);
+					if (result?.status === "uncertain") {
+						row.checkpointSettled = true;
+						if (
+							saved.executionWindowMs !== undefined &&
+							Date.now() - saved.startedAt >= saved.executionWindowMs &&
+							retryChosen.has(row.request.source.id)
+						)
+							Object.values(row.keys)
+								.filter((key) => state.cache[key]?.operation === operation)
+								.forEach((key) => retryKeys.add(key));
+						continue;
+					}
+					await acceptResult(row.request, row.keys, result, operation);
+				}
+			} catch (error) {
+				if (isSyncCancellationError(error)) throw error;
+				// A failed lookup is not proof that the previous paid operation ended.
+				if (
+					error instanceof AccessV1RequestError &&
+					["enrichment_replay_expired", "enrichment_replay_held"].includes(error.code ?? "") &&
+					saved.executionWindowMs !== undefined &&
+					Date.now() - saved.startedAt >= saved.executionWindowMs
+				) {
+					saved.terminal = true;
+					for (const row of saved.rows)
+						if (
+							retryChosen.has(row.request.source.id) &&
+							notes.some((note) => note.enrichment_source?.source_hash === row.request.source.source_hash)
+						)
+							Object.values(row.keys)
+								.filter((key) => state.cache[key]?.operation === operation)
+								.forEach((key) => retryKeys.add(key));
+				}
+			}
+		}
+		async function acceptResult(
+			request: LocalEnrichmentRequest,
+			keys: Record<string, string>,
+			result: Awaited<ReturnType<Provider>>["results"][number] | undefined,
+			operation?: string
+		): Promise<void> {
+			if (
+				!result ||
+				result.source.source_hash !== request.source.source_hash ||
+				result.source.incarnation !== request.source.incarnation ||
+				result.status !== "ready"
+			)
+				return;
+			const expected = Object.keys(request.features).map((feature) => (feature === "suggest_title" ? "title" : "tags"));
+			if (Object.keys(result.outputs).sort().join() !== expected.sort().join()) return;
+			if (result.outputs.title !== undefined && !result.outputs.title.trim()) return;
+			const tagOptions = request.features.suggest_tags;
+			if (
+				result.outputs.tags &&
+				(!tagOptions ||
+					result.outputs.tags.length > tagOptions.max_tags ||
+					result.outputs.tags.some(
+						(tag) => !tag.trim() || (Array.isArray(tagOptions.restrict_tags) && !tagOptions.restrict_tags.includes(tag))
+					))
+			)
+				return;
+			for (const feature of ["title", "tags"] as const) {
+				if (!request.features[feature === "title" ? "suggest_title" : "suggest_tags"]) continue;
+				if (operation && state.cache[keys[feature]]?.operation !== operation) continue;
+				const output = result.outputs[feature];
+				if (feature === "title" ? typeof output !== "string" : !Array.isArray(output)) return;
+				state.cache[keys[feature]] = {
+					...state.cache[keys[feature]],
+					status: "ready",
+					coverage: feature === "tags" ? request.features.suggest_tags!.max_tags : 0,
+					output,
+					provenance: result.provenance,
+					recipe: await hash(result.provenance ?? request.features),
+				};
+			}
 		}
 		const planned: Array<{
 			note: PreNormalizedNote;
@@ -189,8 +358,14 @@ export async function enrichImportNotes(
 			const note: PreNormalizedNote = {
 				...original,
 				tags: undefined,
+				enrichment_uncertain: false,
+				processing_warnings: original.processing_warnings?.filter(
+					(warning) => warning !== "local_enrichment_uncertain"
+				),
 				local_enrichment: {
 					receipt: key,
+					observedLocalPath: paths[0],
+					observedLocalHash: paths[0] ? await localEnrichmentSnapshot(paths[0], contents.get(paths[0])!) : undefined,
 					sourceTags: record.projection.labels,
 					removeValues,
 					title: sourceTitle,
@@ -246,7 +421,13 @@ export async function enrichImportNotes(
 					cached?.status === "ready" &&
 					cached.coverage < flags.suggest_tags!.max_tags &&
 					(cached.attemptedCoverage ?? cached.coverage) < flags.suggest_tags!.max_tags;
-				if ((!cached || upgrade) && (feature !== "tags" || eligibleTags)) {
+				if (
+					(!cached ||
+						upgrade ||
+						(retryKeys.has(keys[feature]) &&
+							(cached.status === "uncertain" || (cached.attemptedCoverage ?? 0) > cached.coverage))) &&
+					(feature !== "tags" || eligibleTags)
+				) {
 					if (feature === "title") features.suggest_title = flags.suggest_title;
 					else features.suggest_tags = flags.suggest_tags;
 				}
@@ -269,9 +450,18 @@ export async function enrichImportNotes(
 			// Capability failure proves no paid POST was attempted. Do this before
 			// persisting uncertainty; an ordinary retry can safely try preflight again.
 			assertContext();
+			let executionWindowMs: number | undefined;
 			const operation =
 				provider === enrichLocalNotes
-					? await prepareLocalEnrichment(credentials.email, credentials.token, credentials.supporterKey)
+					? await prepareLocalEnrichment(
+							credentials.email,
+							credentials.token,
+							credentials.supporterKey,
+							(window) => {
+								executionWindowMs = window;
+							},
+							readRetry
+						)
 					: undefined;
 			assertContext();
 			plugin.throwIfSyncCancelled?.();
@@ -283,15 +473,40 @@ export async function enrichImportNotes(
 						const attemptedCoverage = feature === "tags" ? (item.request!.features.suggest_tags?.max_tags ?? 0) : 0;
 						state.cache[item.keys[feature]] =
 							prior?.status === "ready"
-								? { ...prior, attemptedCoverage }
+								? { ...prior, attemptedCoverage, operation }
 								: {
 										status: "uncertain",
+										operation,
 										coverage: 0,
 										attemptedCoverage,
 										recipe: await hash(item.request!.features),
 									};
 					}
 				}
+			if (operation) {
+				state.operations ??= {};
+				state.operations[operation] = {
+					namespace,
+					startedAt: Date.now(),
+					executionWindowMs,
+					rows: await Promise.all(
+						batch.map(async (item) => {
+							const path = identities.get(`https://keep.google.com/#NOTE/${item.request!.source.id}`)?.[0];
+							return {
+								request: item.request!,
+								keys: Object.fromEntries(
+									Object.entries(item.keys).filter(
+										([feature]) =>
+											item.request!.features[feature === "title" ? "suggest_title" : "suggest_tags"] !== undefined
+									)
+								),
+								localPath: path,
+								localHash: path ? await hash(await plugin.app.vault.adapter.read(path)) : undefined,
+							};
+						})
+					),
+				};
+			}
 			await save();
 			try {
 				assertContext();
@@ -307,47 +522,53 @@ export async function enrichImportNotes(
 					new Set(response.results.map((row) => row.source.id)).size !== batch.length
 				)
 					throw new Error("Incomplete enrichment response.");
+				assertContext();
 				for (const item of batch) {
+					// Recheck local content after awaiting the provider, not just the original request hash.
+					const path = identities.get(`https://keep.google.com/#NOTE/${item.request!.source.id}`)?.[0];
+					if (path && (await plugin.app.vault.adapter.read(path)) !== contents.get(path)) continue;
 					const result = response.results.find((row) => row.source.id === item.request!.source.id);
-					if (!result || result.source.source_hash !== item.request!.source.source_hash)
-						throw new Error("Enrichment source mismatch.");
-					if (result.status !== "ready") continue;
-					const expected = Object.keys(item.request!.features).map((feature) =>
-						feature === "suggest_title" ? "title" : "tags"
-					);
-					if (Object.keys(result.outputs).sort().join() !== expected.sort().join()) continue;
-					if (result.outputs.title !== undefined && !result.outputs.title.trim()) continue;
-					const tagOptions = item.request!.features.suggest_tags;
-					if (
-						result.outputs.tags &&
-						(!tagOptions ||
-							result.outputs.tags.length > tagOptions.max_tags ||
-							result.outputs.tags.some(
-								(tag) =>
-									!tag.trim() || (Array.isArray(tagOptions.restrict_tags) && !tagOptions.restrict_tags.includes(tag))
-							))
-					)
-						continue;
-					for (const feature of ["title", "tags"] as const) {
-						if (!item.request!.features[feature === "title" ? "suggest_title" : "suggest_tags"]) continue;
-						const output = result.outputs[feature];
-						if (feature === "title" ? typeof output !== "string" : !Array.isArray(output))
-							throw new Error("Missing enrichment component.");
-						state.cache[item.keys[feature]] = {
-							...state.cache[item.keys[feature]],
-							status: "ready",
-							coverage: feature === "tags" ? item.request!.features.suggest_tags!.max_tags : 0,
-							output,
-							provenance: result.provenance,
-							recipe: await hash(result.provenance ?? item.request!.features),
-						};
+					if (operation && result?.status === "uncertain") {
+						const savedRow = state.operations?.[operation]?.rows.find(
+							(row) => row.request.source.id === item.request!.source.id
+						);
+						if (savedRow) savedRow.checkpointSettled = true;
 					}
+					await acceptResult(
+						item.request!,
+						item.keys,
+						response.results.find((row) => row.source.id === item.request!.source.id),
+						operation
+					);
 				}
 			} catch {
 				/* Durable uncertainty guards prevent charged automatic retry. */
 			}
 			await save();
 		}
+		for (const [operation, saved] of Object.entries(state.operations ?? {})) {
+			if (
+				saved.namespace === namespace &&
+				saved.rows.every(
+					(row) =>
+						row.checkpointSettled === true &&
+						Object.entries(row.keys)
+							.filter(
+								([feature]) =>
+									row.request.features[feature === "title" ? "suggest_title" : "suggest_tags"] !== undefined
+							)
+							.map(([, key]) => key)
+							.every(
+								(key) =>
+									state.cache[key]?.status === "ready" &&
+									(state.cache[key]?.attemptedCoverage ?? 0) <= state.cache[key].coverage &&
+									(state.cache[key]?.attemptedCoverage ?? 0) <= state.cache[key].coverage
+							)
+				)
+			)
+				delete state.operations![operation];
+		}
+		await save();
 		assertContext();
 		return planned.map(({ note, record, keys, request }) => {
 			if (!record) return note;
@@ -360,6 +581,7 @@ export async function enrichImportNotes(
 			if (title?.status === "ready" && typeof title.output === "string" && !record.manualTitle) {
 				note.title = title.output;
 				note.local_enrichment!.title ??= title.output;
+				if (record.local && record.local.title !== note.local_enrichment!.title) note.enrichment_pending = true;
 			}
 			const tagResult = state.cache[keys.tags];
 			if (!note.enrichment_legacy_held && tagResult?.status === "ready" && Array.isArray(tagResult.output)) {
@@ -383,8 +605,11 @@ export async function enrichImportNotes(
 						state.cache[key]?.status === "uncertain" ||
 						(feature === "tags" && (state.cache[key]?.attemptedCoverage ?? 0) > (state.cache[key]?.coverage ?? 0))
 				)
-			)
+			) {
+				note.enrichment_uncertain = true;
+				note.enrichment_pending = true;
 				note.processing_warnings = [...(note.processing_warnings ?? []), "local_enrichment_uncertain"];
+			}
 			return note;
 		});
 	});

@@ -32,7 +32,8 @@ interface PreNormalizedNote {
 	enrichment_legacy_consent?: LegacyTagConsent;
 	enrichment_legacy_held?: boolean;
 	enrichment_pending?: boolean;
-	local_enrichment?: { tags?: Record<string, string>; sourceTags: string[]; removeValues: string[]; title?: string; titleSource?: boolean; receipt: string };
+	enrichment_uncertain?: boolean;
+	local_enrichment?: { observedLocalHash?: string; observedLocalPath?: string; tags?: Record<string, string>; sourceTags: string[]; removeValues: string[]; title?: string; titleSource?: boolean; receipt: string };
 	id?: string;
 	tags?: string[];
 	processing_warnings?: string[];

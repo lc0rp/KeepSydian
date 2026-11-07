@@ -1,3 +1,5 @@
+import { CONFLICT_FILE_SUFFIX } from "./constants";
+import { localEnrichmentSnapshot } from "./enrichment/state";
 import { t } from "../../lang/ui";
 import { Notice, getAllTags } from "obsidian";
 import type KeepSidianPlugin from "@app/main";
@@ -48,13 +50,14 @@ import {
 import { appendPerfTrace } from "@app/perf-trace";
 import { withManagedImageEmbeds } from "./domain/attachmentEmbeds";
 import { safeSyncError, type SyncAttempt } from "@app/sync-attempt";
+import { ACCESS_V1_ENABLED } from "@integrations/google/accessV1Auth";
 import { retryDownload, isTransientDownloadError } from "./download-retry";
 import { resolveDownloadDateWindow } from "./download-date-window";
 import { KEEPSIDIAN_SERVER_URL } from "../../config";
 import { getDeletionLedger } from "./local-deletions/ledger";
 import { assertDownloadIdentityPresentOrUntracked } from "./local-deletions/download";
 import { enrichImportNotes, fetchFirstFlags } from "./enrichment/reuse";
-import { getEnrichmentLedger } from "./enrichment/ledger";
+import { hasRecoverableEnrichment, getEnrichmentLedger } from "./enrichment/ledger";
 import type { LegacyTagConsent } from "./enrichment/consent";
 
 const LAST_SUCCESSFUL_SYNC_DATE_KEY = "KeepSidianLastSuccessfulSyncDate";
@@ -79,6 +82,7 @@ interface Preparation {
 	total?: number;
 	seenCursors: Set<string>;
 	active: boolean;
+	restarts?: number;
 }
 const preparations = new WeakMap<KeepSidianPlugin, Preparation>();
 const preparingPlugins = new WeakSet<KeepSidianPlugin>();
@@ -241,6 +245,19 @@ export function persistLastSuccessfulSyncDate(plugin: KeepSidianPlugin, isoStrin
 	setVaultConfig(plugin, LAST_SUCCESSFUL_SYNC_DATE_KEY, isoString);
 }
 
+/** Content can finish while a lost AI result keeps the incremental recovery window open. */
+export async function commitLastSuccessfulSyncDate(plugin: KeepSidianPlugin, isoString: string): Promise<void> {
+	try {
+		if (await hasRecoverableEnrichment(plugin)) return;
+	} catch {
+		// Recovery metadata must not turn an already completed content sync into
+		// failure. The ledger remains blocked for AI; this grants no paid retry.
+		await logSync(plugin, "AI recovery metadata is unavailable. Content sync completed; AI remains blocked until its saved state is repaired.")
+			.catch(() => console.warn("KeepSydian: unable to record the AI recovery metadata warning."));
+	}
+	persistLastSuccessfulSyncDate(plugin, isoString);
+}
+
 export interface SyncCallbacks {
 	archivedStatus?: KeepArchivedStatus;
 	attempt?: SyncAttempt;
@@ -302,7 +319,7 @@ async function fetchImportPageWithRetry(
 	enabled = true
 ): Promise<GoogleKeepImportResponse> {
 	return retryDownload(() => fetchFunction(offset, limit, filters, cursor), {
-		enabled,
+		enabled: enabled && !ACCESS_V1_ENABLED,
 		checkCancelled,
 		onRetry: async (retryCount) => {
 			await attemptContext?.pageEvent("retry", { retryCount });
@@ -541,6 +558,7 @@ function buildImportPlanEntry(
 		}
 		if (note.enrichment_pending) detail = `${detail ? `${detail} ` : ""}New AI suggestions are requested only for selected notes.`;
 		if (note.enrichment_pending) downloadDetails.push("request-suggestions");
+        if (note.enrichment_uncertain) detail = `${detail ?? ""} ${t("download.recover-suggestions")}`;
 		if (note.enrichment_legacy_held) detail = `${detail ? `${detail} ` : ""}Previously imported titles and tags are kept. New AI tags require the choice in Customize sync.`;
 		if (note.enrichment_legacy_held) downloadDetails.push("legacy-tags");
 
@@ -654,7 +672,13 @@ async function buildImportSyncPlanBase(
 	}
 	preparation.active = true;
 	const featureFlags = preparation.featureFlags;
-	const operationId = preparation.operationId;
+	const readRetry = {
+		checkCancelled: () => {
+            plugin.throwIfSyncCancelled();
+            if (callbacks?.attempt?.finished) throw new SyncCancellationError();
+        },
+        onRetry: async (retryCount: number) => { await callbacks?.attempt?.pageEvent("retry", {retryCount}); }
+    };
 	const fetchFunction =
 		featureFlags !== undefined
 			? (offset: number, limit: number, filters?: SyncFilters, cursor?: string) =>
@@ -667,23 +691,28 @@ async function buildImportSyncPlanBase(
 						filters,
 						cursor,
 						supporterKey,
-						operationId
+						preparation.operationId, false, readRetry
 					)
 			: (offset: number, limit: number, filters?: SyncFilters, cursor?: string) =>
-					apiFetchNotes(email, token, offset, limit, filters, cursor, operationId);
+					apiFetchNotes(email, token, offset, limit, filters, cursor, preparation.operationId, readRetry);
 	let fetched: FetchImportNotesResult;
 	try {
-		fetched = await fetchImportNotesBase(
-			plugin,
-			fetchFunction,
-			callbacks,
-			downloadScope,
-			preparation,
-			options === undefined || !!operationId
-		);
+        for (;;) {
+            try {
+                fetched = await fetchImportNotesBase(plugin, fetchFunction, callbacks, downloadScope, preparation, options === undefined || !!preparation.operationId);
+                break;
+            } catch (error) {
+                if (!(error instanceof NetworkError) || error.status !== 410 || error.code !== "sync_session_expired" || preparation.restarts) throw error;
+                plugin.throwIfSyncCancelled();
+                const epoch = featureFlags === undefined ? undefined : await getReplayEpoch(email, token);
+                Object.assign(preparation, { restarts: 1, notes: [], offset: 0, page: 1, cursor: undefined, total: undefined, usingCursor: false, seenCursors: new Set<string>(), operationId: epoch ? `${epoch}:${Date.now()}:${Math.random().toString(36).slice(2)}` : undefined });
+                await callbacks?.attempt?.pageEvent("retry", {retryCount: 1});
+                new Notice(t("notices.downloadSessionExpired"));
+            }
+        }
 		preparations.delete(plugin);
 	} catch (error) {
-		if (isTransientDownloadError(error) && (options === undefined || !!operationId)) {
+		if (isTransientDownloadError(error) && (options === undefined || !!preparation.operationId)) {
 			throw new RecoverablePreparationError(error);
 		}
 		preparations.delete(plugin);
@@ -763,7 +792,7 @@ export async function importSelectedGoogleKeepNotes(
 	throwIfSyncCancelled(plugin);
 	if (completionDate) {
 		if (callbacks?.deferCheckpoint) callbacks.deferCheckpoint(completionDate);
-		else persistLastSuccessfulSyncDate(plugin, completionDate);
+		else await commitLastSuccessfulSyncDate(plugin, completionDate);
 	}
 	if (enrichmentWarnings)
 		new Notice(t("notices.aiImported",{count:enrichmentWarnings}), 10_000);
@@ -1159,7 +1188,11 @@ export async function processAndSaveNote(
 			if (expected === undefined && await equivalentPath(plugin.app.vault.adapter, path)) throw new Error("A local file appeared at the download destination. It was preserved.");
 			if (expected === undefined || stamped !== expected) await plugin.app.vault.adapter.write(path, stamped);
 		});
-		if (note.local_enrichment) await getEnrichmentLedger(plugin).finish(note);
+		if (note.local_enrichment && !path.includes(CONFLICT_FILE_SUFFIX)) {
+			await getEnrichmentLedger(plugin).finish(note);
+			note.local_enrichment.observedLocalPath = path;
+			note.local_enrichment.observedLocalHash = await localEnrichmentSnapshot(path, stamped);
+		}
 		expectedMarkdown = stamped;
 	};
 	const writeMetadata = async (path: string, content: string, expected: string, options: { ctime: number; mtime: number }): Promise<void> => {
@@ -1172,7 +1205,11 @@ export async function processAndSaveNote(
 		const updated = note.local_enrichment ? await getEnrichmentLedger(plugin).stage(note, path, expected, content, finalize) : await finalize(content);
 		if ((await plugin.app.vault.adapter.read(path) ?? "") !== expected) throw new Error("A local note changed during metadata update. Local edits were preserved.");
 		if (updated !== expected) await plugin.app.vault.adapter.write(path, updated, options);
-		if (note.local_enrichment) await getEnrichmentLedger(plugin).finish(note);
+		if (note.local_enrichment && !path.includes(CONFLICT_FILE_SUFFIX)) {
+			await getEnrichmentLedger(plugin).finish(note);
+			note.local_enrichment.observedLocalPath = path;
+			note.local_enrichment.observedLocalHash = await localEnrichmentSnapshot(path, updated);
+		}
 		if (unchanged) expectedMarkdown = updated;
 	};
 
@@ -1405,7 +1442,8 @@ export async function processAndSaveNote(
 					email: plugin.settings.email,
 					token: plugin.settings.token,
 				},
-				preserveLocalMedia
+				preserveLocalMedia,
+                {checkCancelled: () => throwIfSyncCancelled(plugin), onRetry: async () => {}}
 			);
 			if (mediaBaselines) {
 				const known = new Map(acknowledgedMedia ?? []);

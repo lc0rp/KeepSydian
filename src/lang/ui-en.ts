@@ -1,5 +1,10 @@
 /** UI integration English source. */
 export const uiEn = {
+	"download.recover-suggestions": "We will check for a saved AI result first. Choose retry only if you want missing suggestions generated again; this may use more AI allowance.",
+	"download.retry-suggestions-label": "Retry missing AI suggestions for {{title}}",
+	"download.retry-suggestions": " Retry missing AI suggestions. The earlier request may already have used AI allowance.",
+	"notices.downloadSessionExpired": "The download session expired. Restarting once with the same date range. No notes have been written.",
+
 	"download.conflict-copy":
 		"Will create a conflict copy next to the existing note unless another merge action is chosen.",
 	"download.also-archive": "Also marks the existing note as archived.",

@@ -5,7 +5,7 @@ jest.mock("@services/paths", () => ({ ensureFolder: jest.fn(async () => {}), nor
 jest.mock("@services/note-path-resolver", () => ({ resolveLogBaseFolder: () => "Keep" }));
 jest.mock("@features/keep/sync", () => ({
 	buildImportSyncPlan: jest.fn(), importGoogleKeepNotes: jest.fn(), importGoogleKeepNotesWithOptions: jest.fn(),
-	importSelectedGoogleKeepNotes: jest.fn(), persistLastSuccessfulSyncDate: jest.fn(),
+	importSelectedGoogleKeepNotes: jest.fn(), commitLastSuccessfulSyncDate: jest.fn(),
 }));
 jest.mock("@features/keep/push", () => ({ buildPushSyncPlan: jest.fn(), pushGoogleKeepNotes: jest.fn() }));
 
@@ -15,7 +15,7 @@ import type { SyncAttempt } from "@app/sync-attempt";
 import type { SyncCallbacks } from "@features/keep/sync";
 import type { NoteForPush } from "@features/keep/push/collectNotes";
 import { runPreparedSyncPlan } from "@app/main-sync-flows";
-import { importSelectedGoogleKeepNotes, persistLastSuccessfulSyncDate } from "@features/keep/sync";
+import { importSelectedGoogleKeepNotes, commitLastSuccessfulSyncDate } from "@features/keep/sync";
 import { buildPushSyncPlan, pushGoogleKeepNotes } from "@features/keep/push";
 import { createPreparedSyncPlanFixture, createSyncPlanEntryFixture } from "@test-utils/fixtures/sync-plan";
 
@@ -62,9 +62,9 @@ it.each(["merge-save-conflicts", "merge-skip-conflicts"] as const)("carries %s a
 	expect(result.nextPlan?.plan.mergeAction).toBe(action);
 	expect(result.nextPlan?.unresolvedConflictPaths).toEqual(["Keep/note.md"]);
 	expect(buildPushSyncPlan).toHaveBeenCalledWith(f.plugin, true, undefined, expect.objectContaining({ protectedPaths: ["Keep/note.md"], reviewMerges: true }));
-	expect(persistLastSuccessfulSyncDate).not.toHaveBeenCalled();
+	expect(commitLastSuccessfulSyncDate).not.toHaveBeenCalled();
 	await runPreparedSyncPlan(f.plugin, result.nextPlan!, String, f.onSuccess);
-	expect(persistLastSuccessfulSyncDate).not.toHaveBeenCalled();
+	expect(commitLastSuccessfulSyncDate).not.toHaveBeenCalled();
 	expect(f.onSuccess).not.toHaveBeenCalled();
 });
 
@@ -77,8 +77,8 @@ it("forces a clean downloaded merge into upload even though its download timesta
 	expect(result.nextPlan?.forceUploadPaths).toEqual(["Keep/note.md"]);
 	expect(buildPushSyncPlan).toHaveBeenCalledWith(f.plugin, true, undefined, expect.objectContaining({ forcePaths: ["Keep/note.md"] }));
 	await runPreparedSyncPlan(f.plugin, result.nextPlan!, String, f.onSuccess);
-	expect(persistLastSuccessfulSyncDate).toHaveBeenCalledTimes(1);
-	expect(persistLastSuccessfulSyncDate).toHaveBeenCalledWith(f.plugin, f.prepared.completionDate);
+	expect(commitLastSuccessfulSyncDate).toHaveBeenCalledTimes(1);
+	expect(commitLastSuccessfulSyncDate).toHaveBeenCalledWith(f.plugin, f.prepared.completionDate);
 });
 
 it("does not advance the checkpoint if the second phase fails", async () => {
@@ -88,7 +88,7 @@ it("does not advance the checkpoint if the second phase fails", async () => {
 	(pushGoogleKeepNotes as jest.Mock).mockRejectedValue(new Error("test upload failed"));
 	const failed = await runPreparedSyncPlan(f.plugin, result.nextPlan!, String, f.onSuccess);
 	expect(failed.failed).toBe(true);
-	expect(persistLastSuccessfulSyncDate).not.toHaveBeenCalled();
+	expect(commitLastSuccessfulSyncDate).not.toHaveBeenCalled();
 });
 
 it("finishes a two-way run with no upload work", async () => {
@@ -98,7 +98,7 @@ it("finishes a two-way run with no upload work", async () => {
 	(buildPushSyncPlan as jest.Mock).mockResolvedValue({ plan: empty.plan, notesToPush: [] });
 	const result = await runPreparedSyncPlan(f.plugin, f.prepared, String, f.onSuccess);
 	expect(result.nextPlan).toBeUndefined();
-	expect(persistLastSuccessfulSyncDate).toHaveBeenCalledWith(f.plugin, f.prepared.completionDate);
+	expect(commitLastSuccessfulSyncDate).toHaveBeenCalledWith(f.plugin, f.prepared.completionDate);
 	expect(f.onSuccess).toHaveBeenCalledTimes(1);
 });
 
@@ -112,7 +112,7 @@ it("keeps download-only skipped conflicts eligible for a future download", async
 	});
 	await runPreparedSyncPlan(f.plugin, f.prepared, String, f.onSuccess);
 	expect(buildPushSyncPlan).not.toHaveBeenCalled();
-	expect(persistLastSuccessfulSyncDate).not.toHaveBeenCalled();
+	expect(commitLastSuccessfulSyncDate).not.toHaveBeenCalled();
 });
 
  it("preserves completed download counts and pending merge work when upload preparation fails", async () => {
@@ -130,7 +130,7 @@ it("keeps download-only skipped conflicts eligible for a future download", async
 	expect(f.plugin.totalNotes).toBe(18);
 	expect(buildPushSyncPlan).toHaveBeenCalledWith(f.plugin, true, undefined, expect.objectContaining({ forcePaths: ["Keep/note.md"] }));
 	expect(pushGoogleKeepNotes).not.toHaveBeenCalled();
-	expect(persistLastSuccessfulSyncDate).not.toHaveBeenCalled();
+	expect(commitLastSuccessfulSyncDate).not.toHaveBeenCalled();
 	expect(f.onSuccess).not.toHaveBeenCalled();
  });
 
@@ -180,5 +180,5 @@ it("discards uncommitted deletion receipts and holds the checkpoint on an accept
 	await runPreparedSyncPlan(f.plugin, f.prepared, String, f.onSuccess);
 	expect(ledger.discardReceipts).toHaveBeenCalledWith(f.attempt.id);
 	expect(ledger.finishReceipts).not.toHaveBeenCalled();
-	expect(persistLastSuccessfulSyncDate).not.toHaveBeenCalled();
+	expect(commitLastSuccessfulSyncDate).not.toHaveBeenCalled();
 });

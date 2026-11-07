@@ -52,3 +52,12 @@ describe("download retry policy", () => {
 		expect(fetch).toHaveBeenCalledTimes(1);
 	});
 });
+
+it("does not dispatch after background timer throttling exhausts the admission window",async()=>{
+ const options=clock();let elapsed=0;
+ options.now=()=>elapsed;options.sleep=async()=>{elapsed+=31_000;};
+ const failure=new NetworkError("temporary",503);
+ const fetch=jest.fn().mockRejectedValue(failure);
+ await expect(retryDownload(fetch,options)).rejects.toBe(failure);
+ expect(fetch).toHaveBeenCalledTimes(1);
+});

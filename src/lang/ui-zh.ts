@@ -1,5 +1,10 @@
 /** UI integration AI-authored draft; native review outstanding. */
 export const uiZh = {
+	"download.recover-suggestions": "我们会先检查已保存的 AI 结果。只有想重新生成缺失的建议时才选择重试；这可能会消耗更多 AI 额度。",
+	"download.retry-suggestions-label": "重试 {{title}} 缺失的 AI 建议",
+	"download.retry-suggestions": " 重试缺失的 AI 建议。之前的请求可能已消耗 AI 额度。",
+	"notices.downloadSessionExpired": "下载会话已过期。将按相同日期范围重新开始一次。尚未写入任何笔记。",
+
 	"download.conflict-copy": "将在现有笔记旁创建冲突副本，除非您选择其他合并操作。",
 	"download.also-archive": "还会将现有笔记标记为已归档。",
 	"download.archive-only": "将现有笔记标记为已归档。正文和其他属性保持不变。",

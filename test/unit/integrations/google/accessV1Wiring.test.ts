@@ -58,7 +58,8 @@ it("registers on Google locally with the existing ac2dm fields; stores only the 
 		.mockResolvedValue(`Auth=unused\r\nToken=${MASTER}\r\nEmail=${EMAIL}\r\nRopText= \r\n`);
 	const plugin = { settings: { email: EMAIL, token: "" }, saveSettings: jest.fn() };
 	const tab = { display: jest.fn() };
-	const { exchangeOauthToken } = require("../../../../src/integrations/google/keepTokenExchange") as typeof import("../../../../src/integrations/google/keepTokenExchange");
+	const { exchangeOauthToken } =
+		require("../../../../src/integrations/google/keepTokenExchange") as typeof import("../../../../src/integrations/google/keepTokenExchange");
 	await exchangeOauthToken(tab as unknown as KeepSidianSettingsTab, plugin as unknown as KeepSidianPlugin, BROWSER);
 	const fields = Object.fromEntries(new URLSearchParams(jest.mocked(transport.googleAuthRequest).mock.calls[0][0]));
 	expect(fields).toEqual({
@@ -319,7 +320,8 @@ it.each(["not-json", "null", "{}", '{"auth_protocol":"access-v1","enabled":"true
 it("404 capability blocks registration without Google or legacy fallback", async () => {
 	const { AccessV1RequestError } = require("@services/errors") as typeof import("@services/errors");
 	jest.mocked(transport.accessBackendRequest).mockRejectedValue(new AccessV1RequestError(404));
-	const { exchangeOauthToken } = require("../../../../src/integrations/google/keepTokenExchange") as typeof import("../../../../src/integrations/google/keepTokenExchange");
+	const { exchangeOauthToken } =
+		require("../../../../src/integrations/google/keepTokenExchange") as typeof import("../../../../src/integrations/google/keepTokenExchange");
 	const plugin = { settings: { email: EMAIL, token: "" }, saveSettings: jest.fn() };
 	await expect(
 		exchangeOauthToken(
@@ -339,7 +341,8 @@ it("routes subscription lookup through the authenticated access boundary without
 		"https://backend.example.invalid/keep/access-v1/subscriber/info?refresh=true",
 		"GET",
 		{ Authorization: `Bearer ${ACCESS}`, "X-User-Email": EMAIL, "X-Keep-Auth-Protocol": "access-v1" },
-		""
+		"",
+		60_000
 	);
 	expect(native.requestUrl).not.toHaveBeenCalled();
 });
@@ -362,7 +365,8 @@ it("sends actual subscription-service email lookup through verified access and n
 		"https://backend.example.invalid/keep/access-v1/subscriber/info?refresh=true",
 		"GET",
 		{ Authorization: `Bearer ${ACCESS}`, "X-User-Email": EMAIL, "X-Keep-Auth-Protocol": "access-v1" },
-		""
+		"",
+		60_000
 	);
 	expect(native.requestUrl).not.toHaveBeenCalled();
 	expect(JSON.stringify(save.mock.calls)).not.toContain(MASTER);
@@ -386,4 +390,107 @@ it("disabled access never falls back to an email-only or master-token subscripti
 	expect(legacy.requestUrl).not.toHaveBeenCalled();
 	expect(currentTransport.googleAuthRequest).not.toHaveBeenCalled();
 	expect(currentTransport.accessBackendRequest).not.toHaveBeenCalled();
+});
+
+it.each([
+	["sync/v2", "GET", undefined, true],
+	["sync/premium/v2", "POST", { feature_flags: { filter_notes: { terms: ["work"] } } }, true],
+	["trash/preview/v1", "POST", { notes: [] }, true],
+	["enrich/local/lookup/v1", "POST", { notes: [] }, true],
+	["push", "POST", { notes: [] }, false],
+	["trash/v1", "POST", { notes: [] }, false],
+	["enrich/local/v1", "POST", { notes: [] }, false],
+	["sync/premium/v2", "POST", { feature_flags: { suggest_title: {} } }, false],
+	["sync/premium/v2", "POST", { feature_flags: { future_paid_flag: {} } }, false],
+])("only explicitly safe %s requests replay after a lost response", async (suffix, method, body, safe) => {
+	jest.useFakeTimers({now: NOW});
+	try {
+		await api.fetchNotes(EMAIL, MASTER);
+		const { AccessV1RequestError } = require("@services/errors");
+		const failure = new AccessV1RequestError(503);
+		const send = jest.mocked(transport.accessBackendRequest);
+		send.mockClear();
+		send.mockRejectedValueOnce(failure).mockResolvedValue(reply({ notes: [] }));
+		const result = http
+			.httpRequest(`https://backend.example.invalid/keep/${suffix}`, {
+				method: method as "GET" | "POST",
+				body,
+				headers: headers(),
+			})
+			.catch((error) => error);
+		await jest.runAllTimersAsync();
+		await result;
+		expect(send).toHaveBeenCalledTimes(safe ? 2 : 1);
+		if (safe) expect(send.mock.calls[1].slice(0, 4)).toEqual(send.mock.calls[0].slice(0, 4));
+	} finally {
+		jest.useRealTimers();
+	}
+});
+
+it("uses at most three backend attempts including one expired-credential refresh", async () => {
+	jest.useFakeTimers({now: NOW});
+	try {
+		await api.fetchNotes(EMAIL, MASTER);
+		const { AccessV1RequestError } = require("@services/errors");
+		const send = jest.mocked(transport.accessBackendRequest);
+		send.mockClear();
+		send
+			.mockRejectedValueOnce(new AccessV1RequestError(401, "access_expired"))
+			.mockRejectedValue(new AccessV1RequestError(503));
+		jest.mocked(transport.googleAuthRequest).mockResolvedValue(`Auth=new-access\nExpiry=${NOW / 1000 + 11000}`);
+		const result = api.fetchNotes(EMAIL, MASTER, 0, 100, undefined, "cursor", "same-operation").catch((error) => error);
+		await jest.runAllTimersAsync();
+		await result;
+		expect(send).toHaveBeenCalledTimes(3);
+		expect(transport.googleAuthRequest).toHaveBeenCalledTimes(2);
+		expect(send.mock.calls[2][2]["X-Sync-Operation"]).toBe("same-operation");
+		expect(send.mock.calls[2][2].Authorization).toBe("Bearer new-access");
+	} finally {
+		jest.useRealTimers();
+	}
+});
+
+it.each(["push", "enrich/local/v1", "trash/v1"])(
+	"does not refresh and replay an expired %s request",
+	async (suffix) => {
+		await api.fetchNotes(EMAIL, MASTER);
+		const { AccessV1RequestError } = require("@services/errors");
+		const send = jest.mocked(transport.accessBackendRequest);
+		send.mockClear();
+		send.mockRejectedValue(new AccessV1RequestError(401, "access_expired"));
+		await expect(
+			http.httpPostJson(`https://backend.example.invalid/keep/${suffix}`, { notes: [] }, headers())
+		).rejects.toThrow();
+		expect(send).toHaveBeenCalledTimes(1);
+		expect(transport.googleAuthRequest).toHaveBeenCalledTimes(1);
+	}
+);
+
+it("keeps a concurrently refreshed credential when an older request is rejected", async () => {
+	await api.fetchNotes(EMAIL, MASTER);
+	const {
+		invalidateAccessCredential,
+		getAccessCredential,
+	} = require("../../../../src/integrations/google/accessV1Auth");
+	invalidateAccessCredential(EMAIL, MASTER, ACCESS);
+	jest.mocked(transport.googleAuthRequest).mockResolvedValue(`Auth=newer-access\nExpiry=${NOW / 1000 + 11000}`);
+	expect(await getAccessCredential(EMAIL, MASTER)).toBe("newer-access");
+	invalidateAccessCredential(EMAIL, MASTER, ACCESS);
+	expect(await getAccessCredential(EMAIL, MASTER)).toBe("newer-access");
+	expect(transport.googleAuthRequest).toHaveBeenCalledTimes(2);
+});
+
+
+it.each(["/keep/deletions/v1", "/keep/media/n/b", "/keep/trash/preview/v1", "/keep/sync/v2"])("allows a long bounded read for %s", async path => {
+ const method=path.includes("preview")?"POST":"GET";
+ await http.httpRequest(`https://backend.example.invalid${path}`,{method,headers:headers(),...(method==="POST"?{body:{notes:[]}}:{})});
+ const call=jest.mocked(transport.accessBackendRequest).mock.calls.find(([url])=>url.includes(path.replace("/keep/","/keep/access-v1/")));
+ expect(call?.[4]).toBe(310_000);
+});
+
+it("cancels a saved-result read before dispatch without admitting paid work", async()=>{
+ const {SyncCancellationError}=require("@app/sync-cancel") as typeof import("@app/sync-cancel");
+ const hooks={checkCancelled:()=>{throw new SyncCancellationError();},onRetry:jest.fn()};
+ await expect(api.lookupLocalEnrichment(EMAIL,MASTER,[],undefined,"operation",hooks)).rejects.toThrow("Sync canceled");
+ expect(jest.mocked(transport.accessBackendRequest).mock.calls.some(([url])=>url.includes("/enrich/local/lookup"))).toBe(false);
 });

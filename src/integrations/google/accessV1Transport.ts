@@ -74,7 +74,7 @@ async function send(
 			sent = false,
 			size = 0;
 		let chunks: Buffer[] = [];
-		const finish = (result?: AccessWireResponse) => {
+		const finish = (result?: AccessWireResponse, transient = false) => {
 			if (done) return;
 			done = true;
 			clearTimeout(timer);
@@ -88,20 +88,16 @@ async function send(
 			chunks = [];
 			body = "";
 			if (result) resolve(result);
-			else if (
-				acceptHttpErrors &&
-				verified &&
-				sent &&
-				res?.statusCode &&
-				res.statusCode >= 400 &&
-				res.statusCode <= 599
-			)
-				reject(new AccessV1RequestError(res.statusCode));
-			else reject(new Error("Secure request failed; it was not retried."));
+			else if (acceptHttpErrors) {
+				const failure = new AccessV1RequestError(res?.statusCode);
+				failure.responseRejected = !transient;
+				failure.transportFailure = transient && (!res?.statusCode || res.statusCode < 400);
+				reject(failure);
+			} else reject(new Error("Secure request failed; it was not retried."));
 		};
 		// Legacy backend requests had no client total deadline. Do not shorten an
 		// admitted paid/mutation operation to Google's separate auth deadline.
-		const timer = deadlineMs === undefined ? undefined : setTimeout(() => finish(), deadlineMs);
+		const timer = deadlineMs === undefined ? undefined : setTimeout(() => finish(undefined, true), deadlineMs);
 		try {
 			// proxyEnv is recognized by recent Node; older Node ignores it and own agents do not read proxy env.
 			agent = new https.Agent({
@@ -134,8 +130,8 @@ async function send(
 				},
 				(response) => {
 					res = response;
-					res.on("error", () => finish());
-					res.on("aborted", () => finish());
+					res.on("error", () => finish(undefined, true));
+					res.on("aborted", () => finish(undefined, true));
 					if (done) {
 						res.destroy();
 						return;
@@ -170,7 +166,7 @@ async function send(
 						if (done) return;
 						try {
 							if (!res?.complete) {
-								finish();
+								finish(undefined, true);
 								return;
 							}
 							const bytes = Buffer.concat(chunks, size);
@@ -197,11 +193,16 @@ async function send(
 						}
 					});
 					res.on("close", () => {
-						if (!res?.complete) finish();
+						if (!res?.complete) finish(undefined, true);
 					});
 				}
 			);
-			req.on("error", () => finish());
+			req.on("error", (error: Error & { code?: string }) =>
+				finish(
+					undefined,
+					["ECONNRESET", "ETIMEDOUT", "ENETUNREACH", "ECONNREFUSED", "EAI_AGAIN"].includes(error.code ?? "")
+				)
+			);
 			req.on("close", () => {
 				if (!res) finish();
 			});
@@ -263,7 +264,8 @@ export async function accessBackendRequest(
 	url: string,
 	method: string,
 	headers: Record<string, string>,
-	body = ""
+	body = "",
+	deadlineMs?: number
 ): Promise<AccessWireResponse> {
 	try {
 		const target = new URL(url),
@@ -273,7 +275,7 @@ export async function accessBackendRequest(
 			!target.pathname.startsWith(base.pathname.replace(/\/$/, "") + "/keep/access-v1/")
 		)
 			throw new Error();
-		const response = await send(target, method, headers, body, 32 * 1024 * 1024, 32 * 1024 * 1024, undefined, true);
+		const response = await send(target, method, headers, body, 32 * 1024 * 1024, 32 * 1024 * 1024, deadlineMs, true);
 		if (response.status >= 400) {
 			let code: unknown;
 			try {

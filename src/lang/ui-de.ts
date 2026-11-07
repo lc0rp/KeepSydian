@@ -1,5 +1,10 @@
 /** UI integration AI-authored draft; native review outstanding. */
 export const uiDe = {
+	"download.recover-suggestions": "Wir suchen zuerst nach einem gespeicherten KI-Ergebnis. Wähle „Erneut versuchen“ nur, wenn fehlende Vorschläge neu erstellt werden sollen. Das kann weiteres KI-Kontingent verbrauchen.",
+	"download.retry-suggestions-label": "Fehlende KI-Vorschläge für {{title}} erneut anfordern",
+	"download.retry-suggestions": " Fehlende KI-Vorschläge erneut anfordern. Die vorherige Anfrage hat möglicherweise bereits KI-Kontingent verbraucht.",
+	"notices.downloadSessionExpired": "Die Download-Sitzung ist abgelaufen. Sie wird einmal mit demselben Datumsbereich neu gestartet. Es wurden noch keine Notizen geschrieben.",
+
 	"download.conflict-copy":
 		"Erstellt eine Konfliktkopie neben der vorhandenen Notiz, sofern du keine andere Zusammenführungsaktion wählst.",
 	"download.also-archive": "Markiert die vorhandene Notiz außerdem als archiviert.",

@@ -1,3 +1,4 @@
+import type { ReadRetryHooks } from "@features/keep/download-retry";
 import { RequestUrlResponse } from "obsidian";
 import { KEEPSIDIAN_SERVER_URL } from "../../config";
 import { httpGetJson, httpPostJson } from "@services/http";
@@ -66,16 +67,16 @@ export interface LocalEnrichmentRequest {
 	title_context?: string;
 }
 
-export async function prepareLocalEnrichment(email: string, token: string, supporterKey?: string): Promise<string> {
+export async function prepareLocalEnrichment(email: string, token: string, supporterKey?: string, onRecoveryWindow?: (windowMs: number) => void, readRetry?: ReadRetryHooks): Promise<string> {
 	const headers = withSupporterKey(
 		{ "X-User-Email": email, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
 		supporterKey
 	);
 	// Obsidian's native transport may replay a POST before returning an error.
 	// Bind that one attempt to a server process; never refresh/retry after POST.
-	const capability = await httpGetJson<{ version: number; epoch: string; issued_at_ms: number }>(
+	const capability = await httpGetJson<{ version: number; epoch: string; issued_at_ms: number; lookup?: boolean; execution_window_ms?: number }>(
 		`${KEEPSIDIAN_SERVER_URL}/keep/enrich/local/capabilities`,
-		headers
+		headers, readRetry
 	);
 	if (
 		capability?.version !== 1 ||
@@ -84,6 +85,7 @@ export async function prepareLocalEnrichment(email: string, token: string, suppo
 		capability.issued_at_ms <= 0
 	)
 		throw new Error("Safe enrichment transport is unavailable.");
+	if (capability.lookup === true && Number.isSafeInteger(capability.execution_window_ms) && capability.execution_window_ms! > 0 && capability.execution_window_ms! <= 300_000) onRecoveryWindow?.(capability.execution_window_ms!);
 	return `${capability.epoch}:${capability.issued_at_ms}:${crypto.randomUUID()}`;
 }
 
@@ -110,6 +112,13 @@ export async function enrichLocalNotes(
 		headers
 	);
 	return LocalEnrichmentResponseSchema.parse(raw);
+}
+
+/** Read-only lookup: never admits a provider call. Payload is the original request. */
+export async function lookupLocalEnrichment(email: string, token: string, notes: LocalEnrichmentRequest[], supporterKey: string | undefined, operation: string, readRetry?: ReadRetryHooks) {
+ const headers = withSupporterKey({ "X-User-Email": email, Authorization: `Bearer ${token}`, "Content-Type": "application/json", "X-Enrichment-Operation": operation }, supporterKey);
+ const raw = await httpPostJson<unknown>(`${KEEPSIDIAN_SERVER_URL}/keep/enrich/local/lookup/v1`, {notes}, headers, readRetry);
+ return LocalEnrichmentResponseSchema.parse(raw);
 }
 
 export interface PushNotesResponse {
@@ -172,7 +181,8 @@ export async function fetchNotes(
 	limit = 100,
 	filters?: SyncFilters,
 	cursor?: string,
-	operationId?: string
+	operationId?: string,
+ readRetry?: ReadRetryHooks
 ): Promise<GoogleKeepImportResponse> {
 	const query = buildSyncQuery(offset, limit, filters, cursor);
 	const url = `${KEEPSIDIAN_SERVER_URL}/keep/sync/v2?${query}`;
@@ -183,7 +193,7 @@ export async function fetchNotes(
 		"X-User-Email": email,
 		Authorization: `Bearer ${token}`,
 	};
-	const raw = await httpGetJson<unknown>(url, headers);
+	const raw = await httpGetJson<unknown>(url, headers, readRetry);
 	// Runtime validation with Zod
 	return recoveryUatResponse(GoogleKeepImportResponseSchema.parse(raw) as GoogleKeepImportResponse, offset, cursor);
 }
@@ -198,7 +208,8 @@ export async function fetchNotesWithPremiumFeatures(
 	cursor?: string,
 	supporterKey?: string,
 	operationId?: string,
-	uploadReview = false
+	uploadReview = false,
+ readRetry?: ReadRetryHooks
 ): Promise<GoogleKeepImportResponse> {
 	const query = buildSyncQuery(offset, limit, filters, cursor);
 	const url = `${KEEPSIDIAN_SERVER_URL}/keep/sync/premium/v2?${query}`;
@@ -218,7 +229,7 @@ export async function fetchNotesWithPremiumFeatures(
 	const raw = await httpPostJson<unknown, { feature_flags: PremiumFeatureFlags }>(
 		url,
 		{ feature_flags: validatedFlags },
-		headers
+		headers, readRetry
 	);
 	// Runtime validation with Zod
 	return recoveryUatResponse(GoogleKeepImportResponseSchema.parse(raw) as GoogleKeepImportResponse, offset, cursor);

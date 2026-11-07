@@ -940,7 +940,8 @@ describe("Google Keep Import Functions", () => {
 					email: mockPlugin.settings.email,
 					token: mockPlugin.settings.token,
 				},
-				false
+				false,
+                expect.objectContaining({checkCancelled:expect.any(Function),onRetry:expect.any(Function)})
 			);
 			expect(logSpy).toHaveBeenCalledWith(
 				mockPlugin,
@@ -1028,7 +1029,8 @@ describe("Google Keep Import Functions", () => {
 					email: mockPlugin.settings.email,
 					token: mockPlugin.settings.token,
 				},
-				false
+				false,
+                expect.objectContaining({checkCancelled:expect.any(Function),onRetry:expect.any(Function)})
 			);
 			expect(logSpy).toHaveBeenCalledWith(
 				mockPlugin,

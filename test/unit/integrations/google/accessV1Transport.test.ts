@@ -209,3 +209,11 @@ it.each(["unknown-code", "malformed", "oversized"])("retains only HTTP status fo
 		expect((error as Error & { cause?: unknown }).cause).toBeUndefined();
 	}
 });
+
+it.each([200,403])("classifies a truncated HTTP %s response without retaining its body",async status=>{
+ const pending=accessBackendRequest("https://backend.example.invalid/keep/access-v1/sync/v2","GET",{});
+ await started();authenticate();response.statusCode=status;response.complete=false;
+ callback(response);response.emit("data",Buffer.from('{"partial":"synthetic-secret'));response.emit("aborted");
+ await expect(pending).rejects.toMatchObject({transportFailure:status===200,responseRejected:false,retryAllowed:false});
+ expect(request.end).toHaveBeenCalledTimes(1);
+});

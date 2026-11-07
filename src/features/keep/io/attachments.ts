@@ -1,6 +1,8 @@
+import { isSyncCancellationError } from "@app/sync-cancel";
+import type { ReadRetryHooks } from "@features/keep/download-retry";
 import { digest, type MediaBaseline } from "../domain/local-state";
 import { KEEPSIDIAN_SERVER_URL } from "../../../config";
-import { NetworkError } from "../../../services/errors";
+import { NetworkError, AccessV1RequestError } from "../../../services/errors";
 import { httpGetArrayBuffer } from "../../../services/http";
 import { buildMediaPath } from "../../../services/paths";
 import { assertRelativePath, equivalentPath, portableFile, withPathLock } from "@services/portable-path";
@@ -156,11 +158,11 @@ function deriveFileName(url: URL, index: number, blobNames?: string[]): string |
 
 function isRetryableAttachmentFetchError(error: unknown): boolean {
 	if (error instanceof NetworkError) {
-		if (error.retryAllowed === false) return false;
+		if (error.retryAllowed === false || (error instanceof AccessV1RequestError && error.retryHandled)) return false;
 		if (typeof error.status === "number") {
 			return ATTACHMENT_FETCH_RETRYABLE_STATUSES.has(error.status);
 		}
-		return true;
+		return error.transportFailure;
 	}
 	if (!(error instanceof Error)) {
 		return false;
@@ -191,11 +193,12 @@ function toAttachmentFailure(url: string, error: unknown): AttachmentFailure {
 	};
 }
 
-async function fetchAttachmentBlob(url: string, headers?: Record<string, string>): Promise<ArrayBuffer> {
+async function fetchAttachmentBlob(url: string, headers?: Record<string, string>, readRetry?: ReadRetryHooks): Promise<ArrayBuffer> {
 	let retryDelayMs = ATTACHMENT_FETCH_INITIAL_RETRY_DELAY_MS;
 	for (let attempt = 1; attempt <= ATTACHMENT_FETCH_MAX_ATTEMPTS; attempt += 1) {
 		try {
-			return await httpGetArrayBuffer(url, headers);
+			readRetry?.checkCancelled();
+			return await httpGetArrayBuffer(url, headers, readRetry);
 		} catch (error) {
 			const shouldRetry = attempt < ATTACHMENT_FETCH_MAX_ATTEMPTS && isRetryableAttachmentFetchError(error);
 			if (!shouldRetry) {
@@ -220,7 +223,8 @@ export async function processAttachments(
 	saveLocation: string,
 	blobNames?: string[],
 	requestHeaders?: AttachmentRequestHeaders,
-	preserveExisting = false
+	preserveExisting = false,
+	readRetry?: ReadRetryHooks
 ): Promise<ProcessAttachmentsResult> {
 	assertRelativePath(saveLocation, true);
 	const result: ProcessAttachmentsResult = {
@@ -270,7 +274,8 @@ export async function processAttachments(
 							Authorization: `Bearer ${requestHeaders.token}`,
 						}
 					: undefined;
-			const blobData = await fetchAttachmentBlob(resolvedUrl.href, requestUrlHeaders);
+			const blobData = await fetchAttachmentBlob(resolvedUrl.href, requestUrlHeaders, readRetry);
+			readRetry?.checkCancelled();
 			result.fetchDurationMs += getNowMs() - fetchStartedAt;
 			let resolvedFileName = ensureImageExtension(fileName, blobData);
 			let blobFilePath = buildMediaPath(saveLocation, resolvedFileName);
@@ -333,6 +338,7 @@ export async function processAttachments(
 			result.fileNames.push(resolvedFileName);
 			try { result.mediaBaselines?.push([blobFilePath, await digest(new Uint8Array(blobData))]); } catch { /* Crypto unavailable: leave acknowledgement unknown. */ }
 		} catch (error) {
+            if (isSyncCancellationError(error)) throw error;
 			console.error(error);
 			result.failures.push(toAttachmentFailure(blob_url, error));
 		}
