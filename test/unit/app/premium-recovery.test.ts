@@ -6,6 +6,8 @@ import { SyncCancellationError } from "@app/sync-cancel";
 import { createMockPlugin } from "@test-utils/mocks/plugin";
 import { DEFAULT_SETTINGS } from "../../../src/types/keepsidian-plugin-settings";
 import * as retryPolicy from "@features/keep/download-retry";
+import * as keepApi from "@integrations/server/keepApi";
+import type { SyncAttempt } from "@app/sync-attempt";
 import type { GoogleKeepImportResponse, PremiumFeatureFlags } from "@integrations/server/keepApi";
 import type { RequestUrlParam, RequestUrlResponse } from "obsidian";
 import { requestUrl, Notice } from "obsidian";
@@ -385,6 +387,20 @@ describe("premium recovery through the manual sync caller", () => {
         const server=replayServer(8);server.fail(2,2,410,false,"sync_session_expired");
         await expect(prepare()).rejects.toMatchObject({status:410,code:"sync_session_expired"});
         expect(server.requests).toHaveLength(4);assertNoImport();
+    });
+
+	it("passes preparation abandonment into the access read retry boundary", async () => {
+        let active: SyncAttempt | undefined;
+        jest.spyOn(keepApi, "fetchNotesWithPremiumFeatures").mockImplementation(async (...args) => {
+            void active!.finish("abandoned");
+            args[10]!.checkCancelled!();
+            throw new Error("Abandoned preparation admitted another read");
+        });
+        await expect(buildManualSyncPlan(plugin, "import", {
+            onAttempt: (attempt) => { active = attempt; },
+        }, {kind: "all"})).rejects.toBeInstanceOf(SyncCancellationError);
+        expect(active?.outcome).toBe("abandoned");
+        assertNoImport();
     });
 
 	it("cancels during real policy backoff and restarts without retained pages", async () => {

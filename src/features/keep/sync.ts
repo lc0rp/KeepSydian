@@ -658,7 +658,10 @@ async function buildImportSyncPlanBase(
 	preparation.active = true;
 	const featureFlags = preparation.featureFlags;
 	const readRetry = {
-        checkCancelled: () => plugin.throwIfSyncCancelled(),
+		checkCancelled: () => {
+            plugin.throwIfSyncCancelled();
+            if (callbacks?.attempt?.finished) throw new SyncCancellationError();
+        },
         onRetry: async (retryCount: number) => { await callbacks?.attempt?.pageEvent("retry", {retryCount}); }
     };
 	const fetchFunction =
