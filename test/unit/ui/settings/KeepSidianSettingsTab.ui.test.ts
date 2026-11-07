@@ -615,6 +615,8 @@ describe("KeepSidianSettingsTab UI interactions", () => {
 		input.value = "KeepSidian/Subfolder";
 		input.dispatchEvent(new Event("input"));
 		expect(plugin.settings.saveLocation).toBe("/KeepSidian/Subfolder");
+		expect(input.value).toBe("KeepSidian/Subfolder");
+		input.dispatchEvent(new Event("blur"));
 		expect(input.value).toBe("/KeepSidian/Subfolder");
 	});
 
