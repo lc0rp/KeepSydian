@@ -453,6 +453,79 @@ describe("KeepSidian", function () {
 		await openKeepSidianSettingsTab();
 	});
 
+	it("preserves spaces while typing the save location (desktop)", async function () {
+		if (isAndroid()) {
+			this.skip();
+			return;
+		}
+
+		const original = await browser.executeObsidian(({ app }) => {
+			const plugin = app.plugins.getPlugin("keepsidian");
+			return plugin.settings.saveLocation as string;
+		});
+		const savedLocation = () =>
+			browser.executeObsidian(({ app }) => app.plugins.getPlugin("keepsidian").settings.saveLocation as string);
+		const inputSelector =
+			'//*[contains(@class,"setting-item-name") and normalize-space(.)="Save location in vault"]/ancestor::*[contains(concat(" ",normalize-space(@class)," ")," setting-item ")]//input';
+
+		try {
+			await openKeepSidianSettingsTab();
+			const input = browser.$(inputSelector);
+			await input.setValue("Project");
+			await browser.execute((element: HTMLInputElement) => {
+				element.focus();
+				element.setSelectionRange(element.value.length, element.value.length);
+			}, await input);
+			await browser.keys(" ");
+			await expect(input).toHaveValue("Project ", { trim: false });
+			await browser.keys("Notes");
+			await expect(input).toHaveValue("Project Notes");
+			await expect(browser.$(".keepsidian-note-path-preview")).toHaveText(expect.stringContaining("Project Notes/"));
+
+			// Insert in the middle and continue typing without losing the caret.
+			await browser.keys(["ArrowLeft", "ArrowLeft", "ArrowLeft", "ArrowLeft", "ArrowLeft"]);
+			await browser.keys("Team ");
+			await expect(input).toHaveValue("Project Team Notes");
+			await browser.keys(" ");
+			await expect(input).toHaveValue("Project Team  Notes");
+			expect(await savedLocation()).toBe("/Project Team  Notes");
+
+			// Pasted text remains editable; blur presents the canonical saved path.
+			await input.setValue("  Project Notes/Nested Folder  ");
+			await expect(input).toHaveValue("  Project Notes/Nested Folder  ", { trim: false });
+			expect(await savedLocation()).toBe("/Project Notes/Nested Folder");
+			await browser.$(".keepsidian-note-path-preview").click();
+			await expect(input).toHaveValue("/Project Notes/Nested Folder");
+			await browser.waitUntil(async () =>
+				(await browser.executeObsidian(async ({ app }) => {
+					const data = await app.plugins.getPlugin("keepsidian").loadData();
+					return data.saveLocation as string;
+				})) === "/Project Notes/Nested Folder"
+			);
+			await browser.executeObsidian(({ app }) => app.setting.close());
+			await openKeepSidianSettingsTab();
+			await expect(browser.$(inputSelector)).toHaveValue("/Project Notes/Nested Folder");
+
+			await browser.$(inputSelector).setValue("/");
+			expect(await savedLocation()).toBe("/");
+			await browser.$(inputSelector).setValue(" ");
+			expect(await savedLocation()).toBe("");
+			await browser.$(".keepsidian-note-path-preview").click();
+			await expect(browser.$(inputSelector)).toHaveValue("");
+			await browser.$(inputSelector).setValue("Project Notes/Nested Folder");
+			await browser.$(".keepsidian-note-path-preview").click();
+			await browser.waitUntil(async () => (await browser.$$(".notice")).length === 0, { timeout: 20000 });
+			await browser.$(inputSelector).scrollIntoView();
+			await browser.saveScreenshot(resolve(".tmp/wdio/issue-19-save-location.png"));
+		} finally {
+			await browser.executeObsidian(async ({ app }, value) => {
+				const plugin = app.plugins.getPlugin("keepsidian");
+				plugin.settings.saveLocation = value;
+				await plugin.saveSettings();
+			}, original);
+		}
+	});
+
 	it("shows token helper wizard controls on desktop", async function () {
 		if (isAndroid()) {
 			this.skip();

@@ -118,18 +118,20 @@ export function addSaveLocationSetting(plugin: KeepSidianPlugin, containerEl: HT
 			.setDesc(
 				t("settings.saveLocation.description")
 			)
-			.addText((text) =>
+			.addText((text) => {
 				text
 					.setPlaceholder(NEW_INSTALL_SAVE_LOCATION)
 					.setValue(plugin.settings.saveLocation)
 					.onChange(async (value) => {
 						const normalizedValue = normalizeRootedVaultPath(value);
 						plugin.settings.saveLocation = normalizedValue;
-						text.setValue(normalizedValue);
 						updatePreview();
 						await plugin.saveSettings();
-					})
-			);
+					});
+				text.inputEl.addEventListener("blur", () => {
+					text.setValue(normalizeRootedVaultPath(text.inputEl.value));
+				});
+			});
 
 		new Setting(sectionEl)
 			.setName(t("settings.filename.name"))
