@@ -479,3 +479,18 @@ it("keeps a concurrently refreshed credential when an older request is rejected"
 	expect(await getAccessCredential(EMAIL, MASTER)).toBe("newer-access");
 	expect(transport.googleAuthRequest).toHaveBeenCalledTimes(2);
 });
+
+
+it.each(["/keep/deletions/v1", "/keep/media/n/b", "/keep/trash/preview/v1", "/keep/sync/v2"])("allows a long bounded read for %s", async path => {
+ const method=path.includes("preview")?"POST":"GET";
+ await http.httpRequest(`https://backend.example.invalid${path}`,{method,headers:headers(),...(method==="POST"?{body:{notes:[]}}:{})});
+ const call=jest.mocked(transport.accessBackendRequest).mock.calls.find(([url])=>url.includes(path.replace("/keep/","/keep/access-v1/")));
+ expect(call?.[4]).toBe(310_000);
+});
+
+it("cancels a saved-result read before dispatch without admitting paid work", async()=>{
+ const {SyncCancellationError}=require("@app/sync-cancel") as typeof import("@app/sync-cancel");
+ const hooks={checkCancelled:()=>{throw new SyncCancellationError();},onRetry:jest.fn()};
+ await expect(api.lookupLocalEnrichment(EMAIL,MASTER,[],undefined,"operation",hooks)).rejects.toThrow("Sync canceled");
+ expect(jest.mocked(transport.accessBackendRequest).mock.calls.some(([url])=>url.includes("/enrich/local/lookup"))).toBe(false);
+});

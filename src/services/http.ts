@@ -184,10 +184,10 @@ export async function httpPostJson<TRes = unknown, TReq = unknown>(
 }
 
 // Fetch a binary payload as an ArrayBuffer with status checking.
-export async function httpGetArrayBuffer(url: string, headers?: Record<string, string>): Promise<ArrayBuffer> {
+export async function httpGetArrayBuffer(url: string, headers?: Record<string, string>, readRetry?: ReadRetryHooks): Promise<ArrayBuffer> {
 	if (usesAccessBoundary(url, headers)) {
 		requireAccessTransport();
-		const response = await requestAccessBackend(url, "GET", headers ?? {});
+		const response = await requestAccessBackend(url, "GET", headers ?? {}, undefined, readRetry);
 		return new Uint8Array(response.bytes).buffer;
 	}
 	const response = await requestUrl({ url, method: "GET", headers });

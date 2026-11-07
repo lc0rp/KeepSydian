@@ -1,3 +1,4 @@
+import type { ReadRetryHooks } from "@features/keep/download-retry";
 import { z } from "zod";
 import { KEEPSIDIAN_SERVER_URL } from "../../config";
 import { httpPostJson } from "@services/http";
@@ -32,7 +33,8 @@ export async function requestKeepTrash(
 	email: string,
 	token: string,
 	notes: readonly KeepTrashRequest[],
-	apply = false
+	apply = false,
+	readRetry?: ReadRetryHooks
 ): Promise<KeepTrashResult[]> {
 	const requested = new Set(notes.map((note) => note.keep_url));
 	if (!notes.length || notes.length > MAX_TRASH_BATCH || requested.size !== notes.length || notes.some((note) =>
@@ -41,7 +43,7 @@ export async function requestKeepTrash(
 	const raw = await httpPostJson<unknown, { version: number; notes: readonly KeepTrashRequest[] }>(
 		`${KEEPSIDIAN_SERVER_URL}/keep/trash/${apply ? "" : "preview/"}v1`,
 		{ version: 1, notes },
-		{ "Content-Type": "application/json", "X-User-Email": email, Authorization: `Bearer ${token}` }
+		{ "Content-Type": "application/json", "X-User-Email": email, Authorization: `Bearer ${token}` }, apply ? undefined : readRetry
 	);
 	const parsed = ResponseSchema.safeParse(raw);
 	if (!parsed.success) throw new Error("Keep trash returned an invalid response. No unconfirmed deletion was acknowledged.");

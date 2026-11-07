@@ -13,7 +13,8 @@ import {
 	RecordSchema,
 	emptyState,
 	hash,
- localEnrichmentSnapshot,
+	localEnrichmentSnapshot,
+	ENRICHMENT_RECOVERY_RETENTION_MS,
 	bodyHash,
 	effectiveTitle,
 	tags,
@@ -313,7 +314,13 @@ export class EnrichmentLedger {
 			}
 			if (before !== undefined) observeLocal(record, path, before);
 			const plan = { ...note.local_enrichment! };
-            if (plan.observedLocalHash !== undefined && (path !== plan.observedLocalPath || before === undefined || await localEnrichmentSnapshot(path, before) !== plan.observedLocalHash)) throw new Error("This note changed while AI suggestions were prepared. Review it before applying suggestions.");
+			if (
+				plan.observedLocalHash !== undefined &&
+				(path !== plan.observedLocalPath ||
+					before === undefined ||
+					(await localEnrichmentSnapshot(path, before)) !== plan.observedLocalHash)
+			)
+				throw new Error("This note changed while AI suggestions were prepared. Review it before applying suggestions.");
 			if (newlyObservedManual) {
 				plan.title = undefined;
 				plan.titleSource = false;
@@ -360,6 +367,10 @@ export class EnrichmentLedger {
 			// subsequent own-upload alias to an older source projection.
 			const groundedBody = extractFrontmatter(content)[1] === normalizeNote(note).textWithoutFrontmatter;
 			const receipt = {
+				imageHash: await hash(content),
+				...(record.local?.settledOperations && record.local.source.source_hash === source.source_hash
+					? { settledOperations: record.local.settledOperations }
+					: {}),
 				source: EnrichmentSourceSchema.parse(note.enrichment_source),
 				path,
 				title: effectiveTitle(path, content),
@@ -386,11 +397,64 @@ export class EnrichmentLedger {
 		if (!note.local_enrichment) return;
 		await this.transaction(async (state, save) => {
 			const record = state.records[note.local_enrichment!.receipt];
-			if (record?.journal) {
-				await this.recover(record);
-				await save();
+			const before = JSON.stringify(record);
+			if (record?.journal) await this.recover(record);
+			// Persist settlement with the small application receipt, not a full
+			// ledger rewrite for every note. A preview/cache hit cannot settle it.
+			if (
+				record?.local &&
+				!note.enrichment_uncertain &&
+				record.local.source.source_hash === note.enrichment_source?.source_hash
+			) {
+				const namespace = await this.namespace();
+				const settled = Object.entries(state.operations ?? {})
+					.filter(
+						([, saved]) =>
+							saved.namespace === namespace &&
+							saved.rows.some(
+								(row) =>
+									row.request.source.id === record.source.id &&
+									row.request.source.source_hash === record.local!.source.source_hash &&
+									(!row.request.features.suggest_tags || note.local_enrichment!.tags !== undefined) &&
+									(!row.request.features.suggest_title ||
+										note.local_enrichment!.title !== undefined ||
+										record.manualTitle) &&
+									Object.entries(row.keys)
+										.filter(
+											([feature]) =>
+												row.request.features[feature === "title" ? "suggest_title" : "suggest_tags"] !== undefined
+										)
+										.every(
+											([, key]) =>
+												state.cache[key]?.status === "ready" &&
+												(state.cache[key]?.attemptedCoverage ?? 0) <= state.cache[key].coverage
+										)
+							)
+					)
+					.map(([operation]) => operation);
+				if (settled.length) record.local.settledOperations = settled;
 			}
+			if (JSON.stringify(record) !== before) await save();
 		}, note.local_enrichment.receipt);
+	}
+
+	async hasRecoverableOperations(): Promise<boolean> {
+		const namespace = await this.namespace();
+		return this.transaction(async (state) => {
+			for (const [operation, saved] of Object.entries(state.operations ?? {})) {
+				if (
+					saved.namespace !== namespace ||
+					saved.terminal ||
+					Date.now() - saved.startedAt >= ENRICHMENT_RECOVERY_RETENTION_MS
+				)
+					continue;
+				for (const row of saved.rows) {
+					const receipt = state.records[await this.key(row.request.source)]?.local;
+					if (!row.checkpointSettled && !receipt?.settledOperations?.includes(operation)) return true;
+				}
+			}
+			return false;
+		});
 	}
 
 	async acknowledgeUpload(path: string, content: string, sourceInput: unknown): Promise<void> {
@@ -478,4 +542,10 @@ export function getEnrichmentLedger(plugin: KeepSidianPlugin): EnrichmentLedger 
 		ledgers.set(plugin, ledger);
 	}
 	return ledger;
+}
+
+/** No network or paid work: retain the cursor only while a saved result is recoverable. */
+export async function hasRecoverableEnrichment(plugin: KeepSidianPlugin): Promise<boolean> {
+	if (!ledgers.has(plugin) && !plugin.manifest?.dir && !plugin.app?.vault?.configDir) return false;
+	return getEnrichmentLedger(plugin).hasRecoverableOperations();
 }

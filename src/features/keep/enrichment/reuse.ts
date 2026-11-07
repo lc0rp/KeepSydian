@@ -1,3 +1,4 @@
+import { isSyncCancellationError } from "@app/sync-cancel";
 import { AccessV1RequestError } from "@services/errors";
 import { consumeUncertainRetry } from "./retry-consent";
 import type KeepSidianPlugin from "@app/main";
@@ -93,6 +94,7 @@ export async function enrichImportNotes(
 			generate ? notes.filter(consumeUncertainRetry).map((note) => note.enrichment_source?.id) : []
 		);
 		const retryKeys = new Set<string>();
+		const readRetry = { checkCancelled: () => plugin.throwIfSyncCancelled?.(), onRetry: async () => {} };
 		// Operations are bound to this backend/account namespace. Never probe other accounts.
 		for (const [operation, saved] of Object.entries(state.operations ?? {})) {
 			if (
@@ -100,6 +102,38 @@ export async function enrichImportNotes(
 				!saved.rows.some((row) => notes.some((note) => note.enrichment_source?.id === row.request.source.id))
 			)
 				continue;
+			for (const row of saved.rows) {
+				if (state.records[await activeLedger.key(row.request.source)]?.local?.settledOperations?.includes(operation))
+					row.checkpointSettled = true;
+			}
+			if (
+				saved.rows.every((row) => row.checkpointSettled) &&
+				saved.rows.every((row) =>
+					Object.entries(row.keys)
+						.filter(
+							([feature]) => row.request.features[feature === "title" ? "suggest_title" : "suggest_tags"] !== undefined
+						)
+						.every(
+							([, key]) =>
+								state.cache[key]?.status === "ready" &&
+								(state.cache[key]?.attemptedCoverage ?? 0) <= state.cache[key].coverage
+						)
+				)
+			) {
+				delete state.operations![operation];
+				continue;
+			}
+			if (saved.terminal) {
+				for (const row of saved.rows)
+					if (
+						retryChosen.has(row.request.source.id) &&
+						notes.some((note) => note.enrichment_source?.source_hash === row.request.source.source_hash)
+					)
+						Object.values(row.keys)
+							.filter((key) => state.cache[key]?.operation === operation)
+							.forEach((key) => retryKeys.add(key));
+				continue;
+			}
 			assertContext();
 			plugin.throwIfSyncCancelled?.();
 			try {
@@ -108,7 +142,8 @@ export async function enrichImportNotes(
 					credentials.token,
 					saved.rows.map((row) => row.request),
 					credentials.supporterKey,
-					operation
+					operation,
+					readRetry
 				);
 				if (
 					response.results.length !== saved.rows.length ||
@@ -121,27 +156,25 @@ export async function enrichImportNotes(
 					const record = state.records[await activeLedger.key(row.request.source)];
 					const paths = identities.get(`https://keep.google.com/#NOTE/${row.request.source.id}`) ?? [];
 					if (paths.length > 1) continue;
-					if (row.localPath) {
-						if (
-							paths[0] !== row.localPath ||
-							(await hash(await plugin.app.vault.adapter.read(row.localPath))) !== row.localHash
-						)
-							continue;
-					} else if (paths.length) {
-						// An original-content import may have completed after the lost response.
-						// Only its exact receipt proves this was not a later user edit.
+					if (paths.length) {
 						const content = await plugin.app.vault.adapter.read(paths[0]);
-						if (
-							!record?.local ||
-							record.local.path !== paths[0] ||
-							(await bodyHash(content)) !== record.local.body ||
-							effectiveTitle(paths[0], content) !== record.local.title ||
-							JSON.stringify(tags(content)) !== JSON.stringify(record.local.tags)
-						)
-							continue;
-					}
+						const originalUnchanged = paths[0] === row.localPath && (await hash(content)) === row.localHash;
+						// Our original-content import can replace the pre-dispatch file.
+						// Accept only its exact confirmed receipt, never a later manual edit.
+						const ownImport =
+							record?.local?.path === paths[0] &&
+							record.local.source.source_hash === row.request.source.source_hash &&
+							(record.local.imageHash !== undefined
+								? (await hash(content)) === record.local.imageHash
+								: (await bodyHash(content)) === record.local.body &&
+									effectiveTitle(paths[0], content) === record.local.title &&
+									JSON.stringify(tags(content)) === JSON.stringify(record.local.tags));
+						if (!originalUnchanged && !ownImport) continue;
+					} else if (row.localPath) continue;
+
 					const result = response.results.find((value) => value.source.id === row.request.source.id);
 					if (result?.status === "uncertain") {
+						row.checkpointSettled = true;
 						if (
 							saved.executionWindowMs !== undefined &&
 							Date.now() - saved.startedAt >= saved.executionWindowMs &&
@@ -155,6 +188,7 @@ export async function enrichImportNotes(
 					await acceptResult(row.request, row.keys, result, operation);
 				}
 			} catch (error) {
+				if (isSyncCancellationError(error)) throw error;
 				// A failed lookup is not proof that the previous paid operation ended.
 				if (
 					error instanceof AccessV1RequestError &&
@@ -162,6 +196,7 @@ export async function enrichImportNotes(
 					saved.executionWindowMs !== undefined &&
 					Date.now() - saved.startedAt >= saved.executionWindowMs
 				) {
+					saved.terminal = true;
 					for (const row of saved.rows)
 						if (
 							retryChosen.has(row.request.source.id) &&
@@ -325,6 +360,10 @@ export async function enrichImportNotes(
 			const note: PreNormalizedNote = {
 				...original,
 				tags: undefined,
+				enrichment_uncertain: false,
+				processing_warnings: original.processing_warnings?.filter(
+					(warning) => warning !== "local_enrichment_uncertain"
+				),
 				local_enrichment: {
 					receipt: key,
 					observedLocalPath: paths[0],
@@ -416,9 +455,15 @@ export async function enrichImportNotes(
 			let executionWindowMs: number | undefined;
 			const operation =
 				provider === enrichLocalNotes
-					? await prepareLocalEnrichment(credentials.email, credentials.token, credentials.supporterKey, (window) => {
-							executionWindowMs = window;
-						})
+					? await prepareLocalEnrichment(
+							credentials.email,
+							credentials.token,
+							credentials.supporterKey,
+							(window) => {
+								executionWindowMs = window;
+							},
+							readRetry
+						)
 					: undefined;
 			assertContext();
 			plugin.throwIfSyncCancelled?.();
@@ -451,7 +496,12 @@ export async function enrichImportNotes(
 							const path = identities.get(`https://keep.google.com/#NOTE/${item.request!.source.id}`)?.[0];
 							return {
 								request: item.request!,
-								keys: item.keys,
+								keys: Object.fromEntries(
+									Object.entries(item.keys).filter(
+										([feature]) =>
+											item.request!.features[feature === "title" ? "suggest_title" : "suggest_tags"] !== undefined
+									)
+								),
 								localPath: path,
 								localHash: path ? await hash(await plugin.app.vault.adapter.read(path)) : undefined,
 							};
@@ -479,6 +529,13 @@ export async function enrichImportNotes(
 					// Recheck local content after awaiting the provider, not just the original request hash.
 					const path = identities.get(`https://keep.google.com/#NOTE/${item.request!.source.id}`)?.[0];
 					if (path && (await plugin.app.vault.adapter.read(path)) !== contents.get(path)) continue;
+					const result = response.results.find((row) => row.source.id === item.request!.source.id);
+					if (operation && result?.status === "uncertain") {
+						const savedRow = state.operations?.[operation]?.rows.find(
+							(row) => row.request.source.id === item.request!.source.id
+						);
+						if (savedRow) savedRow.checkpointSettled = true;
+					}
 					await acceptResult(
 						item.request!,
 						item.keys,
@@ -494,12 +551,21 @@ export async function enrichImportNotes(
 		for (const [operation, saved] of Object.entries(state.operations ?? {})) {
 			if (
 				saved.namespace === namespace &&
-				saved.rows.every((row) =>
-					Object.values(row.keys).every(
-						(key) =>
-							state.cache[key]?.status === "ready" &&
-							(state.cache[key]?.attemptedCoverage ?? 0) <= state.cache[key].coverage
-					)
+				saved.rows.every(
+					(row) =>
+						row.checkpointSettled === true &&
+						Object.entries(row.keys)
+							.filter(
+								([feature]) =>
+									row.request.features[feature === "title" ? "suggest_title" : "suggest_tags"] !== undefined
+							)
+							.map(([, key]) => key)
+							.every(
+								(key) =>
+									state.cache[key]?.status === "ready" &&
+									(state.cache[key]?.attemptedCoverage ?? 0) <= state.cache[key].coverage &&
+									(state.cache[key]?.attemptedCoverage ?? 0) <= state.cache[key].coverage
+							)
 				)
 			)
 				delete state.operations![operation];

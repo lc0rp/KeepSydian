@@ -14,7 +14,7 @@ import {
 	importGoogleKeepNotes,
 	importGoogleKeepNotesWithOptions,
 	importSelectedGoogleKeepNotes,
-	persistLastSuccessfulSyncDate,
+	commitLastSuccessfulSyncDate,
 } from "@features/keep/sync";
 import { buildPushSyncPlan, pushGoogleKeepNotes } from "@features/keep/push";
 import { buildDeletionPlan, type PreparedDeletions } from "@features/keep/deletions";
@@ -464,7 +464,7 @@ export async function runPreparedSyncPlan(
 		}
 		if (!await finishDeletionReceipts(plugin, attempt)) return;
 		if (preparedPlan.mode === "two-way") onTwoWaySuccess();
-		if (preparedPlan.completionDate) persistLastSuccessfulSyncDate(plugin, preparedPlan.completionDate);
+		if (preparedPlan.completionDate) await commitLastSuccessfulSyncDate(plugin, preparedPlan.completionDate);
 	});
 }
 
@@ -496,7 +496,7 @@ export async function runImportNotesFlow(
 		else await importGoogleKeepNotes(plugin, callbacks);
 		return {};
 	}, () => attachmentWarnings, async () => {
-		if (await finishDeletionReceipts(plugin, attempt) && completionDate) persistLastSuccessfulSyncDate(plugin, completionDate);
+		if (await finishDeletionReceipts(plugin, attempt) && completionDate) await commitLastSuccessfulSyncDate(plugin, completionDate);
 	});
 }
 
@@ -537,7 +537,7 @@ export async function runTwoWaySyncFlow(plugin: KeepSidianPlugin, _getErrorMessa
 	}, () => attachmentWarnings, async () => {
 		if (!await finishDeletionReceipts(plugin, attempt)) return;
 		onTwoWaySuccess();
-		if (completionDate) persistLastSuccessfulSyncDate(plugin, completionDate);
+		if (completionDate) await commitLastSuccessfulSyncDate(plugin, completionDate);
 	});
 }
 

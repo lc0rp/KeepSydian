@@ -3,8 +3,12 @@ import { EnrichmentSourceSchema, EnrichmentProvenanceSchema, PremiumFeatureFlags
 import { extractFrontmatter, getFrontmatterStringValue } from "../domain/note";
 import { sha256, isSafeVaultPath } from "../local-deletions/state";
 
+export const ENRICHMENT_RECOVERY_RETENTION_MS = 15 * 60_000;
+
 const ProjectionSchema = z.object({ body: z.string(), title: z.string(), labels: z.array(z.string()) });
 const ReceiptSchema = z.object({
+	settledOperations: z.array(z.string()).optional(),
+	imageHash: z.string().optional(),
 	source: EnrichmentSourceSchema,
 	path: z
 		.string()
@@ -54,6 +58,7 @@ export const StateSchema = z.object({
 			z.object({
 				namespace: z.string(),
 				startedAt: z.number(),
+				terminal: z.boolean().optional(),
 				executionWindowMs: z.number().positive().max(300_000).optional(),
 				rows: z
 					.array(
@@ -66,6 +71,7 @@ export const StateSchema = z.object({
 							keys: z.record(z.string(), z.string()),
 							localPath: z.string().optional(),
 							localHash: z.string().optional(),
+							checkpointSettled: z.boolean().optional(),
 						})
 					)
 					.max(16),

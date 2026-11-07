@@ -190,7 +190,7 @@ export async function requestAccessBackend(
 							method,
 							safeHeaders,
 							serialized,
-							safe ? (suffix.includes("/sync/") ? 310_000 : 60_000) : undefined
+							safe ? (/^\/keep\/(?:sync\/|media\/|deletions\/v1$|trash\/preview\/v1$)/.test(suffix) ? 310_000 : 60_000) : undefined
 						);
 					} catch (error) {
 						return classify(error, safe);

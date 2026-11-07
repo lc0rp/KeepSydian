@@ -1,3 +1,4 @@
+import type { ReadRetryHooks } from "@features/keep/download-retry";
 import { z } from "zod";
 import { KEEPSIDIAN_SERVER_URL } from "../../config";
 import { httpGetJson } from "@services/http";
@@ -29,12 +30,12 @@ const DeletionResponseSchema = z.object({
 	deleted_keep_urls: z.array(z.string().max(512).refine((value) => !!canonicalKeepUrl(value))).max(20_000),
 });
 
-export async function fetchDeletedKeepUrls(email: string, token: string): Promise<Set<string>> {
+export async function fetchDeletedKeepUrls(email: string, token: string, readRetry?: ReadRetryHooks): Promise<Set<string>> {
 	const raw = await httpGetJson<unknown>(`${KEEPSIDIAN_SERVER_URL}/keep/deletions/v1`, {
 		"Content-Type": "application/json",
 		"X-User-Email": email,
 		Authorization: `Bearer ${token}`,
-	});
+	}, readRetry);
 	const response = DeletionResponseSchema.parse(raw);
 	return new Set(response.deleted_keep_urls.map((url) => canonicalKeepUrl(url)!));
 }

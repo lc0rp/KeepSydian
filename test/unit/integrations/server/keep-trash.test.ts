@@ -14,7 +14,7 @@ it("sends explicit identities and revision receipts using authenticated POST", a
 	post.mockResolvedValue({ version: 1, complete: true, results: [result()] });
 	expect(await requestKeepTrash("fixture@example.com", "fixture-token", [note])).toEqual([result()]);
 	expect(post).toHaveBeenCalledWith(expect.stringMatching(/\/keep\/trash\/preview\/v1$/),
-		{ version: 1, notes: [note] }, { "Content-Type": "application/json", "X-User-Email": "fixture@example.com", Authorization: "Bearer fixture-token" });
+		{ version: 1, notes: [note] }, { "Content-Type": "application/json", "X-User-Email": "fixture@example.com", Authorization: "Bearer fixture-token" }, undefined);
 });
 
 it.each([

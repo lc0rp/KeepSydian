@@ -67,7 +67,7 @@ export interface LocalEnrichmentRequest {
 	title_context?: string;
 }
 
-export async function prepareLocalEnrichment(email: string, token: string, supporterKey?: string, onRecoveryWindow?: (windowMs: number) => void): Promise<string> {
+export async function prepareLocalEnrichment(email: string, token: string, supporterKey?: string, onRecoveryWindow?: (windowMs: number) => void, readRetry?: ReadRetryHooks): Promise<string> {
 	const headers = withSupporterKey(
 		{ "X-User-Email": email, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
 		supporterKey
@@ -76,7 +76,7 @@ export async function prepareLocalEnrichment(email: string, token: string, suppo
 	// Bind that one attempt to a server process; never refresh/retry after POST.
 	const capability = await httpGetJson<{ version: number; epoch: string; issued_at_ms: number; lookup?: boolean; execution_window_ms?: number }>(
 		`${KEEPSIDIAN_SERVER_URL}/keep/enrich/local/capabilities`,
-		headers
+		headers, readRetry
 	);
 	if (
 		capability?.version !== 1 ||
@@ -115,9 +115,9 @@ export async function enrichLocalNotes(
 }
 
 /** Read-only lookup: never admits a provider call. Payload is the original request. */
-export async function lookupLocalEnrichment(email: string, token: string, notes: LocalEnrichmentRequest[], supporterKey: string | undefined, operation: string) {
+export async function lookupLocalEnrichment(email: string, token: string, notes: LocalEnrichmentRequest[], supporterKey: string | undefined, operation: string, readRetry?: ReadRetryHooks) {
  const headers = withSupporterKey({ "X-User-Email": email, Authorization: `Bearer ${token}`, "Content-Type": "application/json", "X-Enrichment-Operation": operation }, supporterKey);
- const raw = await httpPostJson<unknown>(`${KEEPSIDIAN_SERVER_URL}/keep/enrich/local/lookup/v1`, {notes}, headers);
+ const raw = await httpPostJson<unknown>(`${KEEPSIDIAN_SERVER_URL}/keep/enrich/local/lookup/v1`, {notes}, headers, readRetry);
  return LocalEnrichmentResponseSchema.parse(raw);
 }
 

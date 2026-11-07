@@ -99,7 +99,8 @@ export async function buildLocalDeletionPlan(
 		for (let offset = 0; offset < prepared.candidates.length; offset += MAX_TRASH_BATCH) {
 			const batch = prepared.candidates.slice(offset, offset + MAX_TRASH_BATCH);
 			const results = await requestKeepTrash(plugin.settings.email, plugin.settings.token,
-				batch.map(({ record }) => ({ keep_url: record.keepUrl, expected_revision: record.revision })));
+				batch.map(({ record }) => ({ keep_url: record.keepUrl, expected_revision: record.revision })), false,
+                {checkCancelled: () => plugin.throwIfSyncCancelled?.(), onRetry: async () => {}});
 			await assertContext(plugin, ledger, prepared);
 			const byUrl = new Map(results.map((result) => [result.keep_url, result.status]));
 			for (const candidate of batch) {

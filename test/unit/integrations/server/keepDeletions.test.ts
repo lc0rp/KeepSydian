@@ -33,7 +33,7 @@ it("authenticates the separate feed without download filters or supporter gating
 		"Content-Type": "application/json",
 		"X-User-Email": "test@example.com",
 		Authorization: "Bearer test-token",
-	});
+	}, undefined);
 });
 
 it.each([

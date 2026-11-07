@@ -1,3 +1,4 @@
+import { localEnrichmentSnapshot } from "./enrichment/state";
 import { t } from "../../lang/ui";
 import { Notice, getAllTags } from "obsidian";
 import type KeepSidianPlugin from "@app/main";
@@ -55,7 +56,7 @@ import { KEEPSIDIAN_SERVER_URL } from "../../config";
 import { getDeletionLedger } from "./local-deletions/ledger";
 import { assertDownloadIdentityPresentOrUntracked } from "./local-deletions/download";
 import { enrichImportNotes, fetchFirstFlags } from "./enrichment/reuse";
-import { getEnrichmentLedger } from "./enrichment/ledger";
+import { hasRecoverableEnrichment, getEnrichmentLedger } from "./enrichment/ledger";
 import type { LegacyTagConsent } from "./enrichment/consent";
 
 const LAST_SUCCESSFUL_SYNC_DATE_KEY = "KeepSidianLastSuccessfulSyncDate";
@@ -241,6 +242,12 @@ export function persistLastSuccessfulSyncDate(plugin: KeepSidianPlugin, isoStrin
 	if (previous && Date.parse(previous) >= Date.parse(isoString)) return;
 	plugin.settings.keepSidianLastSuccessfulSyncDate = isoString;
 	setVaultConfig(plugin, LAST_SUCCESSFUL_SYNC_DATE_KEY, isoString);
+}
+
+/** Content can finish while a lost AI result keeps the incremental recovery window open. */
+export async function commitLastSuccessfulSyncDate(plugin: KeepSidianPlugin, isoString: string): Promise<void> {
+	if (await hasRecoverableEnrichment(plugin)) return;
+	persistLastSuccessfulSyncDate(plugin, isoString);
 }
 
 export interface SyncCallbacks {
@@ -543,7 +550,7 @@ function buildImportPlanEntry(
 		}
 		if (note.enrichment_pending) detail = `${detail ? `${detail} ` : ""}New AI suggestions are requested only for selected notes.`;
 		if (note.enrichment_pending) downloadDetails.push("request-suggestions");
-        if (note.enrichment_uncertain) detail = `${detail ?? ""} We will first check for a saved AI result. Retrying missing suggestions needs your choice and may use AI allowance again.`;
+        if (note.enrichment_uncertain) detail = `${detail ?? ""} ${t("download.recover-suggestions")}`;
 		if (note.enrichment_legacy_held) detail = `${detail ? `${detail} ` : ""}Previously imported titles and tags are kept. New AI tags require the choice in Customize sync.`;
 		if (note.enrichment_legacy_held) downloadDetails.push("legacy-tags");
 
@@ -692,7 +699,7 @@ async function buildImportSyncPlanBase(
                 const epoch = featureFlags === undefined ? undefined : await getReplayEpoch(email, token);
                 Object.assign(preparation, { restarts: 1, notes: [], offset: 0, page: 1, cursor: undefined, total: undefined, usingCursor: false, seenCursors: new Set<string>(), operationId: epoch ? `${epoch}:${Date.now()}:${Math.random().toString(36).slice(2)}` : undefined });
                 await callbacks?.attempt?.pageEvent("retry", {retryCount: 1});
-                new Notice("The download session expired. Restarting once with the same date range. No notes have been written.");
+                new Notice(t("notices.downloadSessionExpired"));
             }
         }
 		preparations.delete(plugin);
@@ -777,7 +784,7 @@ export async function importSelectedGoogleKeepNotes(
 	throwIfSyncCancelled(plugin);
 	if (completionDate) {
 		if (callbacks?.deferCheckpoint) callbacks.deferCheckpoint(completionDate);
-		else persistLastSuccessfulSyncDate(plugin, completionDate);
+		else await commitLastSuccessfulSyncDate(plugin, completionDate);
 	}
 	if (enrichmentWarnings)
 		new Notice(t("notices.aiImported",{count:enrichmentWarnings}), 10_000);
@@ -1173,7 +1180,11 @@ export async function processAndSaveNote(
 			if (expected === undefined && await equivalentPath(plugin.app.vault.adapter, path)) throw new Error("A local file appeared at the download destination. It was preserved.");
 			if (expected === undefined || stamped !== expected) await plugin.app.vault.adapter.write(path, stamped);
 		});
-		if (note.local_enrichment) await getEnrichmentLedger(plugin).finish(note);
+		if (note.local_enrichment) {
+			await getEnrichmentLedger(plugin).finish(note);
+			note.local_enrichment.observedLocalPath = path;
+			note.local_enrichment.observedLocalHash = await localEnrichmentSnapshot(path, stamped);
+		}
 		expectedMarkdown = stamped;
 	};
 	const writeMetadata = async (path: string, content: string, expected: string, options: { ctime: number; mtime: number }): Promise<void> => {
@@ -1186,7 +1197,11 @@ export async function processAndSaveNote(
 		const updated = note.local_enrichment ? await getEnrichmentLedger(plugin).stage(note, path, expected, content, finalize) : await finalize(content);
 		if ((await plugin.app.vault.adapter.read(path) ?? "") !== expected) throw new Error("A local note changed during metadata update. Local edits were preserved.");
 		if (updated !== expected) await plugin.app.vault.adapter.write(path, updated, options);
-		if (note.local_enrichment) await getEnrichmentLedger(plugin).finish(note);
+		if (note.local_enrichment) {
+			await getEnrichmentLedger(plugin).finish(note);
+			note.local_enrichment.observedLocalPath = path;
+			note.local_enrichment.observedLocalHash = await localEnrichmentSnapshot(path, updated);
+		}
 		if (unchanged) expectedMarkdown = updated;
 	};
 
@@ -1419,7 +1434,8 @@ export async function processAndSaveNote(
 					email: plugin.settings.email,
 					token: plugin.settings.token,
 				},
-				preserveLocalMedia
+				preserveLocalMedia,
+                {checkCancelled: () => throwIfSyncCancelled(plugin), onRetry: async () => {}}
 			);
 			if (mediaBaselines) {
 				const known = new Map(acknowledgedMedia ?? []);

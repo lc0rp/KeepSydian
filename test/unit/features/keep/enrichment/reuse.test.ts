@@ -951,7 +951,7 @@ it("persists the operation before dispatch and recovers a lost result after reop
   const reopened=new EnrichmentLedger(f.plugin);
   const [recovered]=await enrichImportNotes(f.plugin,[current],FLAGS,reopened,undefined,false);
   expect(recovered.title).toBe("AI Proposed");expect(paid).toHaveBeenCalledTimes(1);
-  expect(lookup).toHaveBeenCalledWith("synthetic@example.test","fake-token",expect.any(Array),undefined,"recover-operation");
+  expect(lookup).toHaveBeenCalledWith("synthetic@example.test","fake-token",expect.any(Array),undefined,"recover-operation",expect.objectContaining({checkCancelled:expect.any(Function)}));
  } finally {prep.mockRestore();paid.mockRestore();lookup.mockRestore();}
 });
 
@@ -1016,4 +1016,41 @@ it("does not let an older expired operation authorize another retry while the la
   await enrichImportNotes(f.plugin,[current],FLAGS,f.ledger);
   expect(paid).toHaveBeenCalledTimes(2);
  } finally {prep.mockRestore();paid.mockRestore();lookup.mockRestore();clock.mockRestore();}
+});
+
+it("does not settle an unresolved tag upgrade when a later title-only pass completes",async()=>{
+ const f=fixture(),current=await note();
+ let handle="A";
+ const prep=jest.spyOn(keepApi,"prepareLocalEnrichment").mockImplementation(async(_e,_t,_s,window)=>{window?.(45_000);return handle;});
+ const paid=jest.spyOn(keepApi,"enrichLocalNotes").mockImplementation(f.provider);
+ const {AccessV1RequestError}=await import("@services/errors");
+ const lookup=jest.spyOn(keepApi,"lookupLocalEnrichment").mockRejectedValue(new AccessV1RequestError(409,"enrichment_replay_pending"));
+ try {
+  const [first]=await enrichImportNotes(f.plugin,[current],{...FLAGS,suggest_tags:{...FLAGS.suggest_tags!,max_tags:2}},f.ledger);
+  await f.apply(first);
+  handle="B";paid.mockRejectedValueOnce(Error("upgrade response lost"));
+  const [uncertain]=await enrichImportNotes(f.plugin,[current],FLAGS,f.ledger);
+  expect(uncertain.enrichment_uncertain).toBe(true);
+  expect(await f.ledger.hasRecoverableOperations()).toBe(true);
+  const [titleOnly]=await enrichImportNotes(f.plugin,[current],{suggest_title:{}},f.ledger);
+  expect(titleOnly.enrichment_uncertain).toBe(false);
+  await f.apply(titleOnly);
+  expect(await f.ledger.hasRecoverableOperations()).toBe(true);
+ } finally {prep.mockRestore();paid.mockRestore();lookup.mockRestore();}
+});
+
+it("does not settle a recovered tags result when only its title is applied",async()=>{
+ const f=fixture(),current=await note();
+ const prep=jest.spyOn(keepApi,"prepareLocalEnrichment").mockImplementation(async(_e,_t,_s,window)=>{window?.(45_000);return "combined-op";});
+ const paid=jest.spyOn(keepApi,"enrichLocalNotes").mockRejectedValue(Error("response lost"));
+ const lookup=jest.spyOn(keepApi,"lookupLocalEnrichment").mockImplementation(async(e,t,rows)=>f.provider(e,t,rows));
+ try {
+  const [uncertain]=await enrichImportNotes(f.plugin,[current],FLAGS,f.ledger);
+  await f.apply(uncertain,"Keep/Human 0.md");
+  const [titleOnly]=await enrichImportNotes(f.plugin,[current],{suggest_title:{}},f.ledger);
+  expect(titleOnly.enrichment_uncertain).toBe(false);
+  await f.apply(titleOnly,"Keep/Human 0.md");
+  expect(extractFrontmatter(f.stored.get("Keep/Human 0.md")!)[2].tags??[]).not.toContain("auto-work");
+  expect(await f.ledger.hasRecoverableOperations()).toBe(true);
+ } finally {prep.mockRestore();paid.mockRestore();lookup.mockRestore();}
 });

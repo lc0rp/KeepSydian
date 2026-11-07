@@ -1020,8 +1020,8 @@ export class SyncProgressModal extends Modal {
             const label = createChild(body, "label");
             const retry = createChild(label, "input"); retry.type = "checkbox";
             retry.checked = hasUncertainRetry(note); retry.disabled = !entry.selected || this.isGeneratingReview;
-            retry.setAttribute("aria-label", `Retry missing AI suggestions for ${entryDisplayTitle(entry)}`);
-            createChild(label, "span", {text: " Retry missing AI suggestions for this note. The earlier request may already have used AI allowance."});
+            retry.setAttribute("aria-label", t("download.retry-suggestions-label", {title: entryDisplayTitle(entry)}));
+            createChild(label, "span", {text: t("download.retry-suggestions")});
             retry.addEventListener("change", () => chooseUncertainRetry(note, retry.checked));
         }
 	}
