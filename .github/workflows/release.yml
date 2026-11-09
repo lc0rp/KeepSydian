@@ -41,6 +41,10 @@ jobs:
         with:
           node-version: "22.x"
           cache: npm
+      - name: Install locked dependencies
+        run: |
+          cutoff="$(date -u -d '14 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          npm ci --before="$cutoff"
       - name: Validate release identity
         run: |
           node --input-type=module <<'JS'
@@ -54,10 +58,6 @@ jobs:
           assert.equal(pkg.version, manifest.version);
           JS
           test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
-      - name: Install locked dependencies
-        run: |
-          cutoff="$(date -u -d '14 days ago' +%Y-%m-%dT%H:%M:%SZ)"
-          npm ci --before="$cutoff"
       - name: Run self-contained tests
         run: npm test
       - name: Build plugin
