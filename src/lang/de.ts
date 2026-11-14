@@ -74,6 +74,9 @@ export const de = {
 		"settings.twoWay.heading": "Synchronisation in beide Richtungen (experimentell)",
 		"settings.twoWay.name": "Synchronisation in beide Richtungen aktivieren",
 		"settings.twoWay.background": "Hintergrundsynchronisation in beide Richtungen aktivieren",
+		"settings.keepArchiveCopies.name": "Archivkopien vor dem Hochladen zu Google Keep",
+		"settings.keepArchiveCopies.description":
+			"Speichere eine archivierte Kopie in Google Keep, bevor ein Upload eine vorhandene Notiz überschreibt. Gilt für manuelle Uploads und Uploads im Hintergrund. Beim Ausschalten bleiben vorhandene Kopien und der Konfliktschutz erhalten. Diese Funktion sichert deinen Obsidian-Vault nicht.",
 		"settings.backup.name": "Sichere deinen Vault ⚠️",
 		"settings.backup.description":
 			"Die Synchronisation in beide Richtungen ist experimentell. Das Hochladen von Medien wird nicht unterstützt. Um deine Daten zu schützen, versucht KeepSidian, Notizen mit Konflikten in Google Keep zu archivieren. Notizen werden nur an den oben eingestellten Speicherort heruntergeladen. Denke daran, deinen Vault zu sichern.",

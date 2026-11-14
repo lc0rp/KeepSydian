@@ -68,6 +68,9 @@ export const zh = {
 		"settings.twoWay.heading": "双向同步（实验性功能）",
 		"settings.twoWay.name": "启用双向同步",
 		"settings.twoWay.background": "启用双向后台同步",
+		"settings.keepArchiveCopies.name": "上传到 Google Keep 前创建归档副本",
+		"settings.keepArchiveCopies.description":
+			"在上传覆盖现有笔记前，在 Google Keep 中保存归档副本。适用于手动和后台上传。关闭后，现有副本和冲突保护仍会保留。此功能不会备份你的 Obsidian 仓库。",
 		"settings.backup.name": "请备份你的仓库 ⚠️",
 		"settings.backup.description":
 			"双向同步是实验性功能，不支持上传媒体文件。为保护你的数据，KeepSidian 会尝试将有冲突的 Google Keep 笔记归档。笔记只会下载到上方设置的保存位置。请记得备份你的仓库。",

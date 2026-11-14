@@ -72,6 +72,9 @@ export const en = {
 	"settings.twoWay.heading": "Two-way sync (experimental)",
 	"settings.twoWay.name": "Enable two-way sync",
 	"settings.twoWay.background": "Enable two-way background sync",
+	"settings.keepArchiveCopies.name": "Archive copies before uploading to Google Keep",
+	"settings.keepArchiveCopies.description":
+		"Save an archived copy in Google Keep before an upload overwrites an existing note. Applies to manual and background uploads. Turning this off keeps existing copies and conflict protection. This does not back up your Obsidian vault.",
 	"settings.backup.name": "Back up your vault ⚠️",
 	"settings.backup.description":
 		"Two-way sync is experimental. Media uploads are not supported. To protect your data, KeepSidian tries to archive conflicting Google Keep notes. It downloads notes only to the save location set above. Remember to back up your vault.",
