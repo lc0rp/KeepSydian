@@ -188,6 +188,11 @@ plans, conflict handling, and supporter uploads back to Google Keep.
 Two-way sync is experimental and available to supporters. It is disabled until you acknowledge the backup advisory
 and opt in. Back up your vault before enabling it.
 
+Before overwriting an existing Google Keep note, uploads save an archived copy in Google Keep by default.
+You can turn off **Archive copies before uploading to Google Keep** in the two-way sync settings.
+This applies to manual and background uploads. Existing copies, conflict protection, and the vault backup
+acknowledgment stay unchanged.
+
 ### Does KeepSydian replace Obsidian Sync?
 
 No. Obsidian Sync moves your vault between devices. KeepSydian connects a chosen folder in that vault with Google Keep.

@@ -63,6 +63,16 @@ export async function addAutoSyncSettings(plugin: KeepSidianPlugin, containerEl:
 
 	new Setting(containerEl).setName(t("settings.twoWay.heading")).setHeading();
 
+	new Setting(containerEl)
+		.setName(t("settings.keepArchiveCopies.name"))
+		.setDesc(t("settings.keepArchiveCopies.description"))
+		.addToggle((toggle) =>
+			toggle.setValue(plugin.settings.keepArchiveCopiesEnabled).onChange(async (value) => {
+				plugin.settings.keepArchiveCopiesEnabled = value;
+				await plugin.saveSettings();
+			})
+		);
+
 	let suppressTwoWayUpdates = false;
 	let backupToggle: ToggleComponent | undefined;
 	let manualTwoWayToggle: ToggleComponent | undefined;
