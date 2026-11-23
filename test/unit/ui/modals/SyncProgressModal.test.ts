@@ -1069,16 +1069,16 @@ describe("SyncProgressModal", () => {
         modalOptions.buildSyncPlan.mockResolvedValueOnce(plan);
         const modal = new SyncProgressModal(app, modalOptions); modal.onOpen(); modal.setSelectedMode("push");
         getButton(modal, "Start sync").click(); await flushUI();
-        expect(modal.contentEl.textContent).toContain("canceling does not roll them back");
+        expect(modal.contentEl.textContent).toContain("download changes already applied will be kept");
         expect(modal.contentEl.textContent).toContain("1 note cannot");
         expect(modal.contentEl.textContent).not.toContain("1 notes");
         expect(getButton(modal, "Blocked 1")).toBeTruthy();
         if (!eligible) expect(modal.contentEl.textContent).toContain("No eligible notes are available");
         expect(modalOptions.runSyncPlan).not.toHaveBeenCalled();
-        const go = getButton(modal, "Sync selected eligible notes; skip blocked");
-        expect(go.disabled).toBe(!eligible);
-        if (eligible) { go.click(); await flushUI(); expect(modalOptions.runSyncPlan.mock.calls[0][0].plan.skipBlockedUploadsConfirmed).toBe(true); }
-        else { getButton(modal, "Cancel upload").click(); await flushUI(); expect(modalOptions.runSyncPlan).not.toHaveBeenCalled(); }
+        const go = getButton(modal, eligible ? "Sync selected eligible notes; skip blocked" : "Complete review");
+        expect(go.disabled).toBe(false);
+        go.click(); await flushUI();
+        expect(modalOptions.runSyncPlan.mock.calls[0][0].plan.skipBlockedUploadsConfirmed).toBe(true);
     });
     test("mixed locked uploads remain eligible and untitled execution keeps filename", async () => {
         const plan = createPreparedSyncPlanFixture("push", "upload", [
@@ -1126,7 +1126,8 @@ describe("SyncProgressModal", () => {
         getButton(modal, "Start sync").click(); await flushUI();
         original.plan.skipBlockedUploadsConfirmed = true;
         getButton(modal, "Refresh").click(); await flushUI();
-        expect(getButton(modal, "Sync selected eligible notes; skip blocked").disabled).toBe(true);
+        expect(getButton(modal, "Complete review").disabled).toBe(false);
+        expect(refreshed.plan.skipBlockedUploadsConfirmed).toBe(false);
         expect(modalOptions.runSyncPlan).not.toHaveBeenCalled();
     });
 

@@ -18,6 +18,9 @@ import { runPreparedSyncPlan } from "@app/main-sync-flows";
 import { importSelectedGoogleKeepNotes, commitLastSuccessfulSyncDate } from "@features/keep/sync";
 import { buildPushSyncPlan, pushGoogleKeepNotes } from "@features/keep/push";
 import { createPreparedSyncPlanFixture, createSyncPlanEntryFixture } from "@test-utils/fixtures/sync-plan";
+import { App } from "obsidian";
+import { finishSyncUI } from "@app/sync-ui";
+import { SyncProgressModal } from "@ui/modals/SyncProgressModal";
 
 function setup() {
 	const plugin = {
@@ -146,14 +149,65 @@ it("refuses a blocked upload plan without explicit consent and preserves the che
     expect(f.onSuccess).not.toHaveBeenCalled();
 });
 
-it("shows an all-blocked second stage rather than completing the two-way run", async () => {
-    const f = setup();
-    (buildPushSyncPlan as jest.Mock).mockResolvedValue({ plan: { ...f.prepared.plan, stage: "upload", blockedUploads: 1, actionableCount: 0, selectedCount: 0, entries: [] }, notesToPush: [] });
-    const result = await runPreparedSyncPlan(f.plugin, f.prepared, String, f.onSuccess);
-    expect(result.nextPlan?.stage).toBe("upload");
-    expect(result.nextPlan?.plan.blockedUploads).toBe(1);
-    expect(f.onSuccess).not.toHaveBeenCalled();
-    expect(pushGoogleKeepNotes).not.toHaveBeenCalled();
+it.each(["Complete review", "Cancel upload"])("handles %s after pulls when only a missing linked note is blocked", async (action) => {
+	const f = setup();
+	const blockedPath = "Keep/missing.md";
+	const files = new Map([[blockedPath, "unchanged"]]);
+	f.prepared.plan.entries = Array.from({ length: 7 }, (_, index) =>
+		createSyncPlanEntryFixture("create", "Create", { id: `pull-${index}`, path: `Keep/Pull ${index}.md` }));
+	f.prepared.plan.selectedCount = f.prepared.plan.actionableCount = f.prepared.plan.entries.length;
+	f.prepared.importEntryIds = f.prepared.plan.entries.map((entry) => entry.id);
+	f.prepared.importNotes = f.prepared.plan.entries.map(({ id }) => ({ title: id, text: "downloaded" }));
+	(importSelectedGoogleKeepNotes as jest.Mock).mockImplementation(async (_plugin, notes, callbacks: SyncCallbacks, _consent, ids: string[]) => {
+		for (const [index, note] of notes.entries()) {
+			const path = f.prepared.plan.entries[index].path;
+			files.set(path, note.text);
+			callbacks.onEntrySettled?.(ids[index], true, "create");
+		}
+	});
+	const blocked = createSyncPlanEntryFixture("skipped-conflict", "Blocked: Keep note not found", {
+		stage: "upload", id: "missing", path: blockedPath, selectable: false, selected: false,
+	});
+	const { plan } = createPreparedSyncPlanFixture("two-way", "upload", [blocked]);
+	plan.blockedUploads = 1;
+	(buildPushSyncPlan as jest.Mock).mockResolvedValue({ plan, notesToPush: [] });
+	const modal = new SyncProgressModal(new App(), {
+		buildSyncPlan: async (_mode, context) => { context?.onAttempt?.(f.attempt); return f.prepared; },
+		runSyncPlan: (prepared, callbacks) => runPreparedSyncPlan(f.plugin, prepared, String, f.onSuccess, callbacks),
+		requestCancelSync: () => {}, onOpenSyncLog: async () => {}, onClose: () => {},
+		getTwoWayGate: () => ({ allowed: true, reasons: [] }),
+		getLastSuccessfulDownloadDate: () => undefined, getCurrentMode: () => null, getCurrentPhaseLabel: () => null,
+		openTwoWaySettings: () => {}, isSupporterActive: async () => true, renderImportOptions: async () => {},
+	});
+	if (action === "Complete review") {
+		(finishSyncUI as jest.Mock).mockImplementationOnce((_plugin, status, warnings) => modal.setComplete(status, 0, warnings));
+	}
+	const click = async (label: string) => {
+		const button = [...modal.contentEl.querySelectorAll("button")].find((item) => item.textContent === label);
+		expect(button?.disabled).toBe(false);
+		button!.click();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	};
+	modal.onOpen();
+	modal.setSelectedMode("two-way");
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	await click("Start sync");
+	await click("Execute ▶︎");
+	expect(files.size).toBe(8);
+	expect(modal.contentEl.textContent).toContain("1 note cannot be uploaded");
+	await click(action);
+	expect(files.size).toBe(8);
+	expect(files.get(blockedPath)).toBe("unchanged");
+	for (const entry of f.prepared.plan.entries) expect(files.get(entry.path)).toBe("downloaded");
+	expect(f.attempt.finish).toHaveBeenCalledWith(action === "Complete review" ? "warning" : "canceled");
+	if (action === "Complete review") {
+		expect(modal.contentEl.textContent).toContain("Review complete with skipped notes");
+		expect(modal.contentEl.textContent).toContain("1 blocked note was skipped");
+		expect(modal.contentEl.textContent).not.toContain("Upload complete");
+	}
+	expect(commitLastSuccessfulSyncDate).not.toHaveBeenCalled();
+	expect(f.onSuccess).not.toHaveBeenCalled();
+	expect(pushGoogleKeepNotes).not.toHaveBeenCalled();
 });
 
 it("holds the successful-sync checkpoint after an explicitly accepted partial upload", async () => {
@@ -162,9 +216,13 @@ it("holds the successful-sync checkpoint after an explicitly accepted partial up
     const upload = result.nextPlan!;
     upload.plan.blockedUploads = 1;
     upload.plan.skipBlockedUploadsConfirmed = true;
+    upload.plan.entries.push(createSyncPlanEntryFixture("skipped-conflict", "Blocked: Keep note not found", {
+        stage: "upload", id: "missing", path: "Keep/missing.md", selectable: false, selected: false,
+    }));
     const completed = await runPreparedSyncPlan(f.plugin, upload, String, f.onSuccess);
     expect(completed.failed).not.toBe(true);
-    expect(pushGoogleKeepNotes).toHaveBeenCalled();
+    expect(pushGoogleKeepNotes).toHaveBeenCalledWith(f.plugin, expect.anything(), [{ fullPath: "Keep/other.md" }]);
+    expect(f.attempt.finish).toHaveBeenCalledWith("warning");
     expect(f.onSuccess).not.toHaveBeenCalled();
 });
 

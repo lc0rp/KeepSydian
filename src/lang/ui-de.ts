@@ -96,6 +96,8 @@ export const uiDe = {
 	"attempt.failed": "Fehlgeschlagen",
 	"attempt.canceled": "Abgebrochen",
 	"attempt.success": "Abgeschlossen",
+	"attempt.warning": "Mit Warnungen abgeschlossen",
+	"sync.reviewCompleteWithSkipped": "Prüfung abgeschlossen: Notizen übersprungen",
 	"attempt.logUnavailable": "Synchronisierungsprotokoll nicht verfügbar. Prüfe die Schreibrechte des Vaults.",
 	"attempt.error": "{{reason}} Versuch {{id}}. {{help}}",
 	"diagnostics.details": "Technische Details: {{details}}",

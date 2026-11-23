@@ -69,7 +69,7 @@ function reviewContinuationLabel(prepared: PreparedSyncPlan | null): string | un
 	if (!prepared) return undefined;
 	// An unchecked upload review still settles the attempt and its download
 	// receipts through the normal runner, including conflict/checkpoint guards.
-	if (prepared.stage === "upload") return prepared.plan.blockedUploads ? undefined : t("sync.completeReview");
+	if (prepared.stage === "upload") return t("sync.completeReview");
 	if (prepared.stage !== "import") return undefined;
 	// The upload review is still required when the download stage has no selected
 	// writes, including when missing tracked identities were protected from import.
@@ -172,7 +172,10 @@ function getRunningTitle(plan: SyncPlan): string { return plan.stage === "upload
 function getResultTitle(plan: SyncPlan, status: SyncRunStatus | null): string {
 	if (status === "canceled") return plan.stage === "upload" ? t("sync.uploadCanceled") : t("sync.downloadCanceled");
 	if (status === "failed") return plan.stage === "upload" ? t("sync.uploadFailed") : t("sync.downloadFailed");
-	if (status === "warning") return plan.stage === "upload" ? t("sync.uploadWarnings") : t("sync.downloadWarnings");
+	if (status === "warning") {
+		if (plan.blockedUploads) return t("sync.reviewCompleteWithSkipped");
+		return plan.stage === "upload" ? t("sync.uploadWarnings") : t("sync.downloadWarnings");
+	}
 	return plan.stage === "upload" ? t("sync.uploadDone") : t("sync.downloadDone");
 }
 function getRuntimeStatusLabel(entry: SyncPlanEntry, state: EntryRunState): string {
@@ -873,7 +876,7 @@ export class SyncProgressModal extends Modal {
 			this.createActionButton(this.planActionsEl, t("common.refresh"), async () => { await this.refreshCurrentReview(); }).classList.add("keepsidian-modal-action--refresh-review");
 			const hasSelection = this.preparedPlan?.plan.entries.some((entry) => entry.selectable && entry.selected) ?? false;
 			const continuationLabel = hasSelection ? undefined : reviewContinuationLabel(this.preparedPlan);
-			const runButton = this.createActionButton(this.planActionsEl, this.preparedPlan?.plan.blockedUploads ? "Sync selected eligible notes; skip blocked" : continuationLabel ?? t("sync.execute"), async () => {
+			const runButton = this.createActionButton(this.planActionsEl, continuationLabel ?? (this.preparedPlan?.plan.blockedUploads ? "Sync selected eligible notes; skip blocked" : t("sync.execute")), async () => {
 				if (this.preparedPlan?.plan.blockedUploads) this.preparedPlan.plan.skipBlockedUploadsConfirmed = true;
 				await this.runReviewedPlan();
 			});
@@ -884,7 +887,7 @@ export class SyncProgressModal extends Modal {
 		if (surface === "review" && this.preparedPlan) {
 			createChild(this.planSummaryEl, "div", { text: t("sync.changesFound",{count:this.preparedPlan.plan.actionableCount}) }).classList.add("keepsidian-sync-plan-summary-copy");
 			if (this.preparedPlan.plan.blockedUploads) {
-				createChild(this.planSummaryEl, "div", { text: `${this.preparedPlan.plan.blockedUploads} ${this.preparedPlan.plan.blockedUploads === 1 ? "note cannot" : "notes cannot"} be uploaded because the linked Keep note could not be found. Review the blocked rows below. Choose to sync selected eligible notes and keep blocked notes unchanged, or cancel the upload. Download changes already applied will be kept; canceling does not roll them back.` }).setAttribute("role", "status");
+				createChild(this.planSummaryEl, "div", { text: `${this.preparedPlan.plan.blockedUploads} ${this.preparedPlan.plan.blockedUploads === 1 ? "note cannot" : "notes cannot"} be uploaded because the linked Keep note could not be found. Blocked notes and download changes already applied will be kept.` }).setAttribute("role", "status");
 			}
 			const deletions = this.preparedPlan.plan.entries.filter((entry) => entry.action === "delete");
 			if (deletions.length > 0) {
@@ -978,7 +981,7 @@ export class SyncProgressModal extends Modal {
 		const canBulkToggle = entries.some((entry) => entry.selectable && !entry.selectionLocked);
 		createChild(containerEl, "div", { text: t("sync.changesSelected",{selected:entries.filter((entry) => entry.selectable && entry.selected).length,total:this.preparedPlan.plan.actionableCount}) });
 		if (!canBulkToggle) {
-			const caption = this.preparedPlan.plan.blockedUploads && !entries.some((entry) => entry.selectable) ? "No eligible notes are available to upload. Cancel to keep all local notes unchanged." : entries.some((entry) => entry.selectionLocked) ? t("sync.selectionSupporter") : "No changes are available to select.";
+			const caption = this.preparedPlan.plan.blockedUploads && !entries.some((entry) => entry.selectable) ? "No eligible notes are available to upload." : entries.some((entry) => entry.selectionLocked) ? t("sync.selectionSupporter") : "No changes are available to select.";
 			createChild(containerEl, "div", { text: caption }).classList.add("keepsidian-sync-plan-selection-caption"); return;
 		}
 		const toggleWrap = createChild(containerEl, "label"); toggleWrap.classList.add("keepsidian-sync-plan-select-all");

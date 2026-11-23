@@ -324,7 +324,7 @@ async function executeAttempt(
 	attempt: SyncAttempt,
 	work: () => Promise<RunPreparedSyncPlanResult>,
 	warnings: () => number,
-	beforeSuccess?: () => Promise<void>
+	beforeSuccess?: () => Promise<"warning" | void>
 ): Promise<RunPreparedSyncPlanResult> {
 	await attempt.start();
 	if (attempt.finished) {
@@ -342,9 +342,9 @@ async function executeAttempt(
 		const result = await work();
 		if (result.nextPlan) return result;
 		plugin.throwIfSyncCancelled?.();
-		if (beforeSuccess) await beforeSuccess();
-		else await finishDeletionReceipts(plugin, attempt);
-		await attempt.finish("success");
+		const outcome = await beforeSuccess?.();
+		if (!beforeSuccess) await finishDeletionReceipts(plugin, attempt);
+		await attempt.finish(outcome ?? "success");
 		finishSyncUI(plugin, getSuccessfulRunStatus(warnings()), warnings());
 		return result;
 	} catch (error) {
@@ -393,7 +393,7 @@ export async function runPreparedSyncPlan(
 		onEnrichmentWarning: () => { attachmentWarnings += 1; },
 	};
 	return executeAttempt(plugin, attempt, async () => {
-		if (preparedPlan.plan.blockedUploads && !preparedPlan.plan.skipBlockedUploadsConfirmed) throw new Error("Choose whether to upload eligible notes or cancel the upload.");
+		if (preparedPlan.plan.blockedUploads && !preparedPlan.plan.skipBlockedUploadsConfirmed) throw new Error("Complete the review, upload eligible notes, or cancel the upload.");
 		await assertPreparedDeletionContext(plugin, preparedPlan);
 		await attempt.transition(preparedPlan.stage === "import" ? "execution" : "upload");
 		if (preparedPlan.stage === "import") {
@@ -446,7 +446,7 @@ export async function runPreparedSyncPlan(
 			const selectedEntries = preparedPlan.plan.entries.filter((entry) => entry.selectable && entry.selected);
 			const selectedDeletionCount = selectedEntries.filter((entry) => entry.action === "delete").length;
 			uiSetTotalNotes(plugin, selectedNotes.length + selectedDeletionCount);
-			if (selectedNotes.length || selectedDeletionCount === 0) {
+			if (selectedNotes.length || (selectedDeletionCount === 0 && !preparedPlan.plan.blockedUploads)) {
 				await pushGoogleKeepNotes(plugin, { ...callbacks, setTotalNotes: (n) => uiSetTotalNotes(plugin, n + selectedDeletionCount) }, selectedNotes);
 			}
 			await executeReviewedLocalDeletions(plugin, preparedPlan.localDeletions, new Set(selectedEntries.map((entry) => entry.id)), callbacks);
@@ -460,7 +460,7 @@ export async function runPreparedSyncPlan(
 		if (blocked) {
 			getDeletionLedger(plugin)?.discardReceipts(attempt.id);
 			new Notice((preparedPlan.plan.blockedUploads ? "Blocked notes were kept unchanged. " : "Conflicts or unverified folder removals were preserved. ") + "The last successful sync checkpoint has not advanced.");
-			return;
+			return preparedPlan.plan.blockedUploads ? "warning" : undefined;
 		}
 		if (!await finishDeletionReceipts(plugin, attempt)) return;
 		if (preparedPlan.mode === "two-way") onTwoWaySuccess();

@@ -70,6 +70,8 @@ export const uiZh = {
 	"attempt.failed": "失败",
 	"attempt.canceled": "已取消",
 	"attempt.success": "已完成",
+	"attempt.warning": "已完成，但有警告",
+	"sync.reviewCompleteWithSkipped": "审核完成，已跳过部分笔记",
 	"attempt.logUnavailable": "同步日志不可用。请检查仓库的存储权限。",
 	"attempt.error": "{{reason}} 尝试 {{id}}。{{help}}",
 	"diagnostics.details": "技术详情：{{details}}",

@@ -10,7 +10,7 @@ export type SyncAttemptPhase =
 	| "execution"
 	| "upload-plan"
 	| "upload";
-export type SyncAttemptOutcome = "success" | "failed" | "canceled" | "abandoned";
+export type SyncAttemptOutcome = "success" | "warning" | "failed" | "canceled" | "abandoned";
 
 /** Safe, persisted history pointer. Never contains request payloads or exception text. */
 export interface LastSyncAttempt {
