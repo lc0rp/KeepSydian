@@ -887,7 +887,7 @@ export class SyncProgressModal extends Modal {
 		if (surface === "review" && this.preparedPlan) {
 			createChild(this.planSummaryEl, "div", { text: t("sync.changesFound",{count:this.preparedPlan.plan.actionableCount}) }).classList.add("keepsidian-sync-plan-summary-copy");
 			if (this.preparedPlan.plan.blockedUploads) {
-				createChild(this.planSummaryEl, "div", { text: `${this.preparedPlan.plan.blockedUploads} ${this.preparedPlan.plan.blockedUploads === 1 ? "note cannot" : "notes cannot"} be uploaded because the linked Keep note could not be found. Blocked notes and download changes already applied will be kept. Complete the review to finish without any selected uploads or deletions.` }).setAttribute("role", "status");
+				createChild(this.planSummaryEl, "div", { text: `${this.preparedPlan.plan.blockedUploads} ${this.preparedPlan.plan.blockedUploads === 1 ? "note cannot" : "notes cannot"} be uploaded because the linked Keep note could not be found. Blocked notes and download changes already applied will be kept.` }).setAttribute("role", "status");
 			}
 			const deletions = this.preparedPlan.plan.entries.filter((entry) => entry.action === "delete");
 			if (deletions.length > 0) {
