@@ -66,6 +66,7 @@ export interface KeepSidianPluginSettings {
 	twoWaySyncBackupAcknowledged: boolean;
 	twoWaySyncEnabled: boolean;
 	twoWaySyncAutoSyncEnabled: boolean;
+	keepArchiveCopiesEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: KeepSidianPluginSettings = {
@@ -109,6 +110,7 @@ export const DEFAULT_SETTINGS: KeepSidianPluginSettings = {
 	twoWaySyncBackupAcknowledged: false,
 	twoWaySyncEnabled: false,
 	twoWaySyncAutoSyncEnabled: false,
+	keepArchiveCopiesEnabled: true,
 };
 
 export function normalizeRootedVaultPath(value: string): string {
@@ -127,6 +129,7 @@ export function resolveLoadedSettings(
 	const language = saved?.language;
 	merged.language = language === "en" || language === "zh" || language === "ru" || language === "de" ? language : "system";
 	merged.useDraftTranslations = saved?.useDraftTranslations === true;
+	merged.keepArchiveCopiesEnabled = saved?.keepArchiveCopiesEnabled !== false;
 	merged.premiumFeatures = {
 		...DEFAULT_PREMIUM_FEATURES,
 		...(saved?.premiumFeatures ?? {}),

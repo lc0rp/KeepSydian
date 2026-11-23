@@ -107,7 +107,8 @@ describe("pushGoogleKeepNotes", () => {
 					content: expect.stringContaining("content"),
 				}),
 			],
-			undefined
+			undefined,
+			true
 		);
 		expect(adapter.write).toHaveBeenCalledWith(
 			"Keep/note.md",
@@ -130,7 +131,7 @@ describe("pushGoogleKeepNotes", () => {
 
 		await pushGoogleKeepNotes(plugin);
 
-		expect(apiPushNotes).toHaveBeenCalledWith(email, token, expect.any(Array), "ABCD-EFGH-IJKL-MN12");
+		expect(apiPushNotes).toHaveBeenCalledWith(email, token, expect.any(Array), "ABCD-EFGH-IJKL-MN12", true);
 	});
 
 	it("uploads same-second edits when no content baseline is available", async () => {
@@ -224,7 +225,8 @@ describe("pushGoogleKeepNotes", () => {
 					content: expect.stringContaining("content"),
 				}),
 			],
-			undefined
+			undefined,
+			true
 		);
 	});
 

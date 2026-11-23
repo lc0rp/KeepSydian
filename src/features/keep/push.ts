@@ -148,7 +148,7 @@ export async function pushGoogleKeepNotes(plugin: KeepSidianPlugin, callbacks?: 
 			// must never turn our own AI fields into another paid request.
 			if (plugin.settings.enrichmentLedgerInitialized)
 				for (const note of batch) await getEnrichmentLedger(plugin).stageUpload(note.fullPath);
-			const response = await apiPushNotes(email, token, payloadBatch, supporterKey);
+			const response = await apiPushNotes(email, token, payloadBatch, supporterKey, plugin.settings.keepArchiveCopiesEnabled !== false);
 			const resultMap = mapResultsByPath(response?.results), batchKey = "push:notes", batchOptions = { batchKey, batchSize: NOTE_LOG_BATCH_SIZE };
 			for (const [batchIndex, note] of batch.entries()) {
 				throwIfSyncCancelled(plugin);

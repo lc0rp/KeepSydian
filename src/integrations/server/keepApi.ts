@@ -253,7 +253,8 @@ export async function pushNotes(
 	email: string,
 	token: string,
 	notes: PushNotePayload[],
-	supporterKey?: string
+	supporterKey?: string,
+	backupsEnabled = true
 ): Promise<PushNotesResponse> {
 	const url = `${KEEPSIDIAN_SERVER_URL}/keep/push`;
 	const headers = withSupporterKey(
@@ -264,7 +265,11 @@ export async function pushNotes(
 		},
 		supporterKey
 	);
-	return await httpPostJson<PushNotesResponse, { notes: PushNotePayload[] }>(url, { notes }, headers);
+	return await httpPostJson<PushNotesResponse, { notes: PushNotePayload[]; backups_enabled: boolean }>(
+		url,
+		{ notes, backups_enabled: backupsEnabled },
+		headers
+	);
 }
 
 // Kept for backward compatibility and tests that use it directly
