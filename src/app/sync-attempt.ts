@@ -68,6 +68,8 @@ function attemptOutcome(attempt: LastSyncAttempt): string {
 	return t(
 		attempt.outcome === "success"
 			? "attempt.success"
+			: attempt.outcome === "warning"
+			? "attempt.warning"
 			: attempt.outcome === "failed"
 				? "attempt.failed"
 				: attempt.outcome === "canceled"

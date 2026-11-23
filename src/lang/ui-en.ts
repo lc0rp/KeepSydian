@@ -91,6 +91,8 @@ export const uiEn = {
 	"attempt.failed": "Failed",
 	"attempt.canceled": "Canceled",
 	"attempt.success": "Completed",
+	"attempt.warning": "Completed with warnings",
+	"sync.reviewCompleteWithSkipped": "Review complete with skipped notes",
 	"attempt.logUnavailable": "Sync log unavailable. Check vault storage permissions.",
 	"attempt.error": "{{reason}} Attempt {{id}}. {{help}}",
 	"diagnostics.details": "Technical details: {{details}}",

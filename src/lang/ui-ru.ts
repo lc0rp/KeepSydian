@@ -102,6 +102,8 @@ export const uiRu = {
 	"attempt.failed": "Ошибка",
 	"attempt.canceled": "Отменено",
 	"attempt.success": "Завершено",
+	"attempt.warning": "Завершено с предупреждениями",
+	"sync.reviewCompleteWithSkipped": "Проверка завершена: заметки пропущены",
 	"attempt.logUnavailable": "Журнал синхронизации недоступен. Проверьте права доступа к хранилищу.",
 	"attempt.error": "{{reason}} Попытка {{id}}. {{help}}",
 	"diagnostics.details": "Технические сведения: {{details}}",
